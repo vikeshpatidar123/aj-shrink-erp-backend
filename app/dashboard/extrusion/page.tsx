@@ -13,7 +13,7 @@ import {
   machines, productionEntries, recipes, rawMaterials
 } from "@/data/dummyData";
 
-const extMachines  = machines.filter(m => m.unit === "Extrusion");
+const extMachines  = machines.filter(m => m.department?.toLowerCase().includes("extru") || m.machineType?.toLowerCase().includes("extru"));
 const extJobCards  = jobCards.filter(j => !j.rotoJobId);
 const extOrders    = orders.filter(o => ["Confirmed", "In Production"].includes(o.status));
 const extProds     = productionEntries.filter(p => p.machineName.toLowerCase().includes("extru"));
@@ -208,7 +208,7 @@ export default function ExtrusionDashboard() {
               className="p-4 bg-blue-50 rounded-xl border border-blue-100 hover:border-blue-300 transition-colors cursor-pointer">
               <p className="text-xs text-blue-500 font-semibold mb-0.5">{recipe.code}</p>
               <p className="text-sm font-bold text-gray-800">{recipe.name}</p>
-              <p className="text-xs text-gray-500 mt-1">{recipe.productType} · {recipe.layers.length} layers</p>
+              <p className="text-xs text-gray-500 mt-1">{recipe.description} · {recipe.layers.length} layers</p>
             </div>
           ))}
         </div>

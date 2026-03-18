@@ -36,7 +36,7 @@ export default function GravureProductionPage() {
   const netQty    = form.printedQty - form.wastageQty;
   const wastePct  = form.printedQty > 0 ? ((form.wastageQty / form.printedQty) * 100).toFixed(1) : "0";
   const efficiency = form.machineRuntime > 0 && form.speed > 0
-    ? ((form.netQty ?? netQty) / (form.machineRuntime * 60 * form.speed) * 100).toFixed(1)
+    ? (netQty / (form.machineRuntime * 60 * form.speed) * 100).toFixed(1)
     : "—";
 
   const openAdd  = () => { setEditing(null); setForm(blank); setModal(true); };

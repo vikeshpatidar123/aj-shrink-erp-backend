@@ -271,13 +271,13 @@ export default function RecipePage() {
             {[
               { label: "Recipe Name *", key: "name" as const, placeholder: "e.g. 3-Layer PE Shrink" },
               { label: "Recipe Code", key: "code" as const, placeholder: "Auto-generated if blank" },
-            ].map(({ label, key, placeholder, type }) => (
+            ].map(({ label, key, placeholder }) => (
               <div key={key}>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{label}</label>
                 <input
-                  type={type ?? "text"}
+                  type="text"
                   value={String(form[key])}
-                  onChange={e => f(key, type === "number" ? Number(e.target.value) : e.target.value)}
+                  onChange={e => f(key, e.target.value)}
                   placeholder={placeholder}
                   className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />

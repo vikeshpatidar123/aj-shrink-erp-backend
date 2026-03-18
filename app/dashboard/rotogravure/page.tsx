@@ -13,7 +13,7 @@ import {
   machines, rotoJobs, processMasters, dispatches
 } from "@/data/dummyData";
 
-const rotoMachines = machines.filter(m => m.unit === "Rotogravure");
+const rotoMachines = machines.filter(m => m.department === "Printing" || m.department === "Lamination" || m.department === "Slitting");
 const rotoJobCards = jobCards.filter(j => j.rotoJobId);
 const weeklyRoto   = weeklyProductionData.map(d => ({ day: d.day, production: d.roto }));
 
@@ -103,7 +103,7 @@ export default function RotogravureDashboard() {
                            backgroundColor: m.status === "Running" ? "#f0fdf4" : m.status === "Maintenance" ? "#fff1f2" : "#f9fafb" }}>
                   <div>
                     <p className="text-xs font-bold text-gray-700">{m.name}</p>
-                    <p className="text-xs text-gray-400">{m.capacityUnit} · Op: {m.operator}</p>
+                    <p className="text-xs text-gray-400">{m.department} · Op: {m.operator}</p>
                   </div>
                   <span className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full
                     ${m.status === "Running" ? "text-green-700 bg-green-100" :

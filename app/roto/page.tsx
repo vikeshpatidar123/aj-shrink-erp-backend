@@ -47,7 +47,7 @@ export default function RotoPage() {
     setSelectedProcesses(prev => {
       const exists = prev.find(p => p.processId === proc.id);
       if (exists) return prev.filter(p => p.processId !== proc.id);
-      return [...prev, { processId: proc.id, processName: proc.name, processType: proc.type }];
+      return [...prev, { processId: proc.id, processName: proc.name, processType: proc.processCategory }];
     });
   };
 
@@ -211,7 +211,7 @@ export default function RotoPage() {
                       {selected && <CheckCircle2 size={14} className="text-blue-600" />}
                       {proc.name}
                     </span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${processTypeColors[proc.type]}`}>{proc.type}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${processTypeColors[proc.processCategory]}`}>{proc.processCategory}</span>
                   </button>
                 );
               })}

@@ -132,7 +132,7 @@ export default function GravureOrdersPage() {
               if (est) {
                 f("estimationId", est.id); f("customerId", est.customerId);
                 f("customerName", est.customerName); f("jobName", est.jobName);
-                f("substrate", est.substrate); f("width", est.width);
+                f("substrate", est.substrateName); f("width", est.width);
                 f("noOfColors", est.noOfColors); f("quantity", est.quantity); f("unit", est.unit);
                 f("totalAmount", est.totalAmount);
               }

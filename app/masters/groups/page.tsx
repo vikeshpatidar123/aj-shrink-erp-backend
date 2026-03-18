@@ -7,7 +7,7 @@ import Button from "@/components/ui/Button";
 import Modal from "@/components/ui/Modal";
 import { Input, Select } from "@/components/ui/Input";
 
-const blank: Omit<SubGroup, "id"> = { name: "", category: "Polymer", description: "" };
+const blank: Omit<SubGroup, "id"> = { name: "", category: "Polymer", group: "", description: "" };
 
 const categoryOptions = [
   { value: "Polymer", label: "Polymer" },
