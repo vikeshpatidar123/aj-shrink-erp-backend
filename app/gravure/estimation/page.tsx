@@ -1,10 +1,20 @@
 "use client";
 import { useState, useMemo } from "react";
-import { Plus, Eye, Pencil, Trash2, ArrowRight, Calculator, X } from "lucide-react";
 import {
-  gravureEstimations as initData, gravureEnquiries, customers, items, machines, processMasters,
+  ChevronRight, ChevronLeft, Plus, X, Save, FileText, Settings,
+  Trash2, Edit, Search, Eye, Filter, Download, MoreHorizontal, Check,
+  Calculator, Pencil, ArrowRight
+} from "lucide-react";
+import {
+  gravureEstimations as initData, customers, items, machines, processMasters,
   GravureEstimation, GravureEstimationMaterial, GravureEstimationProcess,
+  SecondaryLayer, DryWeightRow, PlyConsumableItem,
+  CATEGORY_GROUP_SUBGROUP,
 } from "@/data/dummyData";
+import { useCategories }     from "@/context/CategoriesContext";
+import { useEnquiries }      from "@/context/EnquiryContext";
+import { useProductCatalog } from "@/context/ProductCatalogContext";
+import { generateCode, UNIT_CODE, MODULE_CODE } from "@/lib/generateCode";
 import { DataTable, Column } from "@/components/tables/DataTable";
 import { statusBadge } from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
@@ -12,12 +22,12 @@ import Modal from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 
 // ─── Master-filtered lists ────────────────────────────────────
-const FILM_ITEMS    = items.filter(i => i.group === "Film"     && i.active);
-const INK_ITEMS     = items.filter(i => i.group === "Ink"      && i.active);
-const SOLVENT_ITEMS = items.filter(i => i.group === "Solvent"  && i.active);
-const ADHESIVE_ITEMS= items.filter(i => i.group === "Adhesive" && i.active);
-const HARDNER_ITEMS = items.filter(i => i.group === "Hardner"  && i.active);
-const ALL_MAT_ITEMS = [...FILM_ITEMS, ...INK_ITEMS, ...ADHESIVE_ITEMS, ...SOLVENT_ITEMS, ...HARDNER_ITEMS];
+const FILM_ITEMS     = items.filter(i => i.group === "Film"     && i.active);
+const INK_ITEMS      = items.filter(i => i.group === "Ink"      && i.active);
+const SOLVENT_ITEMS  = items.filter(i => i.group === "Solvent"  && i.active);
+const ADHESIVE_ITEMS = items.filter(i => i.group === "Adhesive" && i.active);
+const HARDNER_ITEMS  = items.filter(i => i.group === "Hardner"  && i.active);
+const ALL_MAT_ITEMS  = [...FILM_ITEMS, ...INK_ITEMS, ...SOLVENT_ITEMS, ...ADHESIVE_ITEMS, ...HARDNER_ITEMS];
 
 const PRINT_MACHINES  = machines.filter(m => m.department === "Printing");
 
@@ -26,13 +36,16 @@ const ROTO_PROCESSES  = processMasters.filter(p => p.module === "Rotogravure");
 // ─── Blank form ───────────────────────────────────────────────
 const blank: Omit<GravureEstimation, "id" | "estimationNo"> = {
   date: new Date().toISOString().slice(0, 10),
+  categoryId: "", categoryName: "", content: "",
   enquiryId: "", enquiryNo: "",
   customerId: "", customerName: "",
   jobName: "",
+  jobWidth: 0, jobHeight: 0, ups: 0,
+  actualWidth: 0, actualHeight: 0,
   substrateItemId: "", substrateName: "",
   width: 0, noOfColors: 6,
   printType: "Surface Print",
-  quantity: 0, unit: "Meter",
+  quantity: 0, unit: "Kg",
   machineId: "", machineName: "",
   cylinderCostPerColor: 3500,
   materials: [],
@@ -41,8 +54,14 @@ const blank: Omit<GravureEstimation, "id" | "estimationNo"> = {
   materialCost: 0, processCost: 0, cylinderCost: 0,
   overheadAmt: 0, profitAmt: 0,
   totalAmount: 0, perMeterRate: 0, marginPct: 0,
+  secondaryLayers: [],
+  dryWeightRows: [],
+  dryWeightTotal: 0,
   status: "Draft",
   remarks: "",
+  salesPerson: "",
+  salesType: "Local",
+  concernPerson: "",
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -61,19 +80,97 @@ const GROUP_COLORS: Record<string, string> = {
   Hardner:  "bg-pink-50  text-pink-700  border-pink-200",
 };
 
+// ─── Auto qty for a process based on its chargeUnit ──────────
+function autoProcessQty(chargeUnit: string, quantity: number, areaM2: number, noOfColors: number) {
+  if (chargeUnit === "m²")       return areaM2;
+  if (chargeUnit === "m")        return quantity;
+  if (chargeUnit === "Cylinder") return noOfColors;
+  if (chargeUnit === "1000 Pcs") return quantity / 1000;
+  if (chargeUnit === "Job")      return 1;
+  return 0;
+}
+
 // ─── Cost calculator ──────────────────────────────────────────
 function calcCosts(form: typeof blank) {
-  const materialCost = form.materials.reduce((s, m) => s + m.amount, 0);
-  const processCost  = form.processes.reduce((s, p) => s + p.amount, 0);
+  const areaM2 = form.quantity * (form.jobWidth / 1000);
+
+  // 1. Material cost: film (from Item Master rate) + consumables (ink/solvent/adhesive/hardner)
+  let plyMaterialCost = 0;
+  form.secondaryLayers.forEach(l => {
+    // Film substrate
+    if (l.gsm > 0) {
+      const filmRate = parseFloat(FILM_ITEMS.find(i => i.subGroup === l.itemSubGroup)?.estimationRate || "0");
+      if (filmRate > 0) plyMaterialCost += (l.gsm * areaM2 / 1000) * filmRate;
+    }
+    // Consumable items (ink, solvent, adhesive, hardner)
+    l.consumableItems.forEach(ci => {
+      if (ci.gsm > 0 && ci.rate > 0)
+        plyMaterialCost += (ci.gsm * areaM2 / 1000) * ci.rate;
+    });
+  });
+  // Add any manually-entered extra materials
+  const manualMatCost  = form.materials.reduce((s, m) => s + m.amount, 0);
+  const materialCost   = parseFloat((plyMaterialCost + manualMatCost).toFixed(2));
+
+  // 2. Process cost: rate × auto-qty (if qty=0, derive from chargeUnit) + setupCharge
+  const processCost = parseFloat(
+    form.processes.reduce((s, p) => {
+      const qty = p.qty > 0 ? p.qty : autoProcessQty(p.chargeUnit, form.quantity, areaM2, form.noOfColors);
+      return s + (p.rate * qty + p.setupCharge);
+    }, 0).toFixed(2)
+  );
+
+  // 3. Cylinder
   const cylinderCost = form.cylinderCostPerColor * form.noOfColors;
-  const sub          = materialCost + processCost + cylinderCost;
-  const overheadAmt  = parseFloat(((sub * form.overheadPct) / 100).toFixed(2));
-  const profitBase   = sub + overheadAmt;
-  const profitAmt    = parseFloat(((profitBase * form.profitPct) / 100).toFixed(2));
-  const totalAmount  = parseFloat((profitBase + profitAmt).toFixed(2));
+
+  const sub         = materialCost + processCost + cylinderCost;
+  const overheadAmt = parseFloat(((sub * form.overheadPct) / 100).toFixed(2));
+  const profitBase  = sub + overheadAmt;
+  const profitAmt   = parseFloat(((profitBase * form.profitPct) / 100).toFixed(2));
+  const totalAmount = parseFloat((profitBase + profitAmt).toFixed(2));
   const perMeterRate = form.quantity > 0 ? parseFloat((totalAmount / form.quantity).toFixed(4)) : 0;
   const marginPct    = totalAmount > 0 ? parseFloat(((profitAmt / totalAmount) * 100).toFixed(1)) : 0;
   return { materialCost, processCost, cylinderCost, overheadAmt, profitAmt, totalAmount, perMeterRate, marginPct };
+}
+
+// ─── Detailed breakdown (for Tab 3 display) ──────────────────
+type MatLine  = { plyNo: number; plyType: string; name: string; group: string; gsm: number; kg: number; rate: number; amount: number };
+type ProcLine = { name: string; chargeUnit: string; qty: number; rate: number; setupCharge: number; amount: number };
+
+function getCostBreakdown(form: typeof blank): { matLines: MatLine[]; procLines: ProcLine[]; areaM2: number } {
+  const areaM2   = parseFloat((form.quantity * (form.jobWidth / 1000)).toFixed(2));
+  const matLines: MatLine[]   = [];
+  const procLines: ProcLine[] = [];
+
+  form.secondaryLayers.forEach((l, idx) => {
+    // Film
+    if (l.gsm > 0) {
+      const filmItem = FILM_ITEMS.find(i => i.subGroup === l.itemSubGroup);
+      const rate     = parseFloat(filmItem?.estimationRate || "0");
+      const kg       = parseFloat((l.gsm * areaM2 / 1000).toFixed(3));
+      matLines.push({ plyNo: idx + 1, plyType: l.plyType || "Film", name: l.itemSubGroup || "Film Substrate", group: "Film", gsm: l.gsm, kg, rate, amount: parseFloat((kg * rate).toFixed(2)) });
+    }
+    // Consumables
+    l.consumableItems.forEach(ci => {
+      const kg     = parseFloat((ci.gsm * areaM2 / 1000).toFixed(3));
+      const amount = parseFloat((kg * ci.rate).toFixed(2));
+      matLines.push({ plyNo: idx + 1, plyType: l.plyType || "", name: ci.itemName || ci.fieldDisplayName, group: ci.itemGroup, gsm: ci.gsm, kg, rate: ci.rate, amount });
+    });
+  });
+
+  // Manual extra materials
+  form.materials.forEach(m => {
+    matLines.push({ plyNo: 0, plyType: "Extra", name: m.itemName, group: m.group, gsm: 0, kg: m.qty, rate: m.rate, amount: m.amount });
+  });
+
+  // Processes
+  form.processes.forEach(p => {
+    const qty    = p.qty > 0 ? p.qty : parseFloat(autoProcessQty(p.chargeUnit, form.quantity, areaM2, form.noOfColors).toFixed(2));
+    const amount = parseFloat((p.rate * qty + p.setupCharge).toFixed(2));
+    procLines.push({ name: p.processName || "—", chargeUnit: p.chargeUnit, qty, rate: p.rate, setupCharge: p.setupCharge, amount });
+  });
+
+  return { matLines, procLines, areaM2 };
 }
 
 // ─── Section header ───────────────────────────────────────────
@@ -83,7 +180,28 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
+// Find distinct subGroups from FILM_ITEMS along with their density and available thicknesses
+const FILM_SUBGROUPS = Array.from(
+  new Map(
+    FILM_ITEMS.filter(i => i.subGroup).map(i => [i.subGroup, { 
+      subGroup: i.subGroup,
+      density: parseFloat(i.density) || 0,
+      thicknesses: new Set<number>() 
+    }])
+  ).entries()
+).map(([subGroup, data]) => {
+  FILM_ITEMS.filter(i => i.subGroup === subGroup).forEach(i => {
+    const t = parseFloat(i.thickness);
+    if (!isNaN(t) && t > 0) data.thicknesses.add(t);
+  });
+  return { subGroup, density: data.density, thicknesses: Array.from(data.thicknesses).sort((a,b)=>a-b) };
+});
+
+
 export default function GravureEstimationPage() {
+  const { categories } = useCategories();   // ← live from Category Master
+  const { enquiries: allEnquiries } = useEnquiries();  // ← live from Enquiry page
+  const gravureEnqList = allEnquiries.filter(e => e.businessUnit === "Gravure");
   const [data, setData]       = useState<GravureEstimation[]>(initData);
   const [modalOpen, setModal] = useState(false);
   const [viewRow, setViewRow] = useState<GravureEstimation | null>(null);
@@ -91,16 +209,75 @@ export default function GravureEstimationPage() {
   const [form, setForm]       = useState<typeof blank>({ ...blank });
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  const [showPlan, setShowPlan] = useState(false);
+  const [pendingCategoryId, setPendingCategoryId] = useState<string | null>(null);
+  const [previewCode, setPreviewCode] = useState<string>("");
+
+  // Tab navigation states
+  const [activeTab, setActiveTab] = useState<number>(1);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const [isPlanApplied, setIsPlanApplied] = useState(false);
+  const [altQty1, setAltQty1] = useState<number>(0);
+  const [altQty2, setAltQty2] = useState<number>(0);
+  const [activeQtySlot, setActiveQtySlot] = useState<0 | 1 | 2>(0); // which card is "selected"
+
   // Derived costs (live)
-  const costs = useMemo(() => calcCosts(form), [form]);
+  const costs     = useMemo(() => calcCosts(form), [form]);
+  const costsAlt1 = useMemo(() => calcCosts({ ...form, quantity: altQty1 || form.quantity }), [form, altQty1]);
+  const costsAlt2 = useMemo(() => calcCosts({ ...form, quantity: altQty2 || form.quantity }), [form, altQty2]);
+  const breakdown = useMemo(() => getCostBreakdown(form), [form]);
+  // Active-slot costs (drives Cost Summary at bottom)
+  const activeCosts = activeQtySlot === 1 ? costsAlt1 : activeQtySlot === 2 ? costsAlt2 : costs;
+  const activeQty   = activeQtySlot === 1 ? (altQty1 || form.quantity) : activeQtySlot === 2 ? (altQty2 || form.quantity) : form.quantity;
+
+  // ── Production plan rows (Tab 2) ────────────────────────
+  const totalPlyGSM = useMemo(() =>
+    form.secondaryLayers.reduce((s, l) => s + l.gsm + l.consumableItems.reduce((cs, ci) => cs + (ci.gsm || 0), 0), 0),
+    [form.secondaryLayers]);
+
+  const allPlans = useMemo(() => {
+    const machinesToPlan = form.machineId
+      ? PRINT_MACHINES.filter(m => m.id === form.machineId)
+      : PRINT_MACHINES;
+    return machinesToPlan.flatMap(machine => {
+      const baseCirc = form.jobHeight ? Math.ceil(form.jobHeight / 12) * 12 : 450;
+      const rollWidth = 340;
+      const acUps = form.jobWidth > 0 ? Math.max(1, Math.floor(rollWidth / form.jobWidth)) : 10;
+      const costPerHour = parseFloat(machine.costPerHour as string) || 1350;
+      const speed = parseFloat(machine.speedMax) || 150;
+      return Array.from({ length: 7 }, (_, i) => {
+        const cylCirc = baseCirc + i * 12;
+        const repeatUPS = 10 + i;
+        const totalUPS = acUps * repeatUPS;
+        const reqRMT = form.quantity > 0 ? Math.ceil(form.quantity / totalUPS) : 1;
+        const totalRMT = Math.ceil(reqRMT * 1.01);
+        const totalWt = parseFloat((totalRMT * ((form.jobWidth || 340) / 1000) * totalPlyGSM / 1000).toFixed(3));
+        const totalTime = parseFloat((totalRMT / (speed * 60)).toFixed(2));
+        const planCost = parseFloat((totalTime * costPerHour).toFixed(2));
+        const cylCost = form.noOfColors * form.cylinderCostPerColor;
+        const grandTotal = parseFloat((planCost + costs.processCost + cylCost).toFixed(2));
+        const unitPrice = form.quantity > 0 ? parseFloat((grandTotal / form.quantity).toFixed(4)) : 0;
+        return { planId: `PLAN-${machine.id}-${i}`, machineId: machine.id, machineName: machine.name, cylCirc, rollWidth, acUps, repeatUPS, totalUPS, reqRMT, totalRMT, totalWt, totalTime, planCost, grandTotal, unitPrice };
+      });
+    });
+  }, [form.machineId, form.jobHeight, form.jobWidth, form.quantity, form.noOfColors, form.cylinderCostPerColor, totalPlyGSM, costs.processCost]);
+
+  const selectedPlan = useMemo(() => allPlans.find(p => p.planId === selectedPlanId), [allPlans, selectedPlanId]);
 
   const f = (k: keyof typeof blank, v: unknown) => setForm(p => ({ ...p, [k]: v }));
 
-  const openAdd = () => { setEditing(null); setForm({ ...blank }); setModal(true); };
+  const openAdd = () => {
+    setEditing(null);
+    setForm({ ...blank });
+    setActiveTab(1); setAltQty1(0); setAltQty2(0); setActiveQtySlot(0);
+    setPreviewCode(generateCode(UNIT_CODE.Gravure, MODULE_CODE.Estimation, data.map(d => d.estimationNo)));
+    setModal(true);
+  };
   const openEdit = (row: GravureEstimation) => {
     setEditing(row);
     const { id, estimationNo, ...rest } = row;
     setForm(rest);
+    setActiveTab(1); setAltQty1(0); setAltQty2(0); setActiveQtySlot(0);
     setModal(true);
   };
 
@@ -166,17 +343,109 @@ export default function GravureEstimationPage() {
     });
   };
 
+  // ── Category auto-load ────────────────────────────────
+  /** Apply a category: auto-build ply rows from its plyConsumables definition */
+  const applyCategory = (categoryId: string) => {
+    const cat = categories.find(c => c.id === categoryId);
+    const plyOrder = ["Film", "Printing", "Lamination", "Coating"];
+    const usedTypes = new Set((cat?.plyConsumables || []).map(pc => pc.plyType));
+    const autoTypes = plyOrder.filter(pt => pt === "Film" || usedTypes.has(pt));
+    const autoLayers: SecondaryLayer[] = autoTypes.map((plyType, i) => {
+      const consumableItems: PlyConsumableItem[] = (cat?.plyConsumables || [])
+        .filter(pc => pc.plyType === plyType)
+        .map(pc => ({
+          consumableId: pc.id,
+          fieldDisplayName: pc.fieldDisplayName,
+          itemGroup: pc.itemGroup,
+          itemSubGroup: pc.itemSubGroup,
+          itemId: "", itemName: "",
+          gsm: pc.defaultValue,
+          rate: 0,
+        }));
+      return { id: Math.random().toString(), layerNo: i + 1, plyType, itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems };
+    });
+    setForm(p => ({ ...p, categoryId, categoryName: cat?.name || "", content: "", secondaryLayers: autoLayers }));
+  };
+
+  // ── Ply helpers ───────────────────────────────────────
+  /** When ply type changes: keep existing consumableItems, just update plyType */
+  const onPlyTypeChange = (index: number, plyType: string) => {
+    const layers = [...form.secondaryLayers];
+    layers[index] = { ...layers[index], plyType };
+    f("secondaryLayers", layers);
+  };
+
+  /** Add a blank consumable row to a ply (fully manual — no category dependency) */
+  const addPlyConsumable = (layerIdx: number) => {
+    const layers = [...form.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    layer.consumableItems = [...layer.consumableItems, {
+      consumableId: Math.random().toString(),
+      fieldDisplayName: "",
+      itemGroup: "",
+      itemSubGroup: "",
+      itemId: "",
+      itemName: "",
+      gsm: 0,
+      rate: 0,
+    } as PlyConsumableItem];
+    layers[layerIdx] = layer;
+    f("secondaryLayers", layers);
+  };
+
+  /** Remove a consumable row from a ply */
+  const removePlyConsumable = (layerIdx: number, ciIdx: number) => {
+    const layers = [...form.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    layer.consumableItems = layer.consumableItems.filter((_, i) => i !== ciIdx);
+    layers[layerIdx] = layer;
+    f("secondaryLayers", layers);
+  };
+
+  /** Update a single field of one consumable item inside a ply */
+  const updatePlyConsumable = (layerIdx: number, ciIdx: number, patch: Partial<PlyConsumableItem>) => {
+    const layers = [...form.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    const ci = [...layer.consumableItems];
+    ci[ciIdx] = { ...ci[ciIdx], ...patch };
+    layer.consumableItems = ci;
+    layers[layerIdx] = layer;
+    f("secondaryLayers", layers);
+  };
+
   // ── Save ─────────────────────────────────────────────────
   const save = () => {
-    if (!form.customerId || !form.jobName || !form.substrateItemId || !form.machineId) return;
-    const record = { ...form, ...costs };
+    if (!form.customerId || !form.jobName || !form.machineId) {
+      alert("Please fill required Basic Info & Machine."); return;
+    }
+    if (form.secondaryLayers.length === 0) {
+      alert("Please configure Ply Details Composition."); return;
+    }
+    const substrateName = form.secondaryLayers.map(l => l.itemSubGroup).join(" + ") || "Multiple Plys";
+
     if (editing) {
+      // Update single record
+      const record = { ...form, ...costs, substrateName };
       setData(d => d.map(r => r.id === editing.id ? { ...record, id: editing.id, estimationNo: editing.estimationNo } : r));
     } else {
-      const n = data.length + 1;
-      setData(d => [...d, { ...record, id: `GEST${String(n + 3).padStart(3, "0")}`, estimationNo: `GRV-EST-2024-${String(n + 3).padStart(3, "0")}` }]);
+      // Build one record per filled quantity slot
+      const qtys: number[] = [form.quantity];
+      if (altQty1 > 0) qtys.push(altQty1);
+      if (altQty2 > 0) qtys.push(altQty2);
+
+      setData(prev => {
+        let updated = [...prev];
+        qtys.forEach(qty => {
+          const qCosts = calcCosts({ ...form, quantity: qty });
+          const estimationNo = generateCode(UNIT_CODE.Gravure, MODULE_CODE.Estimation, updated.map(d => d.estimationNo));
+          const id = `GVES${String(updated.length + 1).padStart(3, "0")}`;
+          updated = [...updated, { ...form, quantity: qty, ...qCosts, substrateName, id, estimationNo }];
+        });
+        return updated;
+      });
     }
     setModal(false);
+    setShowPlan(false);
   };
 
   // ── Stats ────────────────────────────────────────────────
@@ -221,7 +490,7 @@ export default function GravureEstimationPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label: "Total",          val: stats.total,    cls: "bg-blue-50 text-blue-700 border-blue-200" },
           { label: "Draft",          val: stats.draft,    cls: "bg-gray-50 text-gray-600 border-gray-200" },
@@ -252,62 +521,213 @@ export default function GravureEstimationPage() {
 
       {/* ══ ADD / EDIT MODAL ══════════════════════════════════════ */}
       <Modal open={modalOpen} onClose={() => setModal(false)} title={editing ? "Edit Estimation" : "New Gravure Estimation"} size="xl">
-        <div className="space-y-6">
+        <div className="flex bg-gray-100 p-1.5 rounded-xl mb-6 shadow-inner gap-1">
+           <button onClick={() => setActiveTab(1)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${activeTab === 1 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}>1. Basic Info</button>
+           <button onClick={() => setActiveTab(2)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${activeTab === 2 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}>2. View Plan (Production)</button>
+           <button onClick={() => setActiveTab(3)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${activeTab === 3 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}>3. Cost Estimation</button>
+        </div>
 
-          {/* ── Section 1: Basic Info ─────────────────────────── */}
+        <div>
+          {/* TAB 1: BASIC INFO */}
+          {activeTab === 1 && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              {/* ── Category & Basic Info ─────────────────────────── */}
           <div>
-            <SectionHeader label="Basic Info" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Date" type="date" value={form.date} onChange={e => f("date", e.target.value)} />
+             <SectionHeader label="Identification & Category" />
 
-              {/* From Enquiry – auto-fills fields */}
-              <Select
-                label="From Enquiry (optional)"
-                value={form.enquiryId}
-                onChange={e => {
-                  const enq = gravureEnquiries.find(x => x.id === e.target.value);
-                  if (!enq) { f("enquiryId", ""); return; }
-                  setForm(p => ({
-                    ...p,
-                    enquiryId: enq.id, enquiryNo: enq.enquiryNo,
-                    customerId: enq.customerId, customerName: enq.customerName,
-                    jobName: enq.jobName,
-                    width: enq.width, noOfColors: enq.noOfColors,
-                    printType: enq.printType,
-                    quantity: enq.quantity, unit: enq.unit,
-                  }));
+             {/* Auto-generated Estimation No — always shown, non-editable */}
+             <div className="mb-3">
+               <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest block mb-1">Estimation No</label>
+               <div className="flex items-center gap-2 px-4 py-2.5 bg-purple-50 border border-purple-200 rounded-xl w-fit">
+                 <span className="text-xs font-mono font-bold text-purple-700 tracking-widest">
+                   {editing ? editing.estimationNo : previewCode}
+                 </span>
+                 <span className="text-[9px] px-1.5 py-0.5 bg-purple-200 text-purple-700 rounded font-semibold">
+                   {editing ? "EDITING" : "AUTO"}
+                 </span>
+               </div>
+             </div>
+
+             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                 <Select
+                   label="From Enquiry (optional)"
+                   value={form.enquiryId}
+                   onChange={e => {
+                     const enq = gravureEnqList.find(x => x.id === e.target.value);
+                     if (!enq) { f("enquiryId", ""); return; }
+
+                     // ── Category & consumables helper (needs categories from context) ──
+                     const plyTypeMap: Record<string, string> = {
+                       film: "Film", ink: "Printing", adhesive: "Lamination",
+                     };
+
+                     // Build SecondaryLayers from enquiry plys (empty consumableItems — user adds manually)
+                     const secondaryLayers: SecondaryLayer[] = (enq.plys || []).map((ply, i) => {
+                       const plyType = plyTypeMap[ply.itemQuality] || "Film";
+                       return {
+                         id: Math.random().toString(),
+                         layerNo: i + 1,
+                         plyType,
+                         itemSubGroup: "",
+                         density: 0,
+                         thickness: ply.thickness || 0,
+                         gsm: ply.gsm || 0,
+                         consumableItems: [],
+                       };
+                     });
+
+                     // Build process rows from enquiry process names
+                     const processRows: GravureEstimationProcess[] = (enq.processes || [])
+                       .map(name => {
+                         const pm = ROTO_PROCESSES.find(p => p.name === name);
+                         if (!pm) return null;
+                         return {
+                           processId: pm.id,
+                           processName: pm.name,
+                           chargeUnit: pm.chargeUnit,
+                           rate: parseFloat(pm.rate) || 0,
+                           qty: 0,
+                           setupCharge: pm.makeSetupCharges ? parseFloat(pm.setupChargeAmount) || 0 : 0,
+                           amount: 0,
+                         } as GravureEstimationProcess;
+                       })
+                       .filter((x): x is GravureEstimationProcess => x !== null);
+
+                     // Total colors from plan window (fallback to noOfColors)
+                     const totalColors = (enq.planFColor || 0) + (enq.planBColor || 0) +
+                       (enq.planSFColor || 0) + (enq.planSBColor || 0) || enq.noOfColors;
+
+                     const cat = categories.find(c => c.id === enq.categoryId);
+
+                     setForm(p => ({
+                       ...p,
+                       enquiryId: enq.id,
+                       enquiryNo: enq.enquiryNo,
+                       customerId: enq.customerId,
+                       customerName: enq.customerName,
+                       jobName: enq.jobName,
+                       // Category & Content
+                       categoryId: enq.categoryId,
+                       categoryName: enq.categoryName || cat?.name || "",
+                       content: enq.selectedContent || "",
+                       // Dimensions
+                       jobWidth: enq.planWidth || enq.width || 0,
+                       jobHeight: enq.planHeight || 0,
+                       width: enq.planWidth || enq.width || 0,
+                       actualWidth: (enq.planWidth || enq.width || 0),
+                       actualHeight: (enq.planHeight || 0),
+                       // Print info
+                       noOfColors: totalColors,
+                       printType: (["Surface Print", "Reverse Print", "Combination"].includes(enq.printType) ? enq.printType : "Surface Print") as "Surface Print" | "Reverse Print" | "Combination",
+                       // Quantity
+                       quantity: enq.quantity,
+                       unit: enq.uom,
+                       // Sales info
+                       salesPerson: enq.salesPersonName || "",
+                       salesType: enq.salesType === "Domestic" ? "Local" : enq.salesType === "Exporter" ? "Export" : enq.salesType || "Local",
+                       concernPerson: enq.concernPerson || "",
+                       // Allocation
+                       secondaryLayers,
+                       processes: processRows,
+                     }));
+                   }}
+                   options={[{ value: "", label: "-- Direct Estimation --" }, ...gravureEnqList.map(e => ({ value: e.id, label: `${e.enquiryNo} – ${e.customerName}` }))]}
+                 />
+                 <Select
+                   label="Customer *"
+                   value={form.customerId}
+                   onChange={e => {
+                     const c = customers.find(x => x.id === e.target.value);
+                     f("customerId", e.target.value);
+                     if (c) f("customerName", c.name);
+                   }}
+                   options={[{ value: "", label: "-- Select Customer --" }, ...customers.filter(c => c.status === "Active").map(c => ({ value: c.id, label: c.name }))]}
+                 />
+                 <Input label="Job Name *" value={form.jobName} onChange={e => f("jobName", e.target.value)} placeholder="Job / carton description" />
+                 <Select
+                   label="Select Category"
+                   value={form.categoryId || ""}
+                   onChange={e => {
+                     const hasPlys = form.secondaryLayers.some(l => l.plyType || l.consumableItems.length > 0);
+                     if (hasPlys && e.target.value) {
+                       setPendingCategoryId(e.target.value);
+                     } else {
+                       applyCategory(e.target.value);
+                     }
+                   }}
+                   options={[{ value: "", label: "-- Select Category --" }, ...categories.map(c => ({ value: c.id, label: c.name }))]}
+                 />
+                 <Select
+                   label="Select Content *"
+                   value={form.content || ""}
+                   onChange={e => f("content", e.target.value)}
+                   options={[...(!form.categoryId ? [] : [{ value: "", label: "-- Select Content --" }]), ...(categories.find(c => c.id === form.categoryId)?.contents || []).map(ctx => ({ value: ctx, label: ctx }))]}
+                   disabled={!form.categoryId || !(categories.find(c => c.id === form.categoryId)?.contents?.length)}
+                 />
+                  <Select
+                    label="Sales Person *"
+                    value={form.salesPerson}
+                    onChange={e => f("salesPerson", e.target.value)}
+                    options={[
+                      { value: "", label: "-- Select Sales Person --" },
+                      { value: "Rajesh Sharma", label: "Rajesh Sharma" },
+                      { value: "Sanjay Gupta",  label: "Sanjay Gupta" },
+                      { value: "Anita Desai",   label: "Anita Desai" },
+                    ]}
+                  />
+                  <Select
+                    label="Sales Type *"
+                    value={form.salesType}
+                    onChange={e => f("salesType", e.target.value)}
+                    options={[
+                      { value: "Local",      label: "Local" },
+                      { value: "Inter-State", label: "Inter-State" },
+                      { value: "Export",      label: "Export" },
+                    ]}
+                  />
+                  <Input label="Concern Person" value={form.concernPerson} onChange={e => f("concernPerson", e.target.value)} placeholder="Name of concern person" />
+             </div>
+          </div>
+
+          <div>
+              {/* ── Section 1: Planning Specification ─────────────────────────── */}
+              <div>
+                <SectionHeader label="Planning Specification" />
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <Input label="Date" type="date" value={form.date} onChange={e => f("date", e.target.value)} />
+                  <Input label="No. of Plys *" type="number"
+                    value={form.secondaryLayers.length || ""}
+                    onChange={e => {
+                      const n = Math.max(0, parseInt(e.target.value) || 0);
+                      let layers = [...form.secondaryLayers];
+                      if (n > layers.length) {
+                        while(layers.length < n) {
+                          layers.push({ id: Math.random().toString(), layerNo: layers.length + 1, plyType: "", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [] });
+                        }
+                  } else if (n < layers.length) {
+                    layers = layers.slice(0, n);
+                  }
+                  f("secondaryLayers", layers);
                 }}
-                options={[{ value: "", label: "-- Direct Estimation --" }, ...gravureEnquiries.map(e => ({ value: e.id, label: `${e.enquiryNo} – ${e.customerName}` }))]}
               />
 
-              {/* Customer Master dropdown */}
-              <Select
-                label="Customer *"
-                value={form.customerId}
-                onChange={e => {
-                  const c = customers.find(x => x.id === e.target.value);
-                  f("customerId", e.target.value);
-                  if (c) f("customerName", c.name);
-                }}
-                options={[{ value: "", label: "-- Select Customer --" }, ...customers.filter(c => c.status === "Active").map(c => ({ value: c.id, label: c.name }))]}
-              />
-
-              <Input label="Job Name *" value={form.jobName} onChange={e => f("jobName", e.target.value)} placeholder="Job / carton description" />
-
-              {/* Substrate from Item Master (Film group) */}
-              <Select
-                label="Substrate Film * (Item Master)"
-                value={form.substrateItemId}
-                onChange={e => {
-                  const it = FILM_ITEMS.find(x => x.id === e.target.value);
-                  f("substrateItemId", e.target.value);
-                  if (it) f("substrateName", it.name);
-                }}
-                options={[{ value: "", label: "-- Select Substrate --" }, ...FILM_ITEMS.map(i => ({ value: i.id, label: `${i.name} (${i.subGroup})` }))]}
-              />
-
-              <Input label="Print Width (mm)" type="number" value={form.width} onChange={e => f("width", Number(e.target.value))} />
-              <Input label="No. of Colors" type="number" value={form.noOfColors} onChange={e => f("noOfColors", Number(e.target.value))} min={1} max={12} />
+                  <Input label="Job Width (mm)" type="number" 
+                    value={form.jobWidth || ""} 
+                    onChange={e => { 
+                      const v = Number(e.target.value);
+                      setForm(p => ({ ...p, jobWidth: v, width: v, actualWidth: v }));
+                    }} 
+                  />
+                  <Input label="Job Height (mm)" type="number" 
+                    value={form.jobHeight || ""} 
+                    onChange={e => { 
+                      const v = Number(e.target.value);
+                      setForm(p => ({ ...p, jobHeight: v, actualHeight: v }));
+                    }} 
+                  />
+                  <Input label="Actual Width" type="number" value={form.actualWidth || ""} onChange={e => f("actualWidth", Number(e.target.value))} />
+                  <Input label="Actual Height" type="number" value={form.actualHeight || ""} onChange={e => f("actualHeight", Number(e.target.value))} />
+                  <Input label="No. of Colors" type="number" value={form.noOfColors} onChange={e => f("noOfColors", Number(e.target.value))} min={1} max={12} />
 
               <Select label="Print Type" value={form.printType} onChange={e => f("printType", e.target.value)}
                 options={[
@@ -315,223 +735,703 @@ export default function GravureEstimationPage() {
                   { value: "Reverse Print", label: "Reverse Print" },
                   { value: "Combination",   label: "Combination" },
                 ]} />
-
-              <Input label="Quantity" type="number" value={form.quantity} onChange={e => f("quantity", Number(e.target.value))} />
-              <Select label="Unit" value={form.unit} onChange={e => f("unit", e.target.value)}
-                options={[{ value: "Meter", label: "Meter" }, { value: "Kg", label: "Kg" }]} />
-            </div>
-          </div>
-
-          {/* ── Section 2: Machine & Process ──────────────────── */}
-          <div>
-            <SectionHeader label="Machine & Process Selection" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              {/* Machine Master dropdown */}
-              <Select
-                label="Printing Machine * (Machine Master)"
-                value={form.machineId}
-                onChange={e => {
-                  const m = PRINT_MACHINES.find(x => x.id === e.target.value);
-                  f("machineId", e.target.value);
-                  if (m) f("machineName", m.name);
-                }}
-                options={[
-                  { value: "", label: "-- Select Machine --" },
-                  ...PRINT_MACHINES.map(m => ({ value: m.id, label: `${m.name} (${m.status}) – ₹${m.costPerHour}/hr` })),
-                ]}
-              />
-              <Input label="Cylinder Cost per Color (₹)" type="number" value={form.cylinderCostPerColor}
-                onChange={e => f("cylinderCostPerColor", Number(e.target.value))} />
             </div>
 
-            {/* Process Master selection table */}
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-600">Process List (from Process Master)</p>
-              <button onClick={addProcess}
-                className="flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 px-3 py-1.5 rounded-lg border border-purple-200 transition">
-                <Plus size={12} /> Add Process
-              </button>
-            </div>
 
-            {form.processes.length > 0 ? (
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <table className="min-w-full text-xs">
-                  <thead className="bg-gray-50 text-gray-500 uppercase">
-                    <tr>
-                      {["Process (Master)", "Charge Unit", "Rate (₹)", "Qty", "Setup (₹)", "Amount (₹)", ""].map(h => (
-                        <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {form.processes.map((pr, i) => (
-                      <tr key={i} className="hover:bg-gray-50">
-                        <td className="px-3 py-2 min-w-[180px]">
-                          <select
-                            value={pr.processId}
-                            onChange={e => selectProcess(i, e.target.value)}
-                            className={cellInput}
-                          >
-                            <option value="">-- Select Process --</option>
-                            {ROTO_PROCESSES.map(pm => (
-                              <option key={pm.id} value={pm.id}>{pm.name} ({pm.department})</option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="px-3 py-2 w-24">
-                          <span className="px-2 py-1 bg-gray-100 rounded text-gray-700 font-mono">{pr.chargeUnit || "—"}</span>
-                        </td>
-                        <td className="px-3 py-2 w-24">
-                          <input type="number" value={pr.rate} onChange={e => updateProcess(i, { rate: Number(e.target.value) })}
-                            className={`${cellInput} text-right`} step={0.01} />
-                        </td>
-                        <td className="px-3 py-2 w-28">
-                          <input type="number" value={pr.qty} onChange={e => updateProcess(i, { qty: Number(e.target.value) })}
-                            className={`${cellInput} text-right`} />
-                        </td>
-                        <td className="px-3 py-2 w-28">
-                          <input type="number" value={pr.setupCharge} onChange={e => updateProcess(i, { setupCharge: Number(e.target.value) })}
-                            className={`${cellInput} text-right`} />
-                        </td>
-                        <td className="px-3 py-2 w-32 text-right font-semibold text-gray-800">₹{pr.amount.toLocaleString()}</td>
-                        <td className="px-3 py-2 w-8 text-center">
-                          <button onClick={() => removeProcess(i)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot className="bg-purple-50 border-t border-purple-200">
-                    <tr>
-                      <td colSpan={5} className="px-3 py-2.5 text-xs font-bold text-purple-700 uppercase">Process Cost</td>
-                      <td className="px-3 py-2.5 text-sm font-bold text-purple-800 text-right">₹{costs.processCost.toLocaleString()}</td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            ) : (
-              <div className="border-2 border-dashed border-purple-200 rounded-xl py-6 text-center text-xs text-gray-400">
-                No processes added. Click "Add Process" to select from Process Master.
-              </div>
-            )}
-          </div>
+            {/* ── Section: Ply Information ── */}
+            {form.secondaryLayers.length > 0 && (
+              <div className="mt-4 border-t border-purple-100 pt-4">
+                <SectionHeader label="Ply Information" />
+                <div className="space-y-3">
+                  {form.secondaryLayers.map((l, index) => {
+                    const thicknesses = FILM_SUBGROUPS.find(s => s.subGroup === l.itemSubGroup)?.thicknesses || [];
 
-          {/* ── Section 3: Material Allocation ────────────────── */}
-          <div>
-            <SectionHeader label="Material Allocation (Item Master)" />
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-gray-500">Select items from Item Master — no manual entry</p>
-              <button onClick={addMaterial}
-                className="flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition">
-                <Plus size={12} /> Add Material
-              </button>
-            </div>
-
-            {form.materials.length > 0 ? (
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <table className="min-w-full text-xs">
-                  <thead className="bg-gray-50 text-gray-500 uppercase">
-                    <tr>
-                      {["Item (Master)", "Group", "Unit", "Rate (₹)", "Qty", "Amount (₹)", ""].map(h => (
-                        <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {form.materials.map((mat, i) => (
-                      <tr key={i} className="hover:bg-gray-50">
-                        <td className="px-3 py-2 min-w-[220px]">
-                          <select
-                            value={mat.itemId}
-                            onChange={e => selectMaterialItem(i, e.target.value)}
-                            className={cellInput}
-                          >
-                            <option value="">-- Select Item --</option>
-                            <optgroup label="Film / Substrate">
-                              {FILM_ITEMS.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-                            </optgroup>
-                            <optgroup label="Ink">
-                              {INK_ITEMS.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-                            </optgroup>
-                            <optgroup label="Adhesive">
-                              {ADHESIVE_ITEMS.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-                            </optgroup>
-                            <optgroup label="Solvent">
-                              {SOLVENT_ITEMS.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-                            </optgroup>
-                            <optgroup label="Hardner">
-                              {HARDNER_ITEMS.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-                            </optgroup>
-                          </select>
-                        </td>
-                        <td className="px-3 py-2 w-24">
-                          {mat.group ? (
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${GROUP_COLORS[mat.group] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
-                              {mat.group}
+                    return (
+                      <div key={l.id} className="bg-white border-2 border-purple-50 rounded-2xl shadow-sm relative overflow-hidden">
+                        {/* Ply header */}
+                        <div className="flex items-center justify-between bg-purple-50 px-4 py-2 border-b border-purple-100">
+                          <span className="text-xs font-bold text-purple-700 uppercase tracking-wider">
+                            {l.layerNo === 1 ? "1st" : l.layerNo === 2 ? "2nd" : l.layerNo === 3 ? "3rd" : `${l.layerNo}th`} Ply
+                          </span>
+                          {l.plyType && (
+                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                              l.plyType === "Printing"   ? "bg-blue-50 text-blue-700 border-blue-200" :
+                              l.plyType === "Lamination" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                              l.plyType === "Coating"    ? "bg-green-50 text-green-700 border-green-200" :
+                              "bg-indigo-50 text-indigo-700 border-indigo-200"
+                            }`}>
+                              {l.plyType === "Film" ? "1st Ply (Film)" : l.plyType === "Printing" ? "2nd Ply (Printing)" : l.plyType === "Lamination" ? "3rd Ply (Lamination)" : l.plyType === "Coating" ? "4th Ply (Coating)" : l.plyType}
                             </span>
-                          ) : "—"}
-                        </td>
-                        <td className="px-3 py-2 w-20">
-                          <span className="font-mono text-gray-600">{mat.unit || "—"}</span>
-                        </td>
-                        <td className="px-3 py-2 w-28">
-                          <input type="number" value={mat.rate} onChange={e => updateMaterial(i, { rate: Number(e.target.value) })}
-                            className={`${cellInput} text-right`} step={0.01} />
-                        </td>
-                        <td className="px-3 py-2 w-28">
-                          <input type="number" value={mat.qty} onChange={e => updateMaterial(i, { qty: Number(e.target.value) })}
-                            className={`${cellInput} text-right`} />
-                        </td>
-                        <td className="px-3 py-2 w-32 text-right font-semibold text-gray-800">₹{mat.amount.toLocaleString()}</td>
-                        <td className="px-3 py-2 w-8 text-center">
-                          <button onClick={() => removeMaterial(i)} className="text-red-400 hover:text-red-600"><X size={14} /></button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot className="bg-blue-50 border-t border-blue-200">
-                    <tr>
-                      <td colSpan={5} className="px-3 py-2.5 text-xs font-bold text-blue-700 uppercase">Material Cost</td>
-                      <td className="px-3 py-2.5 text-sm font-bold text-blue-800 text-right">₹{costs.materialCost.toLocaleString()}</td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
+                          )}
+                        </div>
+
+                        <div className="p-3 space-y-3">
+                          {/* Ply Type select */}
+                          <div>
+                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Ply Type *</label>
+                            <select
+                              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                              value={l.plyType}
+                              onChange={e => onPlyTypeChange(index, e.target.value)}
+                            >
+                              <option value="">-- Select Ply Type --</option>
+                              <option value="Film">1st Ply (Film / Substrate)</option>
+                              <option value="Printing">2nd Ply (Printing)</option>
+                              <option value="Lamination">3rd Ply (Lamination)</option>
+                              <option value="Coating">4th Ply (Coating)</option>
+                            </select>
+                          </div>
+
+                          {/* ── Film / Substrate section (always shown once ply type chosen) ── */}
+                          {l.plyType && (
+                            <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3 space-y-3">
+                              <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">
+                                {l.plyType === "Film" ? "1st Ply — Film / Substrate" : l.plyType === "Lamination" ? "3rd Ply — Laminating Film" : "2nd Ply — Print Film"}
+                              </p>
+                              <div>
+                                <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Film Sub Group</label>
+                                <select
+                                  className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                                  value={l.itemSubGroup}
+                                  onChange={e => {
+                                    const subGroup = e.target.value;
+                                    const sg = FILM_SUBGROUPS.find(s => s.subGroup === subGroup);
+                                    const density = sg ? sg.density : 0;
+                                    const layers = [...form.secondaryLayers];
+                                    layers[index] = { ...l, itemSubGroup: subGroup, density, thickness: 0, gsm: 0 };
+                                    f("secondaryLayers", layers);
+                                  }}>
+                                  <option value="">Select Film Sub Group</option>
+                                  {FILM_SUBGROUPS.map(opt => <option key={opt.subGroup} value={opt.subGroup}>{opt.subGroup}</option>)}
+                                </select>
+                              </div>
+                              <div className="grid grid-cols-3 gap-2">
+                                <Input label="Density" type="number" value={l.density || ""} readOnly className="bg-gray-50 text-gray-400 text-xs" />
+                                <div>
+                                  <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Thickness (μ)</label>
+                                  <select
+                                    className="w-full text-xs border border-gray-200 rounded-xl px-2 py-2 bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                                    value={l.thickness}
+                                    onChange={e => {
+                                      const thickness = Number(e.target.value);
+                                      const layers = [...form.secondaryLayers];
+                                      layers[index] = { ...l, thickness, gsm: parseFloat((thickness * l.density).toFixed(3)) };
+                                      f("secondaryLayers", layers);
+                                    }}>
+                                    <option value={0}>Select</option>
+                                    {thicknesses.map(t => <option key={t} value={t}>{t}</option>)}
+                                  </select>
+                                </div>
+                                <Input label="Film GSM" type="number" value={l.gsm || ""} readOnly className="font-bold bg-purple-50 text-purple-800 border-purple-200 text-xs" />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* ── Consumable Items (fully manual — no category dependency) ── */}
+                          {l.plyType && (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-bold text-teal-700 uppercase tracking-widest">Consumable Items ({l.consumableItems.length})</span>
+                                <button
+                                  onClick={() => addPlyConsumable(index)}
+                                  className="flex items-center gap-1 text-[10px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 px-2.5 py-1 rounded-lg border border-teal-200 transition">
+                                  <Plus size={10} /> Add Consumable
+                                </button>
+                              </div>
+
+                              {l.consumableItems.map((ci, ciIdx) => {
+                                const CONSUMABLE_GROUPS = ["Ink", "Solvent", "Adhesive", "Hardner"];
+                                const subGroups = ci.itemGroup ? (CATEGORY_GROUP_SUBGROUP["Raw Material (RM)"]?.[ci.itemGroup] ?? []) : [];
+                                const filteredItems = items.filter(it =>
+                                  it.group === ci.itemGroup && it.active &&
+                                  (!ci.itemSubGroup || it.subGroup === ci.itemSubGroup)
+                                );
+
+                                return (
+                                  <div key={ci.consumableId} className="bg-teal-50/40 border border-teal-100 rounded-xl p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <span className="text-[10px] font-bold text-teal-700 uppercase">Consumable {ciIdx + 1}</span>
+                                      <button onClick={() => removePlyConsumable(index, ciIdx)}
+                                        className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition">
+                                        <X size={12} />
+                                      </button>
+                                    </div>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                      {/* Item Group */}
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item Group</label>
+                                        <select
+                                          className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                          value={ci.itemGroup}
+                                          onChange={e => updatePlyConsumable(index, ciIdx, { itemGroup: e.target.value, itemSubGroup: "", itemId: "", itemName: "" })}
+                                        >
+                                          <option value="">-- Group --</option>
+                                          {CONSUMABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+                                        </select>
+                                      </div>
+                                      {/* Item Sub Group */}
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Sub Group</label>
+                                        <select
+                                          className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                          value={ci.itemSubGroup}
+                                          onChange={e => updatePlyConsumable(index, ciIdx, { itemSubGroup: e.target.value, itemId: "", itemName: "" })}
+                                          disabled={!ci.itemGroup}
+                                        >
+                                          <option value="">-- Sub Group --</option>
+                                          {subGroups.map(sg => <option key={sg} value={sg}>{sg}</option>)}
+                                        </select>
+                                      </div>
+                                      {/* Item from Master */}
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item (Master)</label>
+                                        <select
+                                          className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                          value={ci.itemId}
+                                          onChange={e => {
+                                            const it = filteredItems.find(x => x.id === e.target.value);
+                                            updatePlyConsumable(index, ciIdx, {
+                                              itemId: it?.id ?? "",
+                                              itemName: it?.name ?? "",
+                                              rate: parseFloat(it?.estimationRate ?? "0") || 0,
+                                            });
+                                          }}
+                                          disabled={!ci.itemGroup}
+                                        >
+                                          <option value="">-- Select Item --</option>
+                                          {filteredItems.map(it => (
+                                            <option key={it.id} value={it.id}>{it.name}{it.estimationRate ? ` — ₹${it.estimationRate}/Kg` : ""}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                      {/* GSM / Wet Weight */}
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">GSM / Wet Wt.</label>
+                                        <input
+                                          type="number" step={0.1} min={0}
+                                          className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                          value={ci.gsm || ""}
+                                          onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })}
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+
+                              {l.consumableItems.length === 0 && (
+                                <p className="text-[10px] text-gray-400 italic text-center py-2">Click "+ Add Consumable" to add ink, solvent, adhesive, etc.</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            ) : (
-              <div className="border-2 border-dashed border-blue-200 rounded-xl py-6 text-center text-xs text-gray-400">
-                No materials added. Click "Add Material" to select from Item Master.
+            )}
+               </div>
+             </div>
+          </div>
+        )}
+
+        {/* TAB 2: PRODUCTION PLAN */}
+        {activeTab === 2 && (
+          <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+
+            {/* ── Machine & Cylinder Cost ── */}
+            <div>
+              <SectionHeader label="Machine & Process Selection" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <Select label="Printing Machine (Machine Master)"
+                  value={form.machineId}
+                  onChange={e => { const m = PRINT_MACHINES.find(x => x.id === e.target.value); f("machineId", e.target.value); if (m) f("machineName", m.name); }}
+                  options={[{ value: "", label: "-- All Machines --" }, ...PRINT_MACHINES.map(m => ({ value: m.id, label: `${m.name} (${m.status}) – ₹${m.costPerHour}/hr` }))]}
+                />
+                <Input label="Cylinder Cost per Color (₹)" type="number" value={form.cylinderCostPerColor}
+                  onChange={e => f("cylinderCostPerColor", Number(e.target.value))} />
+              </div>
+              {!form.machineId && (
+                <p className="text-[10px] text-blue-600 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                  No machine selected — plans will be shown for all {PRINT_MACHINES.length} gravure machines.
+                </p>
+              )}
+            </div>
+
+            {/* ── Process List ── */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-gray-600">Process List (from Process Master)</p>
+                <button onClick={addProcess} className="flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 px-3 py-1.5 rounded-lg border border-purple-200 transition">
+                  <Plus size={12} /> Add Process
+                </button>
+              </div>
+              {form.processes.length > 0 ? (
+                <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        {["Process (Master)", "Charge Unit", "Rate (₹)", "Qty", "Setup (₹)", "Amount (₹)", ""].map(h => (
+                          <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {form.processes.map((pr, i) => (
+                        <tr key={i} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 min-w-[200px]">
+                            <select value={pr.processId} onChange={e => selectProcess(i, e.target.value)} className={cellInput}>
+                              <option value="">-- Select Process --</option>
+                              {ROTO_PROCESSES.map(pm => <option key={pm.id} value={pm.id}>{pm.name} ({pm.department})</option>)}
+                            </select>
+                          </td>
+                          <td className="px-3 py-2"><span className="px-2 py-1 bg-gray-100 rounded-lg text-gray-600 font-mono text-[10px]">{pr.chargeUnit || "—"}</span></td>
+                          <td className="px-3 py-2 w-24"><input type="number" value={pr.rate} onChange={e => updateProcess(i, { rate: Number(e.target.value) })} className={`${cellInput} text-right`} step={0.01} /></td>
+                          <td className="px-3 py-2 w-24"><input type="number" value={pr.qty} onChange={e => updateProcess(i, { qty: Number(e.target.value) })} className={`${cellInput} text-right`} /></td>
+                          <td className="px-3 py-2 w-28"><input type="number" value={pr.setupCharge} onChange={e => updateProcess(i, { setupCharge: Number(e.target.value) })} className={`${cellInput} text-right`} /></td>
+                          <td className="px-3 py-2 w-32 text-right font-semibold text-gray-800">₹{pr.amount.toLocaleString()}</td>
+                          <td className="px-3 py-2 w-8 text-center"><button onClick={() => removeProcess(i)} className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50"><X size={13} /></button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-purple-50 border-t border-purple-200">
+                      <tr>
+                        <td colSpan={5} className="px-3 py-2.5 text-xs font-bold text-purple-700 uppercase">Process Cost</td>
+                        <td className="px-3 py-2.5 text-sm font-bold text-purple-800 text-right">₹{costs.processCost.toLocaleString()}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              ) : (
+                <div className="border-2 border-dashed border-gray-200 rounded-xl py-5 text-center text-xs text-gray-400">
+                  No processes added yet. Click "+ Add Process" to add.
+                </div>
+              )}
+            </div>
+
+            {/* ── Production Plan Toggle ── */}
+            <div className="flex justify-end">
+              <Button onClick={() => { setShowPlan(!showPlan); setIsPlanApplied(false); setSelectedPlanId(null); }} variant="secondary" icon={<Eye size={14} />}>
+                {showPlan ? "Hide Production Plan" : "View Production Plan"}
+              </Button>
+            </div>
+
+            {/* ── Production Plan Selection Table ── */}
+            {showPlan && !isPlanApplied && (
+              <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+                  <div>
+                    <p className="text-sm font-bold text-gray-800">Production Plan Selection</p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">{form.machineId ? `Machine: ${form.machineName}` : `Showing all ${PRINT_MACHINES.length} gravure machines`} · {allPlans.length} plans</p>
+                  </div>
+                  {selectedPlanId && (
+                    <Button onClick={() => setIsPlanApplied(true)} icon={<Check size={13} />}>Apply Selected Plan</Button>
+                  )}
+                </div>
+
+                {/* Desktop table */}
+                <div className="hidden sm:block overflow-x-auto">
+                  <table className="min-w-full text-xs whitespace-nowrap">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        {["", "Machine", "Cyl. Circ.", "Roll Width", "Ac UPS", "Repeat UPS", "Total UPS", "Req. RMT", "Total RMT", "Total Wt (Kg)", "Total Time", "Plan Cost", "Grand Total", "Unit Price"].map(h => (
+                          <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {allPlans.map(plan => {
+                        const isSel = selectedPlanId === plan.planId;
+                        return (
+                          <tr key={plan.planId} onClick={() => setSelectedPlanId(plan.planId)}
+                            className={`cursor-pointer transition-colors ${isSel ? "bg-purple-50 hover:bg-purple-100" : "hover:bg-gray-50"}`}>
+                            <td className="px-3 py-2.5 w-8">
+                              <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${isSel ? "border-purple-600 bg-purple-600" : "border-gray-300"}`}>
+                                {isSel && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 font-medium text-gray-800">{plan.machineName}</td>
+                            <td className="px-3 py-2.5 text-center font-mono text-gray-600">{plan.cylCirc}</td>
+                            <td className="px-3 py-2.5 text-center text-gray-600">{plan.rollWidth}</td>
+                            <td className="px-3 py-2.5 text-center text-gray-600">{plan.acUps}</td>
+                            <td className="px-3 py-2.5 text-center text-gray-600">{plan.repeatUPS}</td>
+                            <td className="px-3 py-2.5 text-center font-bold text-gray-800">{plan.totalUPS}</td>
+                            <td className="px-3 py-2.5 text-center text-gray-600">{plan.reqRMT}</td>
+                            <td className="px-3 py-2.5 text-center text-gray-600">{plan.totalRMT}</td>
+                            <td className="px-3 py-2.5 text-center font-semibold text-blue-600">{plan.totalWt}</td>
+                            <td className="px-3 py-2.5 text-center text-gray-600">{plan.totalTime} hr</td>
+                            <td className="px-3 py-2.5 text-center text-gray-600">₹{plan.planCost.toLocaleString()}</td>
+                            <td className="px-3 py-2.5 text-center font-bold text-purple-700">₹{plan.grandTotal.toLocaleString()}</td>
+                            <td className="px-3 py-2.5 text-center text-gray-600">₹{plan.unitPrice}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile / Tablet cards */}
+                <div className="sm:hidden divide-y divide-gray-100">
+                  {allPlans.map(plan => {
+                    const isSel = selectedPlanId === plan.planId;
+                    return (
+                      <div key={plan.planId} onClick={() => setSelectedPlanId(plan.planId)}
+                        className={`p-3 cursor-pointer transition-colors ${isSel ? "bg-purple-50" : "hover:bg-gray-50"}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${isSel ? "border-purple-600 bg-purple-600" : "border-gray-300"}`}>
+                              {isSel && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                            </div>
+                            <span className="text-xs font-semibold text-gray-800">{plan.machineName}</span>
+                          </div>
+                          <span className={`text-xs font-bold ${isSel ? "text-purple-700" : "text-gray-500"}`}>₹{plan.unitPrice}/unit</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1 text-[10px] text-gray-500">
+                          <span>Circ: <b className="text-gray-700">{plan.cylCirc}</b></span>
+                          <span>Total UPS: <b className="text-gray-700">{plan.totalUPS}</b></span>
+                          <span>RMT: <b className="text-gray-700">{plan.totalRMT}</b></span>
+                          <span>Wt: <b className="text-blue-600">{plan.totalWt} Kg</b></span>
+                          <span>Time: <b className="text-gray-700">{plan.totalTime} hr</b></span>
+                          <span>Total: <b className="text-purple-700">₹{plan.grandTotal.toLocaleString()}</b></span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {selectedPlanId && (
+                  <div className="border-t border-purple-200 bg-purple-50 px-4 py-2.5 flex items-center justify-between text-xs">
+                    <span className="text-purple-700 font-medium flex items-center gap-1.5"><Check size={12} className="text-green-600" /> Plan selected — Grand Total: <strong className="text-purple-900">₹{selectedPlan?.grandTotal.toLocaleString()}</strong></span>
+                    <Button onClick={() => setIsPlanApplied(true)} icon={<Check size={13} />}>Apply Plan</Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Ply-wise GSM & Weight Calculation (after plan applied) ── */}
+            {isPlanApplied && selectedPlan && (
+              <div className="space-y-3 animate-in fade-in duration-300">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-gray-800">Ply-wise GSM & Weight Calculation</p>
+                    <p className="text-[10px] text-gray-500 uppercase tracking-widest font-semibold mt-0.5">
+                      Machine: {selectedPlan.machineName} · Plan: {selectedPlan.planId} · Width: {form.jobWidth} mm
+                    </p>
+                  </div>
+                  <Button variant="secondary" onClick={() => { setIsPlanApplied(false); setSelectedPlanId(null); }}>Change Plan</Button>
+                </div>
+
+                {form.secondaryLayers.length === 0 ? (
+                  <div className="border-2 border-dashed border-gray-200 rounded-xl py-6 text-center text-xs text-gray-400">
+                    No plys configured in Tab 1. Go back and add ply details.
+                  </div>
+                ) : (
+                  <>
+                    {/* Desktop table */}
+                    <div className="hidden sm:block bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full text-xs whitespace-nowrap">
+                          <thead className="bg-gray-50 border-b border-gray-200">
+                            <tr>
+                              {["Ply", "Ply Type", "Film Sub Group", "Thick (μ)", "Density", "Film GSM", "Consumable GSM", "Total GSM", "Size W (mm)", "Req. Mtr", "Req. SQM", "Req. Wt (Kg)", "Waste Mtr", "Waste SQM", "Waste Wt", "Total Mtr", "Total SQM", "Total Wt (Kg)"].map(h => (
+                                <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {form.secondaryLayers.map((l, idx) => {
+                              const plyLabel = idx === 0 ? "1st" : idx === 1 ? "2nd" : idx === 2 ? "3rd" : `${idx + 1}th`;
+                              const consumableGSM = l.consumableItems.reduce((s, ci) => s + (ci.gsm || 0), 0);
+                              const totalGSM = l.gsm + consumableGSM;
+                              const sizeW = form.jobWidth || 340;
+                              const reqMtr = selectedPlan.totalRMT;
+                              const reqSQM = parseFloat((reqMtr * sizeW / 1000).toFixed(3));
+                              const reqWt = parseFloat((reqSQM * totalGSM / 1000).toFixed(4));
+                              const wasteMtr = parseFloat((reqMtr * 0.01).toFixed(2));
+                              const wasteSQM = parseFloat((wasteMtr * sizeW / 1000).toFixed(3));
+                              const wasteWt = parseFloat((wasteSQM * totalGSM / 1000).toFixed(4));
+                              const totalMtr = reqMtr + wasteMtr;
+                              const totalSQM = parseFloat((totalMtr * sizeW / 1000).toFixed(3));
+                              const totalWt = parseFloat((reqWt + wasteWt).toFixed(4));
+                              return (
+                                <tr key={l.id} className="hover:bg-gray-50 transition-colors">
+                                  <td className="px-3 py-2.5 font-bold text-purple-700 bg-purple-50/40">{plyLabel} Ply</td>
+                                  <td className="px-3 py-2.5">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                                      l.plyType === "Printing" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                      l.plyType === "Lamination" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                                      l.plyType === "Coating" ? "bg-green-50 text-green-700 border-green-200" :
+                                      "bg-indigo-50 text-indigo-700 border-indigo-200"}`}>
+                                      {l.plyType || "—"}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2.5 text-gray-700 font-medium">{l.itemSubGroup || "—"}</td>
+                                  <td className="px-3 py-2.5 text-center font-mono text-gray-600">{l.thickness || "—"}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-600">{l.density || "—"}</td>
+                                  <td className="px-3 py-2.5 text-center font-semibold text-indigo-700">{l.gsm || 0}</td>
+                                  <td className="px-3 py-2.5 text-center font-semibold text-teal-700">{consumableGSM.toFixed(2)}</td>
+                                  <td className="px-3 py-2.5 text-center font-bold text-gray-900 bg-gray-50">{totalGSM.toFixed(2)}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-600">{sizeW}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-600">{reqMtr}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-600">{reqSQM}</td>
+                                  <td className="px-3 py-2.5 text-center font-semibold text-blue-600">{reqWt}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-500">{wasteMtr}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-500">{wasteSQM}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-500">{wasteWt}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-700">{totalMtr}</td>
+                                  <td className="px-3 py-2.5 text-center text-gray-700">{totalSQM}</td>
+                                  <td className="px-3 py-2.5 text-center font-bold text-gray-900 bg-gray-50">{totalWt}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot className="bg-gray-50 border-t-2 border-gray-300">
+                            <tr>
+                              <td colSpan={17} className="px-3 py-3 text-right text-xs font-bold text-gray-700 uppercase">Total Combined Weight (Kg)</td>
+                              <td className="px-3 py-3 text-center font-bold text-purple-800 bg-purple-50">
+                                {form.secondaryLayers.reduce((s, l) => {
+                                  const totalGSM = l.gsm + l.consumableItems.reduce((cs, ci) => cs + (ci.gsm || 0), 0);
+                                  const sizeW = form.jobWidth || 340;
+                                  const totalMtr = selectedPlan.totalRMT * 1.01;
+                                  return s + parseFloat((totalMtr * sizeW / 1000 * totalGSM / 1000).toFixed(4));
+                                }, 0).toFixed(3)}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Mobile ply cards */}
+                    <div className="sm:hidden space-y-2">
+                      {form.secondaryLayers.map((l, idx) => {
+                        const plyLabel = idx === 0 ? "1st" : idx === 1 ? "2nd" : idx === 2 ? "3rd" : `${idx + 1}th`;
+                        const consumableGSM = l.consumableItems.reduce((s, ci) => s + (ci.gsm || 0), 0);
+                        const totalGSM = l.gsm + consumableGSM;
+                        const sizeW = form.jobWidth || 340;
+                        const reqWt = parseFloat((selectedPlan.totalRMT * sizeW / 1000 * totalGSM / 1000).toFixed(4));
+                        const totalWt = parseFloat((reqWt * 1.01).toFixed(4));
+                        return (
+                          <div key={l.id} className="bg-white border border-gray-200 rounded-xl p-3 shadow-sm">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-bold text-purple-700">{plyLabel} Ply</span>
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                                l.plyType === "Printing" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                l.plyType === "Lamination" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                                "bg-indigo-50 text-indigo-700 border-indigo-200"}`}>
+                                {l.plyType || "—"}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-1 text-[11px] text-gray-600">
+                              <span>Film: <b className="text-indigo-700">{l.itemSubGroup || "—"}</b></span>
+                              <span>Thick: <b>{l.thickness}μ</b></span>
+                              <span>Film GSM: <b className="text-indigo-700">{l.gsm}</b></span>
+                              <span>Consumable GSM: <b className="text-teal-700">{consumableGSM.toFixed(2)}</b></span>
+                              <span>Total GSM: <b className="text-gray-900">{totalGSM.toFixed(2)}</b></span>
+                              <span>Total Wt: <b className="text-purple-700">{totalWt} Kg</b></span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
+        )}
+
+        {/* TAB 3: COST ESTIMATION */}
+          {activeTab === 3 && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              {/* ── Section 3: Multiple Quantity Costing ──────────────────── */}
+              <div>
+                 <SectionHeader label="Quantity Simulations" />
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          {/* ── Qty Card helper ── */}
+                    {([
+                      { slot: 0 as const, label: "Base Quantity (Q1)", badge: "TARGET QTY", qty: form.quantity, c: costs,     isBase: true  },
+                      { slot: 1 as const, label: "Simulate Quantity 2", badge: altQty1 > 0 ? "Q2" : "", qty: altQty1, c: costsAlt1, isBase: false },
+                      { slot: 2 as const, label: "Simulate Quantity 3", badge: altQty2 > 0 ? "Q3" : "", qty: altQty2, c: costsAlt2, isBase: false },
+                    ] as const).map(({ slot, label, badge, qty, c, isBase }) => {
+                      const active = activeQtySlot === slot;
+                      return (
+                        <div
+                          key={slot}
+                          onClick={() => setActiveQtySlot(slot)}
+                          className={`rounded-2xl p-5 shadow-sm relative overflow-hidden cursor-pointer transition-all duration-200 border-2
+                            ${active
+                              ? "border-purple-500 bg-purple-50 ring-2 ring-purple-300 shadow-md scale-[1.02]"
+                              : "border-slate-200 bg-slate-50 hover:border-purple-300 hover:bg-purple-50/40"}`}
+                        >
+                          {/* Badge */}
+                          {badge && (
+                            <span className={`absolute top-0 right-0 text-[10px] font-bold px-2 py-1 rounded-bl-lg
+                              ${active ? "bg-purple-500 text-white" : "bg-slate-200 text-slate-600"}`}>
+                              {badge}
+                            </span>
+                          )}
+                          {active && (
+                            <span className="absolute top-0 left-0 text-[10px] font-bold px-2 py-1 rounded-br-lg bg-purple-600 text-white">
+                              ✓ SELECTED
+                            </span>
+                          )}
+
+                          {/* Input */}
+                          <div className="mt-3 mb-4" onClick={e => e.stopPropagation()}>
+                            {isBase ? (
+                              <div className="flex gap-2 items-end">
+                                <div className="flex-1">
+                                  <Input label={label} type="number" value={form.quantity}
+                                    onChange={e => f("quantity", Number(e.target.value))}
+                                    className="bg-white border-purple-300" />
+                                </div>
+                                <div className="w-1/3">
+                                  <Select label="Unit" value={form.unit} onChange={e => f("unit", e.target.value)}
+                                    options={[{ value: "Kg", label: "Kg" }, { value: "Pieces", label: "Pieces" }]} />
+                                </div>
+                              </div>
+                            ) : (
+                              <Input label={label} type="number" value={qty || ""}
+                                onChange={e => slot === 1 ? setAltQty1(Number(e.target.value)) : setAltQty2(Number(e.target.value))}
+                                placeholder="Enter quantity to simulate" className="bg-white" />
+                            )}
+                          </div>
+
+                          {/* Cost display */}
+                          <div className={`pt-4 border-t ${active ? "border-purple-300" : "border-slate-200"}`}>
+                            <p className={`text-[10px] font-bold mb-0.5 uppercase tracking-wide ${active ? "text-purple-500" : "text-slate-500"}`}>
+                              Total Estimated Cost
+                            </p>
+                            <p className={`text-2xl font-black mb-3 ${active ? "text-purple-900" : "text-slate-700"}`}>
+                              ₹{c.totalAmount.toLocaleString()}
+                            </p>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className={`text-[10px] font-bold mb-0.5 uppercase tracking-wide ${active ? "text-purple-500" : "text-slate-500"}`}>Rate / Unit</p>
+                                <p className={`text-lg font-bold ${active ? "text-purple-800" : "text-indigo-700"}`}>₹{c.perMeterRate}</p>
+                              </div>
+                              <div className="text-right">
+                                <p className={`text-[10px] font-bold mb-0.5 uppercase tracking-wide ${active ? "text-purple-500" : "text-slate-500"}`}>Margin</p>
+                                <p className={`text-sm font-bold ${c.marginPct >= 12 ? "text-green-600" : "text-orange-500"}`}>{c.marginPct}%</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                 </div>
+              </div>
+
+          {/* ── Material Cost Breakdown ──────────────────────── */}
+          <div>
+            <SectionHeader label={`Material Cost Breakdown — Area: ${breakdown.areaM2.toLocaleString()} m²`} />
+            <div className="border border-gray-200 rounded-xl overflow-hidden">
+              <table className="min-w-full text-xs">
+                <thead style={{ background: "var(--erp-primary)" }} className="text-white">
+                  <tr>
+                    {["Ply", "Type", "Material / Item", "Group", "GSM / Wet Wt.", "Qty (Kg)", "Rate (₹/Kg)", "Amount (₹)"].map(h => (
+                      <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {breakdown.matLines.length === 0 ? (
+                    <tr><td colSpan={8} className="px-4 py-6 text-center text-gray-400">No materials — select items in Ply Information (Tab 1)</td></tr>
+                  ) : breakdown.matLines.map((m, i) => (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 font-semibold text-purple-700">{m.plyNo > 0 ? `P${m.plyNo}` : "—"}</td>
+                      <td className="px-3 py-2">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                          m.plyType === "Printing" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                          m.plyType === "Lamination" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                          m.plyType === "Extra" ? "bg-gray-100 text-gray-600 border-gray-300" :
+                          "bg-indigo-50 text-indigo-700 border-indigo-200"}`}>{m.plyType}</span>
+                      </td>
+                      <td className="px-3 py-2 font-medium text-gray-800">{m.name}</td>
+                      <td className="px-3 py-2">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${GROUP_COLORS[m.group] || "bg-gray-100 text-gray-600"}`}>{m.group}</span>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-gray-700">{m.gsm > 0 ? `${m.gsm} g/m²` : "—"}</td>
+                      <td className="px-3 py-2 font-mono text-gray-700">{m.kg.toFixed(3)}</td>
+                      <td className="px-3 py-2 font-mono text-gray-700">{m.rate > 0 ? `₹${m.rate}` : <span className="text-amber-600 font-semibold">—  select item</span>}</td>
+                      <td className="px-3 py-2 font-bold text-gray-900">{m.amount > 0 ? `₹${m.amount.toLocaleString()}` : "₹0"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-purple-50 border-t-2 border-purple-200">
+                  <tr>
+                    <td colSpan={7} className="px-3 py-2.5 text-xs font-bold text-purple-700 uppercase text-right">Total Material Cost</td>
+                    <td className="px-3 py-2.5 text-sm font-black text-purple-800">₹{activeCosts.materialCost.toLocaleString()}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          {/* ── Process Cost Breakdown ────────────────────────── */}
+          {breakdown.procLines.length > 0 && (
+          <div>
+            <SectionHeader label="Process Cost Breakdown (from Process Master)" />
+            <div className="border border-gray-200 rounded-xl overflow-hidden">
+              <table className="min-w-full text-xs">
+                <thead style={{ background: "var(--erp-primary)" }} className="text-white">
+                  <tr>
+                    {["Process Name", "Charge Unit", "Qty", "Rate (₹)", "Setup (₹)", "Amount (₹)"].map(h => (
+                      <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {breakdown.procLines.map((p, i) => (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 font-medium text-gray-800">{p.name}</td>
+                      <td className="px-3 py-2"><span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded font-mono text-[10px]">{p.chargeUnit}</span></td>
+                      <td className="px-3 py-2 font-mono text-gray-700">{p.qty.toLocaleString()}</td>
+                      <td className="px-3 py-2 font-mono text-gray-700">₹{p.rate}</td>
+                      <td className="px-3 py-2 font-mono text-gray-500">{p.setupCharge > 0 ? `₹${p.setupCharge}` : "—"}</td>
+                      <td className="px-3 py-2 font-bold text-gray-900">₹{p.amount.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-indigo-50 border-t-2 border-indigo-200">
+                  <tr>
+                    <td colSpan={5} className="px-3 py-2.5 text-xs font-bold text-indigo-700 uppercase text-right">Total Process Cost</td>
+                    <td className="px-3 py-2.5 text-sm font-black text-indigo-800">₹{activeCosts.processCost.toLocaleString()}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+          )}
 
           {/* ── Section 4: Overhead & Profit ──────────────────── */}
           <div>
             <SectionHeader label="Overhead & Profit" />
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Input label="Overhead (%)" type="number" value={form.overheadPct} onChange={e => f("overheadPct", Number(e.target.value))} />
               <Input label="Profit (%)" type="number" value={form.profitPct} onChange={e => f("profitPct", Number(e.target.value))} />
-              <Select label="Status" value={form.status} onChange={e => f("status", e.target.value)}
-                options={[
-                  { value: "Draft",    label: "Draft" },
-                  { value: "Approved", label: "Approved" },
-                  { value: "Sent",     label: "Sent to Customer" },
-                  { value: "Accepted", label: "Accepted" },
-                  { value: "Rejected", label: "Rejected" },
-                ]} />
             </div>
           </div>
 
           {/* ── Section 5: Live Cost Summary ──────────────────── */}
           <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-5">
-            <SectionHeader label="Cost Summary (Auto-Calculated)" />
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <SectionHeader label={`Cost Summary — ${activeQtySlot === 0 ? "Base Qty" : `Q${activeQtySlot + 1}`} (${activeQty.toLocaleString()} ${form.unit})`} />
+              {activeQtySlot > 0 && (
+                <span className="text-[10px] bg-purple-200 text-purple-800 font-bold px-2 py-0.5 rounded-full">
+                  Simulated View
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
               {[
-                { label: "Material Cost",   val: `₹${costs.materialCost.toLocaleString()}`,  cls: "bg-blue-50 border-blue-200 text-blue-700" },
-                { label: "Process Cost",    val: `₹${costs.processCost.toLocaleString()}`,   cls: "bg-purple-50 border-purple-200 text-purple-700" },
+                { label: "Process Cost",    val: `₹${activeCosts.processCost.toLocaleString()}`,   cls: "bg-purple-50 border-purple-200 text-purple-700" },
                 { label: `Cylinder (${form.noOfColors}C × ₹${form.cylinderCostPerColor.toLocaleString()})`,
-                                            val: `₹${costs.cylinderCost.toLocaleString()}`,  cls: "bg-indigo-50 border-indigo-200 text-indigo-700" },
-                { label: `Overhead (${form.overheadPct}%)`, val: `₹${costs.overheadAmt.toLocaleString()}`, cls: "bg-yellow-50 border-yellow-200 text-yellow-700" },
+                                            val: `₹${activeCosts.cylinderCost.toLocaleString()}`,  cls: "bg-indigo-50 border-indigo-200 text-indigo-700" },
+                { label: `Overhead (${form.overheadPct}%)`, val: `₹${activeCosts.overheadAmt.toLocaleString()}`, cls: "bg-yellow-50 border-yellow-200 text-yellow-700" },
               ].map(s => (
                 <div key={s.label} className={`rounded-xl border p-3 ${s.cls}`}>
                   <p className="text-xs font-medium opacity-80">{s.label}</p>
@@ -542,31 +1442,47 @@ export default function GravureEstimationPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <div className="bg-green-50 border border-green-200 rounded-xl p-3 col-span-1">
                 <p className="text-xs font-medium text-green-700 opacity-80">Profit ({form.profitPct}%)</p>
-                <p className="text-base font-bold text-green-700">₹{costs.profitAmt.toLocaleString()}</p>
+                <p className="text-base font-bold text-green-700">₹{activeCosts.profitAmt.toLocaleString()}</p>
               </div>
               <div className="bg-white border-2 border-purple-400 rounded-xl p-3">
                 <p className="text-xs font-bold text-purple-700 uppercase tracking-wide">Total Amount</p>
-                <p className="text-2xl font-black text-purple-800">₹{costs.totalAmount.toLocaleString()}</p>
+                <p className="text-2xl font-black text-purple-800">₹{activeCosts.totalAmount.toLocaleString()}</p>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
-                  <p className="text-xs text-gray-500">Rate / Meter</p>
-                  <p className="text-sm font-bold text-gray-800">₹{costs.perMeterRate}</p>
+                  <p className="text-xs text-gray-500">Rate / {form.unit}</p>
+                  <p className="text-sm font-bold text-gray-800">₹{activeCosts.perMeterRate}</p>
                 </div>
-                <div className={`rounded-xl border p-3 ${costs.marginPct >= 12 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+                <div className={`rounded-xl border p-3 ${activeCosts.marginPct >= 12 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
                   <p className="text-xs text-gray-500">Margin %</p>
-                  <p className={`text-sm font-bold ${costs.marginPct >= 12 ? "text-green-700" : "text-red-600"}`}>{costs.marginPct}%</p>
+                  <p className={`text-sm font-bold ${activeCosts.marginPct >= 12 ? "text-green-700" : "text-red-600"}`}>{activeCosts.marginPct}%</p>
                 </div>
               </div>
             </div>
           </div>
 
-          <Textarea label="Remarks / Notes" value={form.remarks} onChange={e => f("remarks", e.target.value)} placeholder="Price validity, special terms, notes..." />
+              <Textarea label="Remarks / Notes" value={form.remarks} onChange={e => f("remarks", e.target.value)} placeholder="Price validity, special terms, notes..." />
+            </div>
+          )}
+
         </div>
 
-        <div className="flex justify-end gap-3 mt-6">
-          <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-          <Button icon={<Calculator size={14} />} onClick={save}>{editing ? "Update Estimation" : "Save Estimation"}</Button>
+        <div className="flex justify-between items-center mt-6 pt-6 border-t border-gray-200">
+          <div>
+            {activeTab > 1 && <Button variant="secondary" onClick={() => setActiveTab(activeTab - 1)}>Back</Button>}
+          </div>
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
+            {activeTab < 3 ? (
+              <Button onClick={() => setActiveTab(activeTab + 1)}>Next</Button>
+            ) : (
+              <>
+                <Button icon={<Calculator size={14} />} onClick={save}>
+                  {editing ? "Update Estimation" : !altQty1 && !altQty2 ? "Save Estimation" : `Save ${1 + (altQty1 > 0 ? 1 : 0) + (altQty2 > 0 ? 1 : 0)} Estimations`}
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </Modal>
 
@@ -576,7 +1492,7 @@ export default function GravureEstimationPage() {
           <div className="space-y-5 text-sm">
 
             {/* Basic Info */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {([
                 ["Customer",    viewRow.customerName],
                 ["Job Name",    viewRow.jobName],
@@ -592,36 +1508,7 @@ export default function GravureEstimationPage() {
               ))}
             </div>
 
-            {/* Materials */}
-            {viewRow.materials.length > 0 && (
-              <div>
-                <p className="text-xs font-bold text-blue-700 uppercase tracking-wide mb-2">Materials Used</p>
-                <div className="border border-gray-200 rounded-xl overflow-hidden">
-                  <table className="min-w-full text-xs">
-                    <thead className="bg-gray-50 text-gray-500 uppercase">
-                      <tr>{["Item", "Group", "Rate", "Qty", "Unit", "Amount"].map(h => <th key={h} className="px-3 py-2.5 text-left font-semibold">{h}</th>)}</tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {viewRow.materials.map((m, i) => (
-                        <tr key={i} className="hover:bg-gray-50">
-                          <td className="px-3 py-2.5 font-medium text-gray-800">{m.itemName}</td>
-                          <td className="px-3 py-2.5">
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${GROUP_COLORS[m.group] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>{m.group}</span>
-                          </td>
-                          <td className="px-3 py-2.5 text-gray-700">₹{m.rate}</td>
-                          <td className="px-3 py-2.5 text-gray-700">{m.qty.toLocaleString()}</td>
-                          <td className="px-3 py-2.5 text-gray-700">{m.unit}</td>
-                          <td className="px-3 py-2.5 font-semibold text-gray-900">₹{m.amount.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="bg-blue-50 border-t border-blue-200">
-                      <tr><td colSpan={5} className="px-3 py-2 text-xs font-bold text-blue-700">Material Total</td><td className="px-3 py-2 font-bold text-blue-800">₹{viewRow.materialCost.toLocaleString()}</td></tr>
-                    </tfoot>
-                  </table>
-                </div>
-              </div>
-            )}
+
 
             {/* Processes */}
             {viewRow.processes.length > 0 && (
@@ -689,6 +1576,24 @@ export default function GravureEstimationPage() {
         </Modal>
       )}
 
+      {/* Category Replace Warning */}
+      <Modal open={!!pendingCategoryId} onClose={() => setPendingCategoryId(null)} title="Replace Ply Configuration?" size="sm">
+        <div className="space-y-3">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+            You have already added ply details. Selecting a category will<br/>
+            <strong>reset your current ply configuration.</strong>
+          </div>
+          <p className="text-sm text-gray-600">Do you want to replace the ply details with the selected category?</p>
+          <div className="flex justify-end gap-3 mt-4">
+            <Button variant="secondary" onClick={() => setPendingCategoryId(null)}>No — Keep My Plys</Button>
+            <Button onClick={() => {
+              applyCategory(pendingCategoryId!);
+              setPendingCategoryId(null);
+            }}>Yes — Reset Plys</Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Delete Confirm */}
       <Modal open={!!deleteId} onClose={() => setDeleteId(null)} title="Confirm Delete" size="sm">
         <p className="text-sm text-gray-600">Delete this estimation? This cannot be undone.</p>
@@ -697,6 +1602,7 @@ export default function GravureEstimationPage() {
           <Button variant="danger" onClick={() => { setData(d => d.filter(r => r.id !== deleteId)); setDeleteId(null); }}>Delete</Button>
         </div>
       </Modal>
+
     </div>
   );
 }
