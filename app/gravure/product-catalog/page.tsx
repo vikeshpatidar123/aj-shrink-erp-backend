@@ -11,6 +11,7 @@ import {
 } from "@/data/dummyData";
 import { useProductCatalog } from "@/context/ProductCatalogContext";
 import { useCategories }     from "@/context/CategoriesContext";
+import { PlanViewer, PlanInput } from "@/components/gravure/PlanViewer";
 import { DataTable, Column } from "@/components/tables/DataTable";
 import { statusBadge }       from "@/components/ui/Badge";
 import Button    from "@/components/ui/Button";
@@ -52,8 +53,9 @@ export default function ProductCatalogPage() {
   const { categories } = useCategories();
 
   const [catalogTab, setCatalogTab] = useState<"all" | "pending" | "processed">("all");
-  const [modalOpen, setModal]   = useState(false);
-  const [viewRow,   setViewRow] = useState<GravureProductCatalog | null>(null);
+  const [modalOpen, setModal]    = useState(false);
+  const [viewRow,   setViewRow]  = useState<GravureProductCatalog | null>(null);
+  const [viewPlanRow, setViewPlanRow] = useState<GravureProductCatalog | null>(null);
   const [editing,   setEditing] = useState<GravureProductCatalog | null>(null);
   const [form,      setForm]    = useState<Omit<GravureProductCatalog, "id" | "catalogNo">>(blank);
   const [deleteId,  setDeleteId] = useState<string | null>(null);
@@ -230,6 +232,7 @@ export default function ProductCatalogPage() {
           actions={row => (
             <div className="flex items-center gap-1.5 justify-end flex-wrap">
               <Button variant="ghost" size="sm" icon={<Eye size={13} />} onClick={() => setViewRow(row)}>View</Button>
+              <Button variant="ghost" size="sm" icon={<Layers size={13} />} onClick={() => setViewPlanRow(row)}>View Plan</Button>
               {usedCatalogIds.has(row.id) && (
                 <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={() => openEdit(row)}>Replan</Button>
               )}
@@ -459,10 +462,49 @@ export default function ProductCatalogPage() {
           </div>
           <div className="flex justify-between mt-5">
             <Button variant="secondary" onClick={() => setViewRow(null)}>Close</Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" icon={<Layers size={14} />} onClick={() => { setViewPlanRow(viewRow); setViewRow(null); }}>View Plan</Button>
+              <Button icon={<ArrowRight size={14} />} onClick={() => {
+                setViewRow(null);
+                window.location.href = `/gravure/orders?catalog=${viewRow.id}`;
+              }}>Book Order from Catalog</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ VIEW PLAN MODAL ══════════════════════════════════════════ */}
+      {viewPlanRow && (
+        <Modal open={!!viewPlanRow} onClose={() => setViewPlanRow(null)}
+          title={`Planning Template — ${viewPlanRow.catalogNo}`} size="xl">
+          <div className="mb-3 flex flex-wrap gap-2 text-xs">
+            <span className="px-3 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full font-semibold">Product Catalog</span>
+            <span className="px-3 py-1 bg-gray-50 border border-gray-200 text-gray-600 rounded-full">{viewPlanRow.customerName}</span>
+            <span className="px-3 py-1 bg-gray-50 border border-gray-200 text-gray-600 rounded-full">{viewPlanRow.productName}</span>
+            <span className="px-3 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-full font-semibold">{viewPlanRow.noOfColors}C · {viewPlanRow.printType}</span>
+            {viewPlanRow.machineName && <span className="px-3 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded-full">{viewPlanRow.machineName}</span>}
+          </div>
+          <div className="max-h-[70vh] overflow-y-auto pr-1">
+            <PlanViewer plan={{
+              title:   "Product Catalog",
+              refNo:   viewPlanRow.catalogNo,
+              jobWidth:   viewPlanRow.jobWidth,
+              jobHeight:  viewPlanRow.jobHeight,
+              quantity:   viewPlanRow.standardQty || 1000,
+              unit:       viewPlanRow.standardUnit,
+              noOfColors: viewPlanRow.noOfColors,
+              secondaryLayers:      viewPlanRow.secondaryLayers,
+              processes:            viewPlanRow.processes,
+              cylinderCostPerColor: viewPlanRow.cylinderCostPerColor,
+              overheadPct: viewPlanRow.overheadPct,
+              profitPct:   viewPlanRow.profitPct,
+            } satisfies PlanInput} />
+          </div>
+          <div className="flex justify-between mt-4">
+            <Button variant="secondary" onClick={() => setViewPlanRow(null)}>Close</Button>
             <Button icon={<ArrowRight size={14} />} onClick={() => {
-              setViewRow(null);
-              // Navigate to orders with this catalog pre-selected
-              window.location.href = `/gravure/orders?catalog=${viewRow.id}`;
+              setViewPlanRow(null);
+              window.location.href = `/gravure/orders?catalog=${viewPlanRow.id}`;
             }}>Book Order from Catalog</Button>
           </div>
         </Modal>

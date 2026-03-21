@@ -14,6 +14,7 @@ import {
 import { useCategories } from "@/context/CategoriesContext";
 import { useProductCatalog } from "@/context/ProductCatalogContext";
 import { GravureProductCatalog } from "@/data/dummyData";
+import { PlanViewer, PlanInput } from "@/components/gravure/PlanViewer";
 import { generateCode, UNIT_CODE, MODULE_CODE } from "@/lib/generateCode";
 import { DataTable, Column } from "@/components/tables/DataTable";
 import { statusBadge }       from "@/components/ui/Badge";
@@ -84,6 +85,9 @@ export default function GravureWorkOrderPage() {
   const [modalTab,  setModalTab] = useState<"basic" | "planning" | "operator">("basic");
   const [showPlan,      setShowPlan]      = useState(false);
   const [isPlanApplied, setIsPlanApplied] = useState(false);
+
+  // ── View Plan ─────────────────────────────────────────────
+  const [viewPlanWO, setViewPlanWO]   = useState<GravureWorkOrder | null>(null);
 
   // ── Save to Catalog ────────────────────────────────────────
   const [catSaveWO,   setCatSaveWO]   = useState<GravureWorkOrder | null>(null);
@@ -934,6 +938,7 @@ export default function GravureWorkOrderPage() {
             actions={row => (
               <div className="flex items-center gap-1.5 justify-end flex-wrap">
                 <Button variant="ghost" size="sm" icon={<Eye size={13} />} onClick={() => setViewRow(row)}>View</Button>
+                <Button variant="ghost" size="sm" icon={<Layers size={13} />} onClick={() => setViewPlanWO(row)}>View Plan</Button>
                 <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={() => openReplan(row)}>Replan</Button>
                 <Button variant="ghost" size="sm" icon={<BookMarked size={13} />} onClick={() => openSaveToCatalog(row)}>Save to Catalog</Button>
                 <Button variant="ghost" size="sm" icon={<Pencil size={13} />} onClick={() => openEdit(row)}>Edit</Button>
@@ -1058,6 +1063,40 @@ export default function GravureWorkOrderPage() {
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setDeleteId(null)}>Cancel</Button>
             <Button variant="danger" onClick={() => { setWOs(d => d.filter(r => r.id !== deleteId)); setDeleteId(null); }}>Delete</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ VIEW PLAN MODAL ═══════════════════════════════════════ */}
+      {viewPlanWO && (
+        <Modal open={!!viewPlanWO} onClose={() => setViewPlanWO(null)}
+          title={`Production Plan — ${viewPlanWO.workOrderNo}`} size="xl">
+          <div className="mb-3 flex flex-wrap gap-2 text-xs">
+            <span className="px-3 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded-full font-semibold">Work Order</span>
+            <span className="px-3 py-1 bg-gray-50 border border-gray-200 text-gray-600 rounded-full">{viewPlanWO.customerName}</span>
+            <span className="px-3 py-1 bg-gray-50 border border-gray-200 text-gray-600 rounded-full">{viewPlanWO.jobName}</span>
+            <span className="px-3 py-1 bg-purple-50 border border-purple-200 text-purple-700 rounded-full font-semibold">{viewPlanWO.noOfColors}C · {viewPlanWO.printType}</span>
+            {viewPlanWO.machineName && <span className="px-3 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-full">{viewPlanWO.machineName}</span>}
+          </div>
+          <div className="max-h-[70vh] overflow-y-auto pr-1">
+            <PlanViewer plan={{
+              title:   "Work Order",
+              refNo:   viewPlanWO.workOrderNo,
+              jobWidth:  viewPlanWO.jobWidth,
+              jobHeight: viewPlanWO.jobHeight,
+              quantity:  viewPlanWO.quantity,
+              unit:      viewPlanWO.unit,
+              noOfColors: viewPlanWO.noOfColors,
+              secondaryLayers:     viewPlanWO.secondaryLayers,
+              processes:           viewPlanWO.processes,
+              cylinderCostPerColor: viewPlanWO.cylinderCostPerColor,
+              overheadPct: viewPlanWO.overheadPct,
+              profitPct:   viewPlanWO.profitPct,
+            } satisfies PlanInput} />
+          </div>
+          <div className="flex justify-between mt-4">
+            <Button variant="secondary" onClick={() => setViewPlanWO(null)}>Close</Button>
+            <Button icon={<BookMarked size={14} />} onClick={() => { setViewPlanWO(null); openSaveToCatalog(viewPlanWO); }}>Save to Catalog</Button>
           </div>
         </Modal>
       )}
