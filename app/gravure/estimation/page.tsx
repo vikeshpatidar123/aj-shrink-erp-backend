@@ -48,7 +48,6 @@ const blank: Omit<GravureEstimation, "id" | "estimationNo"> = {
   quantity: 0, quantities: [], unit: "Kg",
   machineId: "", machineName: "",
   cylinderCostPerColor: 3500,
-  cylinderType: "New",
   repeatLength: 0,
   wastagePct: 1,
   setupTime: 0,
@@ -132,10 +131,8 @@ function calcCosts(form: typeof blank) {
     }, 0).toFixed(2)
   );
 
-  // 3. Cylinder — zero if Existing cylinders
-  const cylinderCost = form.cylinderType === "Existing"
-    ? 0
-    : form.cylinderCostPerColor * form.noOfColors;
+  // 3. Cylinder — always full cost (quotation assumes fresh production)
+  const cylinderCost = form.cylinderCostPerColor * form.noOfColors;
 
   // 4. Machine setup cost
   const setupCost = form.setupTime > 0 && form.machineCostPerHour > 0
@@ -291,7 +288,7 @@ export default function GravureEstimationPage() {
         const totalWt = parseFloat((totalRMT * ((form.jobWidth || 340) / 1000) * totalPlyGSM / 1000).toFixed(3));
         const totalTime = parseFloat((totalRMT / (speed * 60)).toFixed(2));
         const planCost = parseFloat((totalTime * costPerHour).toFixed(2));
-        const cylCost = form.cylinderType === "Existing" ? 0 : form.noOfColors * form.cylinderCostPerColor;
+        const cylCost = form.noOfColors * form.cylinderCostPerColor;
         const grandTotal = parseFloat((planCost + costs.processCost + cylCost).toFixed(2));
         const unitPrice = form.quantity > 0 ? parseFloat((grandTotal / form.quantity).toFixed(4)) : 0;
         return { planId: `PLAN-${machine.id}-${i}`, machineId: machine.id, machineName: machine.name, cylCirc, rollWidth, acUps, repeatUPS, totalUPS, reqRMT, totalRMT, totalWt, totalTime, planCost, grandTotal, unitPrice };
@@ -1009,18 +1006,13 @@ export default function GravureEstimationPage() {
                   onChange={e => f("machineCostPerHour", Number(e.target.value))} />
               </div>
 
-              {/* Cylinder fields */}
+              {/* Cylinder & setup fields */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-                <Select label="Cylinder Type *"
-                  value={form.cylinderType}
-                  onChange={e => f("cylinderType", e.target.value as "New" | "Existing")}
-                  options={[{ value: "New", label: "New (cost applies)" }, { value: "Existing", label: "Existing (cost = ₹0)" }]}
-                />
+                <Input label="No. of Colors" type="number" value={form.noOfColors} min={1} max={12}
+                  onChange={e => f("noOfColors", Number(e.target.value))} />
                 <Input label="Cylinder Cost / Color (₹)" type="number"
                   value={form.cylinderCostPerColor}
-                  onChange={e => f("cylinderCostPerColor", Number(e.target.value))}
-                  disabled={form.cylinderType === "Existing"}
-                />
+                  onChange={e => f("cylinderCostPerColor", Number(e.target.value))} />
                 <Input label="Repeat Length (mm)" type="number" value={form.repeatLength || ""}
                   onChange={e => f("repeatLength", Number(e.target.value))}
                   placeholder="Cylinder circumference" />
@@ -1028,20 +1020,14 @@ export default function GravureEstimationPage() {
                   onChange={e => f("setupTime", Number(e.target.value))} />
               </div>
 
-              {/* Cylinder summary badge */}
+              {/* Summary badges */}
               <div className="flex flex-wrap gap-2 mb-3">
-                {form.cylinderType === "New" ? (
-                  <span className="text-xs px-3 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full font-semibold">
-                    Cylinder Cost: ₹{(form.cylinderCostPerColor * form.noOfColors).toLocaleString()} ({form.noOfColors}C × ₹{form.cylinderCostPerColor})
-                  </span>
-                ) : (
-                  <span className="text-xs px-3 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full font-semibold">
-                    ✓ Existing Cylinders — Cost waived (₹0)
-                  </span>
-                )}
+                <span className="text-xs px-3 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full font-semibold">
+                  Cylinder Cost: ₹{(form.cylinderCostPerColor * form.noOfColors).toLocaleString()} ({form.noOfColors}C × ₹{form.cylinderCostPerColor})
+                </span>
                 {form.setupTime > 0 && (
                   <span className="text-xs px-3 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-full font-semibold">
-                    Setup Cost: ₹{(((form.setupTime / 60) * form.machineCostPerHour)).toFixed(0)} ({form.setupTime} min × ₹{form.machineCostPerHour}/hr)
+                    Setup Cost: ₹{((form.setupTime / 60) * form.machineCostPerHour).toFixed(0)} ({form.setupTime} min × ₹{form.machineCostPerHour}/hr)
                   </span>
                 )}
               </div>
@@ -1473,10 +1459,8 @@ export default function GravureEstimationPage() {
               {[
                 { label: "Material Cost",   val: `₹${activeCosts.materialCost.toLocaleString()}`,  cls: "bg-blue-50 border-blue-200 text-blue-700" },
                 { label: "Process Cost",    val: `₹${activeCosts.processCost.toLocaleString()}`,   cls: "bg-purple-50 border-purple-200 text-purple-700" },
-                { label: form.cylinderType === "Existing"
-                    ? "Cylinder (Existing — ₹0)"
-                    : `Cylinder (${form.noOfColors}C × ₹${form.cylinderCostPerColor})`,
-                                            val: `₹${activeCosts.cylinderCost.toLocaleString()}`,  cls: form.cylinderType === "Existing" ? "bg-green-50 border-green-200 text-green-700" : "bg-indigo-50 border-indigo-200 text-indigo-700" },
+                { label: `Cylinder (${form.noOfColors}C × ₹${form.cylinderCostPerColor})`,
+                                            val: `₹${activeCosts.cylinderCost.toLocaleString()}`,  cls: "bg-indigo-50 border-indigo-200 text-indigo-700" },
                 { label: `Setup (${form.setupTime}min × ₹${form.machineCostPerHour}/hr)`,
                                             val: `₹${activeCosts.setupCost.toLocaleString()}`,     cls: "bg-amber-50 border-amber-200 text-amber-700" },
               ].map(s => (
@@ -1586,7 +1570,6 @@ export default function GravureEstimationPage() {
                   ["Sales Type",      viewRow.salesType || "—"],
                   ["Concern Person",  viewRow.concernPerson || "—"],
                   ["Enquiry No",      viewRow.enquiryNo || "—"],
-                  ["Cylinder Type",   viewRow.cylinderType || "New"],
                   ["Repeat Length",   viewRow.repeatLength ? `${viewRow.repeatLength} mm` : "—"],
                   ["Wastage %",       `${viewRow.wastagePct ?? 1}%`],
                 ] as [string,string][]).map(([k,v]) => (
@@ -1695,7 +1678,7 @@ export default function GravureEstimationPage() {
                 {[
                   { label: "Material Cost",   val: `₹${viewRow.materialCost.toLocaleString()}`,  cls: "bg-blue-50 border-blue-200" },
                   { label: "Process Cost",    val: `₹${viewRow.processCost.toLocaleString()}`,   cls: "bg-purple-50 border-purple-200" },
-                  { label: `Cylinder (${viewRow.cylinderType || "New"})`, val: `₹${viewRow.cylinderCost.toLocaleString()}`, cls: (viewRow.cylinderType === "Existing") ? "bg-green-50 border-green-200" : "bg-indigo-50 border-indigo-200" },
+                  { label: `Cylinder (${viewRow.noOfColors}C × ₹${viewRow.cylinderCostPerColor})`, val: `₹${viewRow.cylinderCost.toLocaleString()}`, cls: "bg-indigo-50 border-indigo-200" },
                   { label: "Setup Cost",      val: `₹${(viewRow.setupCost || 0).toLocaleString()}`, cls: "bg-amber-50 border-amber-200" },
                   { label: `Overhead (${viewRow.overheadPct}%)`, val: `₹${viewRow.overheadAmt.toLocaleString()}`, cls: "bg-yellow-50 border-yellow-200" },
                   { label: `Profit (${viewRow.profitPct}%)`, val: `₹${viewRow.profitAmt.toLocaleString()}`, cls: "bg-green-50 border-green-200" },

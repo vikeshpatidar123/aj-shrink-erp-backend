@@ -48,7 +48,6 @@ const blank: Omit<GravureEstimation, "id" | "estimationNo"> = {
   quantity: 0, quantities: [], unit: "Kg",
   machineId: "", machineName: "",
   cylinderCostPerColor: 3500,
-  cylinderType: "New",
   repeatLength: 0,
   wastagePct: 1,
   setupTime: 0,
