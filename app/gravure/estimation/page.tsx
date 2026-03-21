@@ -45,7 +45,7 @@ const blank: Omit<GravureEstimation, "id" | "estimationNo"> = {
   substrateItemId: "", substrateName: "",
   width: 0, noOfColors: 6,
   printType: "Surface Print",
-  quantity: 0, unit: "Kg",
+  quantity: 0, quantities: [], unit: "Kg",
   machineId: "", machineName: "",
   cylinderCostPerColor: 3500,
   materials: [],
@@ -423,22 +423,17 @@ export default function GravureEstimationPage() {
     const substrateName = form.secondaryLayers.map(l => l.itemSubGroup).join(" + ") || "Multiple Plys";
 
     if (editing) {
-      // Update single record
-      const record = { ...form, ...costs, substrateName };
+      // Update single record — preserve quantities array
+      const quantities: number[] = [form.quantity, ...extraQtys.filter(q => q > 0)];
+      const record = { ...form, ...costs, substrateName, quantities };
       setData(d => d.map(r => r.id === editing.id ? { ...record, id: editing.id, estimationNo: editing.estimationNo } : r));
     } else {
-      // Build one record per filled quantity slot
-      const qtys: number[] = [form.quantity, ...extraQtys.filter(q => q > 0)];
-
+      // Save single record with all quantities stored inside
+      const quantities: number[] = [form.quantity, ...extraQtys.filter(q => q > 0)];
       setData(prev => {
-        let updated = [...prev];
-        qtys.forEach(qty => {
-          const qCosts = calcCosts({ ...form, quantity: qty });
-          const estimationNo = generateCode(UNIT_CODE.Gravure, MODULE_CODE.Estimation, updated.map(d => d.estimationNo));
-          const id = `GVES${String(updated.length + 1).padStart(3, "0")}`;
-          updated = [...updated, { ...form, quantity: qty, ...qCosts, substrateName, id, estimationNo }];
-        });
-        return updated;
+        const estimationNo = generateCode(UNIT_CODE.Gravure, MODULE_CODE.Estimation, prev.map(d => d.estimationNo));
+        const id = `GVES${String(prev.length + 1).padStart(3, "0")}`;
+        return [...prev, { ...form, ...costs, substrateName, quantities, id, estimationNo }];
       });
     }
     setModal(false);
@@ -1222,7 +1217,7 @@ export default function GravureEstimationPage() {
                         <td colSpan={7} className="px-3 py-2 text-[10px] text-gray-500">
                           {extraQtys.filter(q => q > 0).length === 0
                             ? "Add quantities above to compare costs at different volumes"
-                            : `Will save ${1 + extraQtys.filter(q => q > 0).length} estimation records — click a row to view its cost breakdown below`}
+                            : `${1 + extraQtys.filter(q => q > 0).length} quantities — click a row to view its cost breakdown below`}
                         </td>
                       </tr>
                     </tfoot>
@@ -1411,7 +1406,7 @@ export default function GravureEstimationPage() {
             ) : (
               <>
                 <Button icon={<Calculator size={14} />} onClick={save}>
-                  {editing ? "Update Estimation" : extraQtys.filter(q => q > 0).length === 0 ? "Save Estimation" : `Save ${1 + extraQtys.filter(q => q > 0).length} Estimations`}
+                  {editing ? "Update Estimation" : "Save Estimation"}
                 </Button>
               </>
             )}

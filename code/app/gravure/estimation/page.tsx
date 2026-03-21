@@ -45,7 +45,7 @@ const blank: Omit<GravureEstimation, "id" | "estimationNo"> = {
   substrateItemId: "", substrateName: "",
   width: 0, noOfColors: 6,
   printType: "Surface Print",
-  quantity: 0, unit: "Kg",
+  quantity: 0, quantities: [], unit: "Kg",
   machineId: "", machineName: "",
   cylinderCostPerColor: 3500,
   materials: [],

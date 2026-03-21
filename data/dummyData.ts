@@ -1526,7 +1526,7 @@ export type GravureEstimation = {
   substrateItemId: string; substrateName: string;
   width: number; noOfColors: number;
   printType: "Surface Print" | "Reverse Print" | "Combination";
-  quantity: number; unit: string;
+  quantity: number; quantities: number[]; unit: string;
   machineId: string; machineName: string;
   cylinderCostPerColor: number;
   materials: GravureEstimationMaterial[];
@@ -1676,7 +1676,7 @@ export const gravureEstimations: GravureEstimation[] = [
     jobWidth: 340, jobHeight: 450, ups: 2,
     actualWidth: 340, actualHeight: 450,
     width: 340, noOfColors: 8, printType: "Surface Print",
-    quantity: 200000, unit: "Meter",
+    quantity: 200000, quantities: [200000], unit: "Meter",
     machineId: "M004", machineName: "Roto Press 1 – 8 Color",
     cylinderCostPerColor: 3500,
     salesPerson: "Rajesh Sharma", salesType: "Local", concernPerson: "Amit Parle",
@@ -1729,7 +1729,7 @@ export const gravureEstimations: GravureEstimation[] = [
     jobWidth: 420, jobHeight: 400, ups: 2,
     actualWidth: 420, actualHeight: 400,
     width: 420, noOfColors: 6, printType: "Reverse Print",
-    quantity: 150000, unit: "Meter",
+    quantity: 150000, quantities: [150000], unit: "Meter",
     machineId: "M003", machineName: "Roto Press 4 – 6 Color",
     cylinderCostPerColor: 0,
     salesPerson: "Sanjay Gupta", salesType: "Local", concernPerson: "Priya Britannia",
@@ -1780,7 +1780,7 @@ export const gravureEstimations: GravureEstimation[] = [
     jobWidth: 300, jobHeight: 390, ups: 2,
     actualWidth: 300, actualHeight: 390,
     width: 300, noOfColors: 8, printType: "Reverse Print",
-    quantity: 250000, unit: "Meter",
+    quantity: 250000, quantities: [250000], unit: "Meter",
     machineId: "M005", machineName: "Roto Press 2 – 9 Color",
     cylinderCostPerColor: 3500,
     salesPerson: "Anita Desai", salesType: "Inter-State", concernPerson: "Rahul Nestle",
