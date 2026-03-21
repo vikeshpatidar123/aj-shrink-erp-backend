@@ -1,11 +1,11 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Plus, Eye, Pencil, Trash2, BookMarked, Search,
-  CheckCircle2, Copy, ArrowRight, Layers, Package,
+  CheckCircle2, Copy, ArrowRight, Layers, Package, RefreshCw, Clock,
 } from "lucide-react";
 import {
-  customers, machines, processMasters,
+  customers, machines, processMasters, gravureOrders,
   GravureProductCatalog, GravureEstimation, SecondaryLayer, GravureEstimationProcess,
   CATEGORY_GROUP_SUBGROUP,
 } from "@/data/dummyData";
@@ -51,12 +51,23 @@ export default function ProductCatalogPage() {
   const { catalog, saveCatalogItem, deleteCatalogItem } = useProductCatalog();
   const { categories } = useCategories();
 
+  const [catalogTab, setCatalogTab] = useState<"all" | "pending" | "processed">("all");
   const [modalOpen, setModal]   = useState(false);
   const [viewRow,   setViewRow] = useState<GravureProductCatalog | null>(null);
   const [editing,   setEditing] = useState<GravureProductCatalog | null>(null);
   const [form,      setForm]    = useState<Omit<GravureProductCatalog, "id" | "catalogNo">>(blank);
   const [deleteId,  setDeleteId] = useState<string | null>(null);
   const [search,    setSearch]  = useState("");
+
+  // ── Which catalog items have been used in orders ──────────
+  const usedCatalogIds = useMemo(() => {
+    const ids = new Set<string>();
+    gravureOrders.forEach(o => {
+      if (o.catalogId) ids.add(o.catalogId);
+      o.orderLines?.forEach(l => { if (l.catalogId) ids.add(l.catalogId); });
+    });
+    return ids;
+  }, []);
 
   const f = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm(p => ({ ...p, [k]: v }));
@@ -116,16 +127,24 @@ export default function ProductCatalogPage() {
     setModal(false);
   };
 
-  const filtered = catalog.filter(c =>
+  const tabFiltered = useMemo(() => {
+    if (catalogTab === "pending")   return catalog.filter(c => !usedCatalogIds.has(c.id) && c.status === "Active");
+    if (catalogTab === "processed") return catalog.filter(c => usedCatalogIds.has(c.id));
+    return catalog;
+  }, [catalog, catalogTab, usedCatalogIds]);
+
+  const filtered = tabFiltered.filter(c =>
     c.productName.toLowerCase().includes(search.toLowerCase()) ||
     c.customerName.toLowerCase().includes(search.toLowerCase()) ||
     c.catalogNo.toLowerCase().includes(search.toLowerCase())
   );
 
   const stats = {
-    total:    catalog.length,
-    active:   catalog.filter(c => c.status === "Active").length,
-    inactive: catalog.filter(c => c.status === "Inactive").length,
+    total:     catalog.length,
+    active:    catalog.filter(c => c.status === "Active").length,
+    inactive:  catalog.filter(c => c.status === "Inactive").length,
+    pending:   catalog.filter(c => !usedCatalogIds.has(c.id) && c.status === "Active").length,
+    processed: catalog.filter(c => usedCatalogIds.has(c.id)).length,
   };
 
   const columns: Column<GravureProductCatalog>[] = [
@@ -137,7 +156,12 @@ export default function ProductCatalogPage() {
     { key: "noOfColors",    header: "Colors",       render: r => <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-xs font-semibold">{r.noOfColors}C</span> },
     { key: "jobWidth",      header: "Size (W×H)",   render: r => <span className="text-xs font-mono">{r.jobWidth}×{r.jobHeight}</span> },
     { key: "perMeterRate",  header: "₹/Meter",      render: r => <span className="font-semibold">₹{r.perMeterRate.toFixed(2)}</span> },
-    { key: "status",        header: "Status",       render: r => statusBadge(r.status), sortable: true },
+    { key: "status",        header: "Status",       render: r => (
+      <div className="flex items-center gap-1.5">
+        {statusBadge(r.status)}
+        {usedCatalogIds.has(r.id) && <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-xs font-semibold">Ordered</span>}
+      </div>
+    ), sortable: true },
   ];
 
   return (
@@ -155,16 +179,34 @@ export default function ProductCatalogPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Total Products",  val: stats.total,    cls: "bg-purple-50 text-purple-700 border-purple-200" },
-          { label: "Active",          val: stats.active,   cls: "bg-green-50 text-green-700 border-green-200" },
-          { label: "Inactive",        val: stats.inactive, cls: "bg-gray-50 text-gray-600 border-gray-200" },
+          { label: "Total Products",  val: stats.total,     cls: "bg-purple-50 text-purple-700 border-purple-200" },
+          { label: "Active",          val: stats.active,    cls: "bg-green-50 text-green-700 border-green-200" },
+          { label: "Pending (unused)",val: stats.pending,   cls: "bg-amber-50 text-amber-700 border-amber-200" },
+          { label: "Processed (ordered)", val: stats.processed, cls: "bg-blue-50 text-blue-700 border-blue-200" },
         ].map(s => (
           <div key={s.label} className={`rounded-xl border p-4 ${s.cls}`}>
             <p className="text-xs font-medium">{s.label}</p>
             <p className="text-2xl font-bold mt-1">{s.val}</p>
           </div>
+        ))}
+      </div>
+
+      {/* Tabs */}
+      <div className="flex bg-gray-100 p-1 rounded-xl gap-1 w-fit">
+        {([
+          { key: "all",       label: "All Products",  count: stats.total },
+          { key: "pending",   label: "Pending",       count: stats.pending },
+          { key: "processed", label: "Processed",     count: stats.processed },
+        ] as { key: "all" | "pending" | "processed"; label: string; count: number }[]).map(t => (
+          <button key={t.key} onClick={() => setCatalogTab(t.key)}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-lg transition-all ${catalogTab === t.key ? "bg-white shadow text-purple-700" : "text-gray-500 hover:text-gray-700"}`}>
+            {t.key === "pending" && <Clock size={13} />}
+            {t.key === "processed" && <CheckCircle2 size={13} />}
+            {t.label}
+            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${catalogTab === t.key ? "bg-purple-100 text-purple-700" : "bg-gray-200 text-gray-600"}`}>{t.count}</span>
+          </button>
         ))}
       </div>
 
@@ -186,8 +228,11 @@ export default function ProductCatalogPage() {
           columns={columns}
           searchKeys={["catalogNo", "productName", "customerName"]}
           actions={row => (
-            <div className="flex items-center gap-1.5 justify-end">
+            <div className="flex items-center gap-1.5 justify-end flex-wrap">
               <Button variant="ghost" size="sm" icon={<Eye size={13} />} onClick={() => setViewRow(row)}>View</Button>
+              {usedCatalogIds.has(row.id) && (
+                <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={() => openEdit(row)}>Replan</Button>
+              )}
               <Button variant="ghost" size="sm" icon={<Pencil size={13} />} onClick={() => openEdit(row)}>Edit</Button>
               <Button variant="danger" size="sm" icon={<Trash2 size={13} />} onClick={() => setDeleteId(row.id)}>Delete</Button>
             </div>

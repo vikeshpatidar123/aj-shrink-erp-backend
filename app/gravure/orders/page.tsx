@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import {
   customers, gravureOrders as initData, GravureOrder, GravureOrderLine,
+  GravureProductCatalog, SecondaryLayer, GravureEstimationProcess,
   gravureEstimations, employees, ledgers,
 } from "@/data/dummyData";
 import { useProductCatalog } from "@/context/ProductCatalogContext";
@@ -87,15 +88,17 @@ function SourceBadge({ src }: { src: string }) {
 }
 
 // ─── Inline editable line row (desktop) ───────────────────────
+
 function LineRow({
-  line, idx, onUpdate, onRemove, custEstimations, custCatalog,
+  line, idx, onUpdate, onRemove, custEstimations, custCatalog, onCatalogLoad,
 }: {
   line: GravureOrderLine;
   idx: number;
   onUpdate: (l: GravureOrderLine) => void;
   onRemove: () => void;
   custEstimations: ReturnType<typeof gravureEstimations.filter>;
-  custCatalog: ReturnType<typeof Array.prototype.filter>;
+  custCatalog: GravureProductCatalog[];
+  onCatalogLoad: (secondaryLayers: SecondaryLayer[], processes: GravureEstimationProcess[], machineId: string, machineName: string, perMeterRate: number, overheadPct: number, profitPct: number) => void;
 }) {
   const u = <K extends keyof GravureOrderLine>(k: K, v: GravureOrderLine[K]) =>
     onUpdate({ ...line, [k]: v });
@@ -121,9 +124,8 @@ function LineRow({
     });
   };
 
-  const loadFromCat = (catId: string, catalog: typeof custCatalog) => {
-    const cat = (catalog as { id: string; productName: string; categoryId: string; categoryName: string; substrate: string; jobWidth: number; jobHeight: number; noOfColors: number; printType: "Surface Print" | "Reverse Print" | "Combination"; standardQty: number; standardUnit: string; perMeterRate: number; catalogNo: string }[])
-      .find(c => c.id === catId);
+  const loadFromCat = (catId: string) => {
+    const cat = custCatalog.find(c => c.id === catId);
     if (!cat) return;
     onUpdate({
       ...line,
@@ -139,6 +141,8 @@ function LineRow({
       amount:       Math.round(cat.standardQty * cat.perMeterRate),
       cylinderStatus: "Existing",
     });
+    // Load full planning into parent order
+    onCatalogLoad(cat.secondaryLayers, cat.processes, cat.machineId, cat.machineName, cat.perMeterRate, cat.overheadPct, cat.profitPct);
   };
 
   const srcColor = line.sourceType === "Estimation" ? "border-l-blue-400"
@@ -189,11 +193,10 @@ function LineRow({
               <Select
                 label="Select from Catalog"
                 value={line.catalogId}
-                onChange={e => loadFromCat(e.target.value, custCatalog)}
+                onChange={e => loadFromCat(e.target.value)}
                 options={[
                   { value: "", label: "-- Select Product --" },
-                  ...(custCatalog as { id: string; catalogNo: string; productName: string }[])
-                    .map(c => ({ value: c.id, label: `${c.catalogNo} — ${c.productName}` })),
+                  ...custCatalog.map(c => ({ value: c.id, label: `${c.catalogNo} — ${c.productName}` })),
                 ]}
               />
             </div>
@@ -631,6 +634,19 @@ export default function GravureOrdersPage() {
                   onRemove={() => removeLine(idx)}
                   custEstimations={custEstimations}
                   custCatalog={custCatalog}
+                  onCatalogLoad={(sl, pr, machineId, machineName, rate, oh, pf) =>
+                    setForm(p => ({
+                      ...p,
+                      secondaryLayers: sl,
+                      processes: pr,
+                      machineId,
+                      machineName,
+                      perMeterRate: rate,
+                      overheadPct: oh,
+                      profitPct: pf,
+                      sourceType: "Catalog",
+                    }))
+                  }
                 />
               ))}
             </div>

@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import {
   Eye, Pencil, Trash2, Printer, CheckCircle2, ClipboardList,
   Clock, RefreshCw, Edit3, Calculator, BookMarked, ChevronRight,
-  Layers, AlertCircle, ArrowRight, Plus, X, Check,
+  Layers, AlertCircle, ArrowRight, Plus, X, Check, Save,
 } from "lucide-react";
 import {
   gravureWorkOrders as initWOs, gravureOrders as initOrders,
@@ -12,6 +12,8 @@ import {
   SecondaryLayer, PlyConsumableItem, CATEGORY_GROUP_SUBGROUP,
 } from "@/data/dummyData";
 import { useCategories } from "@/context/CategoriesContext";
+import { useProductCatalog } from "@/context/ProductCatalogContext";
+import { GravureProductCatalog } from "@/data/dummyData";
 import { generateCode, UNIT_CODE, MODULE_CODE } from "@/lib/generateCode";
 import { DataTable, Column } from "@/components/tables/DataTable";
 import { statusBadge }       from "@/components/ui/Badge";
@@ -69,6 +71,7 @@ const SH = ({ label }: { label: string }) => (
 
 export default function GravureWorkOrderPage() {
   const { categories } = useCategories();
+  const { catalog, saveCatalogItem } = useProductCatalog();
   const [workOrders, setWOs]     = useState<GravureWorkOrder[]>(initWOs);
   const [orders]                  = useState<GravureOrder[]>(initOrders);
   const [pageTab, setPageTab]    = useState<"pending" | "workorders">("pending");
@@ -81,6 +84,55 @@ export default function GravureWorkOrderPage() {
   const [modalTab,  setModalTab] = useState<"basic" | "planning" | "operator">("basic");
   const [showPlan,      setShowPlan]      = useState(false);
   const [isPlanApplied, setIsPlanApplied] = useState(false);
+
+  // ── Save to Catalog ────────────────────────────────────────
+  const [catSaveWO,   setCatSaveWO]   = useState<GravureWorkOrder | null>(null);
+  const [catProdName, setCatProdName] = useState("");
+
+  const openSaveToCatalog = (wo: GravureWorkOrder) => {
+    setCatSaveWO(wo);
+    setCatProdName(wo.jobName);
+  };
+
+  const confirmSaveToCatalog = () => {
+    if (!catSaveWO) return;
+    const n = catalog.length + 1;
+    const item: GravureProductCatalog = {
+      id: `GPC${String(n).padStart(3, "0")}`,
+      catalogNo: `GRV-CAT-${String(n).padStart(3, "0")}`,
+      createdDate: new Date().toISOString().slice(0, 10),
+      productName: catProdName || catSaveWO.jobName,
+      customerId: catSaveWO.customerId,
+      customerName: catSaveWO.customerName,
+      categoryId: catSaveWO.categoryId,
+      categoryName: catSaveWO.categoryName,
+      content: catSaveWO.content,
+      jobWidth: catSaveWO.jobWidth,
+      jobHeight: catSaveWO.jobHeight,
+      actualWidth: catSaveWO.actualWidth,
+      actualHeight: catSaveWO.actualHeight,
+      noOfColors: catSaveWO.noOfColors,
+      printType: catSaveWO.printType,
+      substrate: catSaveWO.substrate,
+      secondaryLayers: catSaveWO.secondaryLayers,
+      processes: catSaveWO.processes,
+      machineId: catSaveWO.machineId,
+      machineName: catSaveWO.machineName,
+      cylinderCostPerColor: catSaveWO.cylinderCostPerColor,
+      overheadPct: catSaveWO.overheadPct,
+      profitPct: catSaveWO.profitPct,
+      perMeterRate: catSaveWO.perMeterRate,
+      standardQty: catSaveWO.quantity,
+      standardUnit: catSaveWO.unit,
+      sourceEstimationId: "",
+      sourceEstimationNo: catSaveWO.orderNo ? `WO:${catSaveWO.workOrderNo}` : "",
+      status: "Active",
+      remarks: catSaveWO.specialInstructions || "",
+    };
+    saveCatalogItem(item);
+    setCatSaveWO(null);
+    alert(`Saved to Product Catalog as ${item.catalogNo}`);
+  };
 
   const f = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm(p => ({ ...p, [k]: v }));
@@ -880,9 +932,10 @@ export default function GravureWorkOrderPage() {
             columns={woColumns}
             searchKeys={["workOrderNo", "customerName", "jobName", "machineName"]}
             actions={row => (
-              <div className="flex items-center gap-1.5 justify-end">
+              <div className="flex items-center gap-1.5 justify-end flex-wrap">
                 <Button variant="ghost" size="sm" icon={<Eye size={13} />} onClick={() => setViewRow(row)}>View</Button>
                 <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={() => openReplan(row)}>Replan</Button>
+                <Button variant="ghost" size="sm" icon={<BookMarked size={13} />} onClick={() => openSaveToCatalog(row)}>Save to Catalog</Button>
                 <Button variant="ghost" size="sm" icon={<Pencil size={13} />} onClick={() => openEdit(row)}>Edit</Button>
                 <Button variant="danger" size="sm" icon={<Trash2 size={13} />} onClick={() => setDeleteId(row.id)}>Delete</Button>
               </div>
@@ -1005,6 +1058,30 @@ export default function GravureWorkOrderPage() {
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setDeleteId(null)}>Cancel</Button>
             <Button variant="danger" onClick={() => { setWOs(d => d.filter(r => r.id !== deleteId)); setDeleteId(null); }}>Delete</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ SAVE TO CATALOG MODAL ═════════════════════════════════ */}
+      {catSaveWO && (
+        <Modal open={!!catSaveWO} onClose={() => setCatSaveWO(null)} title="Save Work Order as Product Catalog Template" size="sm">
+          <div className="space-y-4">
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs text-purple-700">
+              <p className="font-bold mb-1">Work Order: {catSaveWO.workOrderNo}</p>
+              <p>Customer: {catSaveWO.customerName} · {catSaveWO.noOfColors}C · {catSaveWO.substrate || "—"}</p>
+              <p className="mt-1">{catSaveWO.processes.length} processes · {catSaveWO.secondaryLayers.length} plys · ₹{catSaveWO.perMeterRate.toFixed(2)}/m</p>
+            </div>
+            <Input
+              label="Product Name in Catalog"
+              value={catProdName}
+              onChange={e => setCatProdName(e.target.value)}
+              placeholder="e.g. Parle-G 100g Wrap"
+            />
+            <p className="text-xs text-gray-500">All planning (processes, ply structure, rates) will be saved as a reusable template. Orders can then be booked directly from this catalog item.</p>
+          </div>
+          <div className="flex justify-end gap-3 mt-5">
+            <Button variant="secondary" onClick={() => setCatSaveWO(null)}>Cancel</Button>
+            <Button icon={<BookMarked size={14} />} onClick={confirmSaveToCatalog}>Save to Catalog</Button>
           </div>
         </Modal>
       )}
