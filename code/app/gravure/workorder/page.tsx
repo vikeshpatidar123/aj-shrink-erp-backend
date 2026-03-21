@@ -89,6 +89,57 @@ export default function GravureWorkOrderPage() {
   // ── View Plan ─────────────────────────────────────────────
   const [viewPlanWO, setViewPlanWO]   = useState<GravureWorkOrder | null>(null);
 
+  // ── Live Cost Breakdown ────────────────────────────────────
+  const costBreakdown = useMemo(() => {
+    const qty    = form.quantity || 0;
+    const areaM2 = qty * ((form.jobWidth || 0) / 1000);
+
+    // Film cost — lookup estimationRate from FILM_ITEMS by subGroup + thickness
+    let filmCost = 0;
+    form.secondaryLayers.forEach(l => {
+      if (!l.plyType || l.plyType === "Film") {
+        const fi = FILM_ITEMS.find(x =>
+          x.subGroup === l.itemSubGroup && Math.abs(parseFloat(x.thickness) - l.thickness) < 5
+        );
+        filmCost += ((l.gsm || 0) / 1000) * areaM2 * (parseFloat(fi?.estimationRate ?? "0") || 0);
+      }
+    });
+
+    // Consumable rows (Ink / Solvent / Adhesive)
+    let consumableCost = 0;
+    const consumableRows: { name: string; group: string; gsm: number; rate: number; kg: number; amt: number }[] = [];
+    form.secondaryLayers.forEach(l => {
+      (l.consumableItems || []).forEach(ci => {
+        const kg  = ((ci.gsm || 0) / 1000) * areaM2;
+        const amt = kg * (ci.rate || 0);
+        consumableCost += amt;
+        if (ci.itemName || ci.itemSubGroup)
+          consumableRows.push({ name: ci.itemName || ci.itemSubGroup, group: ci.itemGroup, gsm: ci.gsm || 0, rate: ci.rate || 0, kg, amt });
+      });
+    });
+
+    // Process cost
+    let processCost = 0;
+    form.processes.forEach(p => {
+      let pQty = 0;
+      if      (p.chargeUnit === "SQM")   pQty = areaM2;
+      else if (p.chargeUnit === "Meter") pQty = qty;
+      else if (p.chargeUnit === "Color") pQty = form.noOfColors || 0;
+      else if (p.chargeUnit === "Job")   pQty = 1;
+      else                               pQty = areaM2;
+      processCost += pQty * (p.rate || 0);
+    });
+
+    const cylinderCost = (form.noOfColors || 0) * (form.cylinderCostPerColor || 0);
+    const materialCost = filmCost + consumableCost;
+    const subtotal     = materialCost + processCost + cylinderCost;
+    const overhead     = subtotal * ((form.overheadPct || 0) / 100);
+    const profit       = (subtotal + overhead) * ((form.profitPct || 0) / 100);
+    const total        = subtotal + overhead + profit;
+    const perMeter     = qty > 0 ? total / qty : 0;
+    return { filmCost, consumableCost, processCost, cylinderCost, materialCost, overhead, profit, total, perMeter, consumableRows };
+  }, [form.secondaryLayers, form.processes, form.quantity, form.jobWidth, form.noOfColors, form.cylinderCostPerColor, form.overheadPct, form.profitPct]);
+
   // ── Save to Catalog ────────────────────────────────────────
   const [catSaveWO,   setCatSaveWO]   = useState<GravureWorkOrder | null>(null);
   const [catProdName, setCatProdName] = useState("");
@@ -771,6 +822,76 @@ export default function GravureWorkOrderPage() {
             </div>
           )}
 
+          {/* ── Live Cost Estimate ── */}
+          {(form.secondaryLayers.length > 0 || form.processes.length > 0) && (
+            <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <Calculator size={14} className="text-indigo-600" />
+                <p className="text-xs font-bold text-indigo-800 uppercase tracking-widest">Live Cost Estimate</p>
+                <span className="text-[10px] text-indigo-400 ml-1">(Qty: {form.quantity.toLocaleString()} {form.unit} · Width: {form.jobWidth}mm)</span>
+              </div>
+
+              {/* Consumable detail rows */}
+              {costBreakdown.consumableRows.length > 0 && (
+                <div className="overflow-x-auto rounded-xl border border-indigo-100 bg-white">
+                  <table className="w-full text-[10px] border-collapse">
+                    <thead className="bg-indigo-700 text-white">
+                      <tr>
+                        {["Material / Item", "Group", "GSM / Wet Wt.", "Rate (₹/Kg)", "Weight (Kg)", "Amount (₹)"].map(h => (
+                          <th key={h} className="p-2 border border-indigo-600/30 text-center whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {costBreakdown.consumableRows.map((r, i) => (
+                        <tr key={i} className="hover:bg-indigo-50/40">
+                          <td className="p-2 border border-gray-100 font-medium text-gray-700">{r.name}</td>
+                          <td className="p-2 border border-gray-100 text-center">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${r.group === "Ink" ? "bg-blue-100 text-blue-700" : r.group === "Solvent" ? "bg-orange-100 text-orange-700" : "bg-teal-100 text-teal-700"}`}>{r.group}</span>
+                          </td>
+                          <td className="p-2 border border-gray-100 text-center font-mono text-indigo-700">{r.gsm}</td>
+                          <td className="p-2 border border-gray-100 text-center font-mono">₹{r.rate.toFixed(2)}</td>
+                          <td className="p-2 border border-gray-100 text-center font-mono">{r.kg.toFixed(4)}</td>
+                          <td className="p-2 border border-gray-100 text-center font-bold text-green-700">₹{r.amt.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Summary cards row 1 */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { label: "Film (Material)", val: `₹${costBreakdown.filmCost.toFixed(2)}`,         cls: "bg-blue-50 border-blue-200 text-blue-800"   },
+                  { label: "Consumables",      val: `₹${costBreakdown.consumableCost.toFixed(2)}`,  cls: "bg-teal-50 border-teal-200 text-teal-800"   },
+                  { label: "Processes",        val: `₹${costBreakdown.processCost.toFixed(2)}`,     cls: "bg-purple-50 border-purple-200 text-purple-800" },
+                  { label: "Cylinder",         val: `₹${costBreakdown.cylinderCost.toLocaleString()}`, cls: "bg-indigo-50 border-indigo-200 text-indigo-800" },
+                ].map(s => (
+                  <div key={s.label} className={`rounded-xl border p-2.5 ${s.cls}`}>
+                    <p className="text-[10px] font-semibold opacity-60 mb-0.5">{s.label}</p>
+                    <p className="text-sm font-bold">{s.val}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Summary cards row 2 */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border-t border-indigo-100 pt-2">
+                {[
+                  { label: `Overhead (${form.overheadPct}%)`, val: `₹${costBreakdown.overhead.toFixed(2)}`,  cls: "bg-gray-50 border-gray-200 text-gray-700"   },
+                  { label: `Profit (${form.profitPct}%)`,      val: `₹${costBreakdown.profit.toFixed(2)}`,   cls: "bg-gray-50 border-gray-200 text-gray-700"   },
+                  { label: "Grand Total",                       val: `₹${costBreakdown.total.toFixed(2)}`,   cls: "bg-green-50 border-green-200 text-green-800" },
+                  { label: "₹ / Meter",                         val: `₹${costBreakdown.perMeter.toFixed(3)}`, cls: "bg-amber-50 border-amber-200 text-amber-800" },
+                ].map(s => (
+                  <div key={s.label} className={`rounded-xl border p-2.5 ${s.cls}`}>
+                    <p className="text-[10px] font-semibold opacity-60 mb-0.5">{s.label}</p>
+                    <p className="text-sm font-bold">{s.val}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-between">
             <Button variant="secondary" onClick={() => setModalTab("basic")}>← Back</Button>
             <Button icon={<Printer size={14} />} onClick={save}>{editing ? "Update Work Order" : "Create Work Order"}</Button>
@@ -961,6 +1082,60 @@ export default function GravureWorkOrderPage() {
               </div>
             )}
           </div>
+
+          {/* ── Live Cost Estimate ── */}
+          {(form.secondaryLayers.length > 0 || form.processes.length > 0) && (
+            <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Calculator size={14} className="text-indigo-600" />
+                <p className="text-xs font-bold text-indigo-800 uppercase tracking-widest">Cost Estimate — After Replan</p>
+              </div>
+              {costBreakdown.consumableRows.length > 0 && (
+                <div className="overflow-x-auto rounded-xl border border-indigo-100 bg-white">
+                  <table className="w-full text-[10px] border-collapse">
+                    <thead className="bg-indigo-700 text-white">
+                      <tr>
+                        {["Material / Item", "Group", "GSM / Wet Wt.", "Rate (₹/Kg)", "Weight (Kg)", "Amount (₹)"].map(h => (
+                          <th key={h} className="p-2 border border-indigo-600/30 text-center whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {costBreakdown.consumableRows.map((r, i) => (
+                        <tr key={i} className="hover:bg-indigo-50/40">
+                          <td className="p-2 border border-gray-100 font-medium text-gray-700">{r.name}</td>
+                          <td className="p-2 border border-gray-100 text-center">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${r.group === "Ink" ? "bg-blue-100 text-blue-700" : r.group === "Solvent" ? "bg-orange-100 text-orange-700" : "bg-teal-100 text-teal-700"}`}>{r.group}</span>
+                          </td>
+                          <td className="p-2 border border-gray-100 text-center font-mono text-indigo-700">{r.gsm}</td>
+                          <td className="p-2 border border-gray-100 text-center font-mono">₹{r.rate.toFixed(2)}</td>
+                          <td className="p-2 border border-gray-100 text-center font-mono">{r.kg.toFixed(4)}</td>
+                          <td className="p-2 border border-gray-100 text-center font-bold text-green-700">₹{r.amt.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { label: "Film",       val: `₹${costBreakdown.filmCost.toFixed(2)}`,         cls: "bg-blue-50 border-blue-200 text-blue-800"   },
+                  { label: "Consumables",val: `₹${costBreakdown.consumableCost.toFixed(2)}`,  cls: "bg-teal-50 border-teal-200 text-teal-800"   },
+                  { label: "Processes",  val: `₹${costBreakdown.processCost.toFixed(2)}`,     cls: "bg-purple-50 border-purple-200 text-purple-800" },
+                  { label: "Grand Total",val: `₹${costBreakdown.total.toFixed(2)}`,           cls: "bg-green-50 border-green-200 text-green-800" },
+                  { label: `Overhead (${form.overheadPct}%)`, val: `₹${costBreakdown.overhead.toFixed(2)}`, cls: "bg-gray-50 border-gray-200 text-gray-700" },
+                  { label: `Profit (${form.profitPct}%)`,      val: `₹${costBreakdown.profit.toFixed(2)}`,  cls: "bg-gray-50 border-gray-200 text-gray-700" },
+                  { label: "Cylinder",   val: `₹${costBreakdown.cylinderCost.toLocaleString()}`, cls: "bg-indigo-50 border-indigo-200 text-indigo-800" },
+                  { label: "₹ / Meter",  val: `₹${costBreakdown.perMeter.toFixed(3)}`,          cls: "bg-amber-50 border-amber-200 text-amber-800" },
+                ].map(s => (
+                  <div key={s.label} className={`rounded-xl border p-2.5 ${s.cls}`}>
+                    <p className="text-[10px] font-semibold opacity-60 mb-0.5">{s.label}</p>
+                    <p className="text-sm font-bold">{s.val}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <Textarea label="Special Instructions" value={form.specialInstructions} onChange={e => f("specialInstructions", e.target.value)} placeholder="Notes for this replan…" />
         </div>
