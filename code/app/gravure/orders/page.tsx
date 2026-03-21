@@ -106,21 +106,32 @@ function LineRow({
   const loadFromEst = (estId: string) => {
     const est = gravureEstimations.find(e => e.id === estId);
     if (!est) return;
+    // Derive filmType from first ply's subGroup (e.g. "BOPP", "PET", "CPP")
+    const filmType = est.secondaryLayers[0]?.itemSubGroup || "BOPP";
+    // Derive laminationRequired: any ply has plyType "Lamination"
+    const laminationRequired = est.secondaryLayers.some(l => l.plyType === "Lamination");
     onUpdate({
       ...line,
-      sourceType: "Estimation",
-      estimationId: est.id, estimationNo: est.estimationNo,
-      productName:  est.jobName,
-      categoryId:   est.categoryId   || "",
-      categoryName: est.categoryName || "",
-      substrate:    est.substrateName || "",
-      jobWidth:     est.jobWidth, jobHeight: est.jobHeight,
-      noOfColors:   est.noOfColors,
-      printType:    est.printType,
-      orderQty:     est.quantity, unit: est.unit,
-      rate:         est.perMeterRate,
-      amount:       Math.round(est.quantity * est.perMeterRate),
-      cylinderStatus: "New", cylinderCount: est.noOfColors,
+      sourceType:    "Estimation",
+      estimationId:  est.id,
+      estimationNo:  est.estimationNo,
+      productCode:   est.estimationNo,          // use estimation no as product code ref
+      productName:   est.jobName,
+      categoryId:    est.categoryId   || "",
+      categoryName:  est.categoryName || "",
+      substrate:     est.substrateName || "",
+      jobWidth:      est.jobWidth,
+      jobHeight:     est.jobHeight,
+      noOfColors:    est.noOfColors,
+      printType:     est.printType,
+      filmType,
+      laminationRequired,
+      orderQty:      est.quantity,
+      unit:          est.unit,
+      rate:          est.perMeterRate,
+      amount:        Math.round(est.quantity * est.perMeterRate),
+      cylinderStatus: "New",
+      cylinderCount:  est.noOfColors,
     });
   };
 
