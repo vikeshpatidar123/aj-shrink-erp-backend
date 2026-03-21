@@ -39,6 +39,7 @@ export type PlyConsumableItem = {
   itemName: string;
   gsm: number;
   rate: number;
+  coveragePct?: number;      // ink coverage % (0–100), only for Ink items
 };
 
 export type CategoryMaster = {
@@ -1529,12 +1530,21 @@ export type GravureEstimation = {
   quantity: number; quantities: number[]; unit: string;
   machineId: string; machineName: string;
   cylinderCostPerColor: number;
+  cylinderType: "New" | "Existing";        // Cylinder reuse logic
+  repeatLength: number;                     // mm — cylinder circumference
+  wastagePct: number;                       // % — dynamic wastage
+  setupTime: number;                        // minutes
+  machineCostPerHour: number;               // ₹/hr — machine-specific setup cost
+  minimumOrderValue: number;                // ₹ — floor price
+  sellingPrice: number;                     // ₹/m — for contribution & break-even
   materials: GravureEstimationMaterial[];
   processes: GravureEstimationProcess[];
   overheadPct: number; profitPct: number;
   materialCost: number; processCost: number; cylinderCost: number;
+  setupCost: number;
   overheadAmt: number; profitAmt: number;
   totalAmount: number; perMeterRate: number; marginPct: number;
+  contribution: number; breakEvenQty: number;
   secondaryLayers: SecondaryLayer[];
   dryWeightRows: DryWeightRow[];
   dryWeightTotal: number;
@@ -1748,6 +1758,8 @@ export const gravureEstimations: GravureEstimation[] = [
       },
     ],
     dryWeightRows: [], dryWeightTotal: 0,
+    cylinderType: "New", repeatLength: 450, wastagePct: 1, setupTime: 30, machineCostPerHour: 1350,
+    minimumOrderValue: 50000, sellingPrice: 1.5, setupCost: 675, contribution: 0, breakEvenQty: 0,
     status: "Approved", remarks: "Price valid for 30 days",
   },
   {
@@ -1799,6 +1811,8 @@ export const gravureEstimations: GravureEstimation[] = [
       },
     ],
     dryWeightRows: [], dryWeightTotal: 0,
+    cylinderType: "Existing", repeatLength: 400, wastagePct: 1, setupTime: 20, machineCostPerHour: 1350,
+    minimumOrderValue: 40000, sellingPrice: 1.6, setupCost: 450, contribution: 0, breakEvenQty: 0,
     status: "Sent", remarks: "Cylinder cost absorbed (existing set)",
   },
   {
@@ -1846,6 +1860,8 @@ export const gravureEstimations: GravureEstimation[] = [
       },
     ],
     dryWeightRows: [], dryWeightTotal: 0,
+    cylinderType: "New", repeatLength: 390, wastagePct: 1.5, setupTime: 25, machineCostPerHour: 1350,
+    minimumOrderValue: 60000, sellingPrice: 1.8, setupCost: 562.5, contribution: 0, breakEvenQty: 0,
     status: "Draft", remarks: "Awaiting design confirmation",
   },
 ];

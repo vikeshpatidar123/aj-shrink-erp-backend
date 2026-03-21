@@ -48,12 +48,21 @@ const blank: Omit<GravureEstimation, "id" | "estimationNo"> = {
   quantity: 0, quantities: [], unit: "Kg",
   machineId: "", machineName: "",
   cylinderCostPerColor: 3500,
+  cylinderType: "New",
+  repeatLength: 0,
+  wastagePct: 1,
+  setupTime: 0,
+  machineCostPerHour: 1350,
+  minimumOrderValue: 0,
+  sellingPrice: 0,
   materials: [],
   processes: [],
   overheadPct: 12, profitPct: 15,
   materialCost: 0, processCost: 0, cylinderCost: 0,
+  setupCost: 0,
   overheadAmt: 0, profitAmt: 0,
   totalAmount: 0, perMeterRate: 0, marginPct: 0,
+  contribution: 0, breakEvenQty: 0,
   secondaryLayers: [],
   dryWeightRows: [],
   dryWeightTotal: 0,
@@ -94,7 +103,7 @@ function autoProcessQty(chargeUnit: string, quantity: number, areaM2: number, no
 function calcCosts(form: typeof blank) {
   const areaM2 = form.quantity * (form.jobWidth / 1000);
 
-  // 1. Material cost: film (from Item Master rate) + consumables (ink/solvent/adhesive/hardner)
+  // 1. Material cost: film + consumables (with ink coverage logic)
   let plyMaterialCost = 0;
   form.secondaryLayers.forEach(l => {
     // Film substrate
@@ -102,17 +111,20 @@ function calcCosts(form: typeof blank) {
       const filmRate = parseFloat(FILM_ITEMS.find(i => i.subGroup === l.itemSubGroup)?.estimationRate || "0");
       if (filmRate > 0) plyMaterialCost += (l.gsm * areaM2 / 1000) * filmRate;
     }
-    // Consumable items (ink, solvent, adhesive, hardner)
+    // Consumable items — apply coverage % for Ink items
     l.consumableItems.forEach(ci => {
-      if (ci.gsm > 0 && ci.rate > 0)
-        plyMaterialCost += (ci.gsm * areaM2 / 1000) * ci.rate;
+      if (ci.gsm > 0 && ci.rate > 0) {
+        const effectiveGsm = ci.itemGroup === "Ink" && (ci.coveragePct ?? 100) < 100
+          ? ci.gsm * ((ci.coveragePct ?? 100) / 100)
+          : ci.gsm;
+        plyMaterialCost += (effectiveGsm * areaM2 / 1000) * ci.rate;
+      }
     });
   });
-  // Add any manually-entered extra materials
-  const manualMatCost  = form.materials.reduce((s, m) => s + m.amount, 0);
-  const materialCost   = parseFloat((plyMaterialCost + manualMatCost).toFixed(2));
+  const manualMatCost = form.materials.reduce((s, m) => s + m.amount, 0);
+  const materialCost  = parseFloat((plyMaterialCost + manualMatCost).toFixed(2));
 
-  // 2. Process cost: rate × auto-qty (if qty=0, derive from chargeUnit) + setupCharge
+  // 2. Process cost: rate × qty + setupCharge
   const processCost = parseFloat(
     form.processes.reduce((s, p) => {
       const qty = p.qty > 0 ? p.qty : autoProcessQty(p.chargeUnit, form.quantity, areaM2, form.noOfColors);
@@ -120,17 +132,37 @@ function calcCosts(form: typeof blank) {
     }, 0).toFixed(2)
   );
 
-  // 3. Cylinder
-  const cylinderCost = form.cylinderCostPerColor * form.noOfColors;
+  // 3. Cylinder — zero if Existing cylinders
+  const cylinderCost = form.cylinderType === "Existing"
+    ? 0
+    : form.cylinderCostPerColor * form.noOfColors;
 
-  const sub         = materialCost + processCost + cylinderCost;
+  // 4. Machine setup cost
+  const setupCost = form.setupTime > 0 && form.machineCostPerHour > 0
+    ? parseFloat(((form.setupTime / 60) * form.machineCostPerHour).toFixed(2))
+    : 0;
+
+  const sub         = materialCost + processCost + cylinderCost + setupCost;
   const overheadAmt = parseFloat(((sub * form.overheadPct) / 100).toFixed(2));
   const profitBase  = sub + overheadAmt;
   const profitAmt   = parseFloat(((profitBase * form.profitPct) / 100).toFixed(2));
-  const totalAmount = parseFloat((profitBase + profitAmt).toFixed(2));
+  let   totalAmount = parseFloat((profitBase + profitAmt).toFixed(2));
+
+  // 5. Minimum order value floor
+  if (form.minimumOrderValue > 0 && totalAmount < form.minimumOrderValue)
+    totalAmount = form.minimumOrderValue;
+
   const perMeterRate = form.quantity > 0 ? parseFloat((totalAmount / form.quantity).toFixed(4)) : 0;
   const marginPct    = totalAmount > 0 ? parseFloat(((profitAmt / totalAmount) * 100).toFixed(1)) : 0;
-  return { materialCost, processCost, cylinderCost, overheadAmt, profitAmt, totalAmount, perMeterRate, marginPct };
+
+  // 6. Contribution & break-even
+  const variableCost   = form.quantity > 0 ? parseFloat(((materialCost + processCost) / form.quantity).toFixed(4)) : 0;
+  const sellingPriceEff = form.sellingPrice > 0 ? form.sellingPrice : perMeterRate;
+  const contribution   = parseFloat((sellingPriceEff - variableCost).toFixed(4));
+  const fixedCost      = cylinderCost + setupCost + overheadAmt;
+  const breakEvenQty   = contribution > 0 ? Math.ceil(fixedCost / contribution) : 0;
+
+  return { materialCost, processCost, cylinderCost, setupCost, overheadAmt, profitAmt, totalAmount, perMeterRate, marginPct, contribution, breakEvenQty };
 }
 
 // ─── Detailed breakdown (for Tab 3 display) ──────────────────
@@ -150,11 +182,17 @@ function getCostBreakdown(form: typeof blank): { matLines: MatLine[]; procLines:
       const kg       = parseFloat((l.gsm * areaM2 / 1000).toFixed(3));
       matLines.push({ plyNo: idx + 1, plyType: l.plyType || "Film", name: l.itemSubGroup || "Film Substrate", group: "Film", gsm: l.gsm, kg, rate, amount: parseFloat((kg * rate).toFixed(2)) });
     }
-    // Consumables
+    // Consumables — apply coverage % for Ink items
     l.consumableItems.forEach(ci => {
-      const kg     = parseFloat((ci.gsm * areaM2 / 1000).toFixed(3));
+      const effectiveGsm = ci.itemGroup === "Ink" && (ci.coveragePct ?? 100) < 100
+        ? parseFloat((ci.gsm * ((ci.coveragePct ?? 100) / 100)).toFixed(3))
+        : ci.gsm;
+      const kg     = parseFloat((effectiveGsm * areaM2 / 1000).toFixed(3));
       const amount = parseFloat((kg * ci.rate).toFixed(2));
-      matLines.push({ plyNo: idx + 1, plyType: l.plyType || "", name: ci.itemName || ci.fieldDisplayName, group: ci.itemGroup, gsm: ci.gsm, kg, rate: ci.rate, amount });
+      const label  = ci.itemGroup === "Ink" && (ci.coveragePct ?? 100) < 100
+        ? `${ci.itemName || ci.fieldDisplayName} (${ci.coveragePct}% cov.)`
+        : (ci.itemName || ci.fieldDisplayName);
+      matLines.push({ plyNo: idx + 1, plyType: l.plyType || "", name: label, group: ci.itemGroup, gsm: effectiveGsm, kg, rate: ci.rate, amount });
     });
   });
 
@@ -253,7 +291,7 @@ export default function GravureEstimationPage() {
         const totalWt = parseFloat((totalRMT * ((form.jobWidth || 340) / 1000) * totalPlyGSM / 1000).toFixed(3));
         const totalTime = parseFloat((totalRMT / (speed * 60)).toFixed(2));
         const planCost = parseFloat((totalTime * costPerHour).toFixed(2));
-        const cylCost = form.noOfColors * form.cylinderCostPerColor;
+        const cylCost = form.cylinderType === "Existing" ? 0 : form.noOfColors * form.cylinderCostPerColor;
         const grandTotal = parseFloat((planCost + costs.processCost + cylCost).toFixed(2));
         const unitPrice = form.quantity > 0 ? parseFloat((grandTotal / form.quantity).toFixed(4)) : 0;
         return { planId: `PLAN-${machine.id}-${i}`, machineId: machine.id, machineName: machine.name, cylCirc, rollWidth, acUps, repeatUPS, totalUPS, reqRMT, totalRMT, totalWt, totalTime, planCost, grandTotal, unitPrice };
@@ -848,14 +886,14 @@ export default function GravureEstimationPage() {
                                         <X size={12} />
                                       </button>
                                     </div>
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                                       {/* Item Group */}
                                       <div>
                                         <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item Group</label>
                                         <select
                                           className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
                                           value={ci.itemGroup}
-                                          onChange={e => updatePlyConsumable(index, ciIdx, { itemGroup: e.target.value, itemSubGroup: "", itemId: "", itemName: "" })}
+                                          onChange={e => updatePlyConsumable(index, ciIdx, { itemGroup: e.target.value, itemSubGroup: "", itemId: "", itemName: "", coveragePct: undefined })}
                                         >
                                           <option value="">-- Group --</option>
                                           {CONSUMABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
@@ -906,6 +944,22 @@ export default function GravureEstimationPage() {
                                           onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })}
                                         />
                                       </div>
+                                      {/* Coverage % — only for Ink */}
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">
+                                          {ci.itemGroup === "Ink" ? "Coverage %" : "—"}
+                                        </label>
+                                        {ci.itemGroup === "Ink" ? (
+                                          <input
+                                            type="number" step={1} min={1} max={100}
+                                            className="w-full text-xs border border-blue-200 rounded-lg px-2 py-1.5 bg-blue-50 outline-none focus:ring-2 focus:ring-blue-400 font-mono"
+                                            value={ci.coveragePct ?? 100}
+                                            onChange={e => updatePlyConsumable(index, ciIdx, { coveragePct: Math.min(100, Math.max(1, Number(e.target.value))) })}
+                                          />
+                                        ) : (
+                                          <div className="w-full text-xs border border-gray-100 rounded-lg px-2 py-1.5 bg-gray-50 text-gray-300">N/A</div>
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                 );
@@ -935,15 +989,63 @@ export default function GravureEstimationPage() {
             {/* ── Machine & Cylinder Cost ── */}
             <div>
               <SectionHeader label="Machine & Process Selection" />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                <Select label="Printing Machine (Machine Master)"
-                  value={form.machineId}
-                  onChange={e => { const m = PRINT_MACHINES.find(x => x.id === e.target.value); f("machineId", e.target.value); if (m) f("machineName", m.name); }}
-                  options={[{ value: "", label: "-- All Machines --" }, ...PRINT_MACHINES.map(m => ({ value: m.id, label: `${m.name} (${m.status}) – ₹${m.costPerHour}/hr` }))]}
-                />
-                <Input label="Cylinder Cost per Color (₹)" type="number" value={form.cylinderCostPerColor}
-                  onChange={e => f("cylinderCostPerColor", Number(e.target.value))} />
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+                <div className="sm:col-span-2">
+                  <Select label="Printing Machine (Machine Master)"
+                    value={form.machineId}
+                    onChange={e => {
+                      const m = PRINT_MACHINES.find(x => x.id === e.target.value);
+                      setForm(p => ({
+                        ...p,
+                        machineId: e.target.value,
+                        machineName: m?.name || "",
+                        machineCostPerHour: parseFloat(m?.costPerHour as string) || p.machineCostPerHour,
+                      }));
+                    }}
+                    options={[{ value: "", label: "-- All Machines --" }, ...PRINT_MACHINES.map(m => ({ value: m.id, label: `${m.name} (${m.status}) – ₹${m.costPerHour}/hr` }))]}
+                  />
+                </div>
+                <Input label="Machine Cost / Hr (₹)" type="number" value={form.machineCostPerHour}
+                  onChange={e => f("machineCostPerHour", Number(e.target.value))} />
               </div>
+
+              {/* Cylinder fields */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                <Select label="Cylinder Type *"
+                  value={form.cylinderType}
+                  onChange={e => f("cylinderType", e.target.value as "New" | "Existing")}
+                  options={[{ value: "New", label: "New (cost applies)" }, { value: "Existing", label: "Existing (cost = ₹0)" }]}
+                />
+                <Input label="Cylinder Cost / Color (₹)" type="number"
+                  value={form.cylinderCostPerColor}
+                  onChange={e => f("cylinderCostPerColor", Number(e.target.value))}
+                  disabled={form.cylinderType === "Existing"}
+                />
+                <Input label="Repeat Length (mm)" type="number" value={form.repeatLength || ""}
+                  onChange={e => f("repeatLength", Number(e.target.value))}
+                  placeholder="Cylinder circumference" />
+                <Input label="Setup Time (min)" type="number" value={form.setupTime || ""}
+                  onChange={e => f("setupTime", Number(e.target.value))} />
+              </div>
+
+              {/* Cylinder summary badge */}
+              <div className="flex flex-wrap gap-2 mb-3">
+                {form.cylinderType === "New" ? (
+                  <span className="text-xs px-3 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full font-semibold">
+                    Cylinder Cost: ₹{(form.cylinderCostPerColor * form.noOfColors).toLocaleString()} ({form.noOfColors}C × ₹{form.cylinderCostPerColor})
+                  </span>
+                ) : (
+                  <span className="text-xs px-3 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full font-semibold">
+                    ✓ Existing Cylinders — Cost waived (₹0)
+                  </span>
+                )}
+                {form.setupTime > 0 && (
+                  <span className="text-xs px-3 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-full font-semibold">
+                    Setup Cost: ₹{(((form.setupTime / 60) * form.machineCostPerHour)).toFixed(0)} ({form.setupTime} min × ₹{form.machineCostPerHour}/hr)
+                  </span>
+                )}
+              </div>
+
               {!form.machineId && (
                 <p className="text-[10px] text-blue-600 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
                   No machine selected — plans will be shown for all {PRINT_MACHINES.length} gravure machines.
@@ -1249,7 +1351,8 @@ export default function GravureEstimationPage() {
                     const reqMtr   = m.plyNo > 0 ? parseFloat((basePlanRMT * qtyScale).toFixed(2)) : 0;
                     const reqSQM   = m.plyNo > 0 ? parseFloat((reqMtr * sizeW / 1000).toFixed(3)) : 0;
                     const reqWt    = m.plyNo > 0 && m.gsm > 0 ? parseFloat((reqSQM * m.gsm / 1000).toFixed(4)) : 0;
-                    const wasteMtr = m.plyNo > 0 ? parseFloat((reqMtr * 0.01).toFixed(2)) : 0;
+                    const wasteFrac = (form.wastagePct || 1) / 100;
+                    const wasteMtr = m.plyNo > 0 ? parseFloat((reqMtr * wasteFrac).toFixed(2)) : 0;
                     const wasteSQM = m.plyNo > 0 ? parseFloat((wasteMtr * sizeW / 1000).toFixed(3)) : 0;
                     const wasteWt  = m.plyNo > 0 && m.gsm > 0 ? parseFloat((wasteSQM * m.gsm / 1000).toFixed(4)) : 0;
                     const totalMtr = m.plyNo > 0 ? parseFloat((reqMtr + wasteMtr).toFixed(2)) : 0;
@@ -1335,12 +1438,24 @@ export default function GravureEstimationPage() {
           </div>
           )}
 
-          {/* ── Section 4: Overhead & Profit ──────────────────── */}
+          {/* ── Section 4: Overhead, Profit & Advanced ────────── */}
           <div>
-            <SectionHeader label="Overhead & Profit" />
+            <SectionHeader label="Overhead, Profit & Pricing" />
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Input label="Overhead (%)" type="number" value={form.overheadPct} onChange={e => f("overheadPct", Number(e.target.value))} />
               <Input label="Profit (%)" type="number" value={form.profitPct} onChange={e => f("profitPct", Number(e.target.value))} />
+              <Input label="Wastage %" type="number" step={0.1} value={form.wastagePct}
+                onChange={e => f("wastagePct", Number(e.target.value))}
+                placeholder="Default 1%" />
+              <Input label="Min. Order Value (₹)" type="number" value={form.minimumOrderValue || ""}
+                onChange={e => f("minimumOrderValue", Number(e.target.value))}
+                placeholder="Floor price" />
+            </div>
+            {/* Selling price for contribution / break-even */}
+            <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 border-t border-gray-100 pt-3">
+              <Input label="Selling Price (₹/m)" type="number" step={0.01} value={form.sellingPrice || ""}
+                onChange={e => f("sellingPrice", Number(e.target.value))}
+                placeholder="Optional — for break-even" />
             </div>
           </div>
 
@@ -1354,12 +1469,16 @@ export default function GravureEstimationPage() {
                 </span>
               )}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
               {[
+                { label: "Material Cost",   val: `₹${activeCosts.materialCost.toLocaleString()}`,  cls: "bg-blue-50 border-blue-200 text-blue-700" },
                 { label: "Process Cost",    val: `₹${activeCosts.processCost.toLocaleString()}`,   cls: "bg-purple-50 border-purple-200 text-purple-700" },
-                { label: `Cylinder (${form.noOfColors}C × ₹${form.cylinderCostPerColor.toLocaleString()})`,
-                                            val: `₹${activeCosts.cylinderCost.toLocaleString()}`,  cls: "bg-indigo-50 border-indigo-200 text-indigo-700" },
-                { label: `Overhead (${form.overheadPct}%)`, val: `₹${activeCosts.overheadAmt.toLocaleString()}`, cls: "bg-yellow-50 border-yellow-200 text-yellow-700" },
+                { label: form.cylinderType === "Existing"
+                    ? "Cylinder (Existing — ₹0)"
+                    : `Cylinder (${form.noOfColors}C × ₹${form.cylinderCostPerColor})`,
+                                            val: `₹${activeCosts.cylinderCost.toLocaleString()}`,  cls: form.cylinderType === "Existing" ? "bg-green-50 border-green-200 text-green-700" : "bg-indigo-50 border-indigo-200 text-indigo-700" },
+                { label: `Setup (${form.setupTime}min × ₹${form.machineCostPerHour}/hr)`,
+                                            val: `₹${activeCosts.setupCost.toLocaleString()}`,     cls: "bg-amber-50 border-amber-200 text-amber-700" },
               ].map(s => (
                 <div key={s.label} className={`rounded-xl border p-3 ${s.cls}`}>
                   <p className="text-xs font-medium opacity-80">{s.label}</p>
@@ -1367,24 +1486,52 @@ export default function GravureEstimationPage() {
                 </div>
               ))}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <div className="bg-green-50 border border-green-200 rounded-xl p-3 col-span-1">
-                <p className="text-xs font-medium text-green-700 opacity-80">Profit ({form.profitPct}%)</p>
+
+            {/* Overhead + Profit + Total row */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3">
+                <p className="text-xs font-medium text-yellow-700">Overhead ({form.overheadPct}%)</p>
+                <p className="text-base font-bold text-yellow-700">₹{activeCosts.overheadAmt.toLocaleString()}</p>
+              </div>
+              <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                <p className="text-xs font-medium text-green-700">Profit ({form.profitPct}%)</p>
                 <p className="text-base font-bold text-green-700">₹{activeCosts.profitAmt.toLocaleString()}</p>
               </div>
-              <div className="bg-white border-2 border-purple-400 rounded-xl p-3">
-                <p className="text-xs font-bold text-purple-700 uppercase tracking-wide">Total Amount</p>
+              <div className="bg-white border-2 border-purple-400 rounded-xl p-3 sm:col-span-2">
+                <p className="text-xs font-bold text-purple-700 uppercase tracking-wide flex items-center gap-2">
+                  Total Amount
+                  {form.minimumOrderValue > 0 && activeCosts.totalAmount <= form.minimumOrderValue && (
+                    <span className="text-[10px] bg-amber-100 text-amber-700 border border-amber-300 px-1.5 py-0.5 rounded font-semibold">MOV Applied</span>
+                  )}
+                </p>
                 <p className="text-2xl font-black text-purple-800">₹{activeCosts.totalAmount.toLocaleString()}</p>
+                {form.minimumOrderValue > 0 && (
+                  <p className="text-[10px] text-gray-400 mt-0.5">Min. Order Value: ₹{form.minimumOrderValue.toLocaleString()}</p>
+                )}
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
-                  <p className="text-xs text-gray-500">Rate / {form.unit}</p>
-                  <p className="text-sm font-bold text-gray-800">₹{activeCosts.perMeterRate}</p>
-                </div>
-                <div className={`rounded-xl border p-3 ${activeCosts.marginPct >= 12 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
-                  <p className="text-xs text-gray-500">Margin %</p>
-                  <p className={`text-sm font-bold ${activeCosts.marginPct >= 12 ? "text-green-700" : "text-red-600"}`}>{activeCosts.marginPct}%</p>
-                </div>
+            </div>
+
+            {/* Rate / Margin / Break-even row */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                <p className="text-xs text-gray-500">Rate / {form.unit}</p>
+                <p className="text-sm font-bold text-gray-800">₹{activeCosts.perMeterRate}</p>
+              </div>
+              <div className={`rounded-xl border p-3 ${activeCosts.marginPct >= 12 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+                <p className="text-xs text-gray-500">Margin %</p>
+                <p className={`text-sm font-bold ${activeCosts.marginPct >= 12 ? "text-green-700" : "text-red-600"}`}>{activeCosts.marginPct}%</p>
+              </div>
+              <div className="bg-teal-50 border border-teal-200 rounded-xl p-3">
+                <p className="text-xs text-teal-600">Contribution / {form.unit}</p>
+                <p className="text-sm font-bold text-teal-800">
+                  {activeCosts.contribution > 0 ? `₹${activeCosts.contribution}` : "—"}
+                </p>
+              </div>
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
+                <p className="text-xs text-orange-600">Break-even Qty</p>
+                <p className="text-sm font-bold text-orange-800">
+                  {activeCosts.breakEvenQty > 0 ? `${activeCosts.breakEvenQty.toLocaleString()} ${form.unit}` : "—"}
+                </p>
               </div>
             </div>
           </div>
@@ -1430,15 +1577,18 @@ export default function GravureEstimationPage() {
               <p className="text-[10px] font-bold text-purple-700 uppercase tracking-widest mb-2">Basic Information</p>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {([
-                  ["Estimation No",  viewRow.estimationNo],
-                  ["Customer",       viewRow.customerName],
-                  ["Job Name",       viewRow.jobName],
-                  ["Category",       viewRow.categoryName || "—"],
-                  ["Content",        viewRow.content || "—"],
-                  ["Sales Person",   viewRow.salesPerson || "—"],
-                  ["Sales Type",     viewRow.salesType || "—"],
-                  ["Concern Person", viewRow.concernPerson || "—"],
-                  ["Enquiry No",     viewRow.enquiryNo || "—"],
+                  ["Estimation No",   viewRow.estimationNo],
+                  ["Customer",        viewRow.customerName],
+                  ["Job Name",        viewRow.jobName],
+                  ["Category",        viewRow.categoryName || "—"],
+                  ["Content",         viewRow.content || "—"],
+                  ["Sales Person",    viewRow.salesPerson || "—"],
+                  ["Sales Type",      viewRow.salesType || "—"],
+                  ["Concern Person",  viewRow.concernPerson || "—"],
+                  ["Enquiry No",      viewRow.enquiryNo || "—"],
+                  ["Cylinder Type",   viewRow.cylinderType || "New"],
+                  ["Repeat Length",   viewRow.repeatLength ? `${viewRow.repeatLength} mm` : "—"],
+                  ["Wastage %",       `${viewRow.wastagePct ?? 1}%`],
                 ] as [string,string][]).map(([k,v]) => (
                   <div key={k} className="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
                     <p className="text-[10px] text-gray-400 uppercase font-semibold">{k}</p>
@@ -1453,16 +1603,18 @@ export default function GravureEstimationPage() {
               <p className="text-[10px] font-bold text-purple-700 uppercase tracking-widest mb-2">Planning Specification</p>
               <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
                 {([
-                  ["Job Width",    `${viewRow.jobWidth} mm`],
-                  ["Job Height",   `${viewRow.jobHeight} mm`],
-                  ["Act. Width",   `${viewRow.actualWidth} mm`],
-                  ["Act. Height",  `${viewRow.actualHeight} mm`],
-                  ["No. of Colors",`${viewRow.noOfColors} C`],
-                  ["Print Type",   viewRow.printType],
-                  ["Machine",      viewRow.machineName],
-                  ["Quantity",     `${viewRow.quantity.toLocaleString()} ${viewRow.unit}`],
-                  ["Cyl Cost/Color",`₹${viewRow.cylinderCostPerColor}`],
-                  ["No. of Plys",  `${viewRow.secondaryLayers.length} ply`],
+                  ["Job Width",      `${viewRow.jobWidth} mm`],
+                  ["Job Height",     `${viewRow.jobHeight} mm`],
+                  ["Act. Width",     `${viewRow.actualWidth} mm`],
+                  ["Act. Height",    `${viewRow.actualHeight} mm`],
+                  ["No. of Colors",  `${viewRow.noOfColors} C`],
+                  ["Print Type",     viewRow.printType],
+                  ["Repeat Length",  viewRow.repeatLength ? `${viewRow.repeatLength} mm` : "—"],
+                  ["Machine",        viewRow.machineName],
+                  ["Quantity",       `${viewRow.quantity.toLocaleString()} ${viewRow.unit}`],
+                  ["Wastage %",      `${viewRow.wastagePct ?? 1}%`],
+                  ["Cyl Cost/Color", `₹${viewRow.cylinderCostPerColor}`],
+                  ["No. of Plys",    `${viewRow.secondaryLayers.length} ply`],
                 ] as [string,string][]).map(([k,v]) => (
                   <div key={k} className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
                     <p className="text-[10px] text-gray-400 uppercase font-semibold">{k}</p>
@@ -1541,14 +1693,16 @@ export default function GravureEstimationPage() {
               <p className="text-[10px] font-bold text-purple-700 uppercase tracking-widest mb-2">Cost Summary</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
-                  { label: "Material Cost",  val: `₹${viewRow.materialCost.toLocaleString()}`,  cls: "bg-blue-50 border-blue-200" },
-                  { label: "Process Cost",   val: `₹${viewRow.processCost.toLocaleString()}`,   cls: "bg-purple-50 border-purple-200" },
-                  { label: "Cylinder Cost",  val: `₹${viewRow.cylinderCost.toLocaleString()}`,  cls: "bg-indigo-50 border-indigo-200" },
+                  { label: "Material Cost",   val: `₹${viewRow.materialCost.toLocaleString()}`,  cls: "bg-blue-50 border-blue-200" },
+                  { label: "Process Cost",    val: `₹${viewRow.processCost.toLocaleString()}`,   cls: "bg-purple-50 border-purple-200" },
+                  { label: `Cylinder (${viewRow.cylinderType || "New"})`, val: `₹${viewRow.cylinderCost.toLocaleString()}`, cls: (viewRow.cylinderType === "Existing") ? "bg-green-50 border-green-200" : "bg-indigo-50 border-indigo-200" },
+                  { label: "Setup Cost",      val: `₹${(viewRow.setupCost || 0).toLocaleString()}`, cls: "bg-amber-50 border-amber-200" },
                   { label: `Overhead (${viewRow.overheadPct}%)`, val: `₹${viewRow.overheadAmt.toLocaleString()}`, cls: "bg-yellow-50 border-yellow-200" },
                   { label: `Profit (${viewRow.profitPct}%)`, val: `₹${viewRow.profitAmt.toLocaleString()}`, cls: "bg-green-50 border-green-200" },
-                  { label: "Total Amount",   val: `₹${viewRow.totalAmount.toLocaleString()}`,   cls: "bg-white border-2 border-purple-400" },
-                  { label: "Rate / Meter",   val: `₹${viewRow.perMeterRate}`,                   cls: "bg-gray-50 border-gray-200" },
-                  { label: "Margin %",       val: `${viewRow.marginPct}%`,                      cls: viewRow.marginPct >= 12 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200" },
+                  { label: "Total Amount",    val: `₹${viewRow.totalAmount.toLocaleString()}`,   cls: "bg-white border-2 border-purple-400" },
+                  { label: "Rate / Meter",    val: `₹${viewRow.perMeterRate}`,                   cls: "bg-gray-50 border-gray-200" },
+                  { label: "Margin %",        val: `${viewRow.marginPct}%`,                      cls: viewRow.marginPct >= 12 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200" },
+                  { label: "Break-even Qty",  val: viewRow.breakEvenQty > 0 ? `${viewRow.breakEvenQty.toLocaleString()} ${viewRow.unit}` : "—", cls: "bg-orange-50 border-orange-200" },
                 ].map(s => (
                   <div key={s.label} className={`rounded-xl border p-3 ${s.cls}`}>
                     <p className="text-[10px] text-gray-400 uppercase font-semibold">{s.label}</p>
