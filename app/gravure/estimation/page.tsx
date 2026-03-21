@@ -1006,18 +1006,11 @@ export default function GravureEstimationPage() {
                   onChange={e => f("machineCostPerHour", Number(e.target.value))} />
               </div>
 
-              {/* Cylinder & setup fields */}
+              {/* Cylinder cost field */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
-                <Input label="No. of Colors" type="number" value={form.noOfColors} min={1} max={12}
-                  onChange={e => f("noOfColors", Number(e.target.value))} />
                 <Input label="Cylinder Cost / Color (₹)" type="number"
                   value={form.cylinderCostPerColor}
                   onChange={e => f("cylinderCostPerColor", Number(e.target.value))} />
-                <Input label="Repeat Length (mm)" type="number" value={form.repeatLength || ""}
-                  onChange={e => f("repeatLength", Number(e.target.value))}
-                  placeholder="Cylinder circumference" />
-                <Input label="Setup Time (min)" type="number" value={form.setupTime || ""}
-                  onChange={e => f("setupTime", Number(e.target.value))} />
               </div>
 
               {/* Summary badges */}
