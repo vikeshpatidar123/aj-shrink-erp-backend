@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { ChevronDown, Search, Check } from "lucide-react";
+import { ChevronDown, Search, Check, X } from "lucide-react";
 
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -77,24 +77,35 @@ export function Select({ label, error, options, value, onChange, disabled, class
     <div className="flex flex-col gap-1 relative" ref={ref}>
       {label && <label className="text-xs font-medium text-gray-600">{label}</label>}
 
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => { if (!disabled) setOpen(o => !o); }}
-        className={`w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-left flex items-center justify-between gap-2
-          focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition bg-white
-          ${disabled ? "bg-gray-50 text-gray-400 cursor-not-allowed opacity-60" : "cursor-pointer hover:border-gray-400"}
-          ${error ? "border-red-400" : ""}
-          ${className}`}
-      >
-        <span className={`truncate ${selected && selected.value !== "" ? "text-gray-800" : "text-gray-400"}`}>
-          {selected && selected.value !== "" ? selected.label : placeholder}
-        </span>
-        <ChevronDown
-          size={14}
-          className={`text-gray-400 flex-shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
-        />
-      </button>
+      <div className={`w-full border border-gray-300 rounded-lg text-sm flex items-center bg-white
+        ${disabled ? "bg-gray-50 opacity-60 cursor-not-allowed" : ""}
+        ${error ? "border-red-400" : ""}
+        ${open ? "border-blue-500 ring-2 ring-blue-500/20" : "hover:border-gray-400"}
+        ${className}`}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => { if (!disabled) setOpen(o => !o); }}
+          className="flex-1 px-3 py-2 text-left flex items-center gap-2 min-w-0 outline-none"
+        >
+          <span className={`truncate flex-1 ${selected && selected.value !== "" ? "text-gray-800" : "text-gray-400"}`}>
+            {selected && selected.value !== "" ? selected.label : placeholder}
+          </span>
+          <ChevronDown
+            size={14}
+            className={`text-gray-400 flex-shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+        {selected && selected.value !== "" && !disabled && (
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); handleSelect(""); }}
+            className="px-2 py-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-r-lg transition-colors flex-shrink-0"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
 
       {open && (
         <div className="absolute top-full left-0 z-[9999] w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl overflow-hidden">
