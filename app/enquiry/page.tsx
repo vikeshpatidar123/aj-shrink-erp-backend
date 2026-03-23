@@ -253,7 +253,7 @@ export default function EnquiryPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <Input
                 label="Enquiry No."
-                value={editing ? editing.enquiryNo : "Auto Generated"}
+                value={editing ? editing.enquiryNo : generateCode(UNIT_CODE[form.businessUnit as BU], MODULE_CODE.Enquiry, data.map(d => d.enquiryNo))}
                 readOnly
                 className="bg-gray-50 font-semibold text-teal-700 border-teal-100"
               />
