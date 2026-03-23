@@ -562,16 +562,24 @@ export default function GravureEstimationPage() {
           <div>
              <SectionHeader label="Identification & Category" />
 
-             {/* Auto-generated Estimation No — always shown, non-editable */}
-             <div className="mb-3">
-               <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest block mb-1">Estimation No</label>
-               <div className="flex items-center gap-2 px-4 py-2.5 bg-purple-50 border border-purple-200 rounded-xl w-fit">
-                 <span className="text-xs font-mono font-bold text-purple-700 tracking-widest">
-                   {editing ? editing.estimationNo : previewCode}
-                 </span>
-                 <span className="text-[9px] px-1.5 py-0.5 bg-purple-200 text-purple-700 rounded font-semibold">
-                   {editing ? "EDITING" : "AUTO"}
-                 </span>
+             {/* Auto-generated Estimation No + Date — always shown, non-editable */}
+             <div className="mb-3 flex items-end gap-4 flex-wrap">
+               <div>
+                 <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest block mb-1">Estimation No</label>
+                 <div className="flex items-center gap-2 px-4 py-2.5 bg-purple-50 border border-purple-200 rounded-xl w-fit">
+                   <span className="text-xs font-mono font-bold text-purple-700 tracking-widest">
+                     {editing ? editing.estimationNo : previewCode}
+                   </span>
+                   <span className="text-[9px] px-1.5 py-0.5 bg-purple-200 text-purple-700 rounded font-semibold">
+                     {editing ? "EDITING" : "AUTO"}
+                   </span>
+                 </div>
+               </div>
+               <div>
+                 <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest block mb-1">Estimation Date</label>
+                 <div className="px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 select-none">
+                   {new Date(form.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                 </div>
                </div>
              </div>
 
@@ -721,7 +729,6 @@ export default function GravureEstimationPage() {
               <div>
                 <SectionHeader label="Planning Specification" />
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <Input label="Date" type="date" value={form.date} onChange={e => f("date", e.target.value)} />
                   <Input label="No. of Plys *" type="number"
                     value={form.secondaryLayers.length || ""}
                     onChange={e => {
