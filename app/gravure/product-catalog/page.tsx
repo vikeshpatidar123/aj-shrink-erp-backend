@@ -91,6 +91,11 @@ export default function ProductCatalogPage() {
   const [catalogMatAllocs,  setCatalogMatAllocs]   = useState<MaterialAlloc[]>([]);
   const [catalogCylAllocs,  setCatalogCylAllocs]   = useState<CylinderAlloc[]>([]);
   const [catalogPrepTab,    setCatalogPrepTab]     = useState<"film" | "shade" | "material" | "tool">("film");
+  const [replanShowPlan,      setReplanShowPlan]      = useState(false);
+  const [replanIsPlanApplied, setReplanIsPlanApplied] = useState(false);
+  const [replanPlanSearch,    setReplanPlanSearch]    = useState("");
+  const [replanPlanSort,      setReplanPlanSort]      = useState<{ key: string; dir: "asc" | "desc" }>({ key: "", dir: "asc" });
+  const [replanSelPlanId,     setReplanSelPlanId]     = useState("");
 
   const rf = <K extends keyof GravureProductCatalog>(k: K, v: GravureProductCatalog[K]) => {
     setReplanForm(p => {
@@ -150,6 +155,8 @@ export default function ProductCatalogPage() {
   };
 
   // ── Live cost for replan ──────────────────────────────────
+  type CatalogMatRow = { plyNo: number; plyType: string; itemName: string; group: string; gsm: number; reqMtr: number; reqSQM: number; reqWt: number; wasteMtr: number; wasteSQM: number; wasteWt: number; totalMtr: number; totalSQM: number; totalWt: number; rate: number; amount: number; };
+
   const replanCost = useMemo(() => {
     if (!replanForm) return null;
     const qty    = replanForm.standardQty || 0;
@@ -157,20 +164,27 @@ export default function ProductCatalogPage() {
     const areaM2 = qty * widthM;
     const WASTE  = 0.03;
     let filmCost = 0, consumableCost = 0;
+    const materialRows: CatalogMatRow[] = [];
 
     replanForm.secondaryLayers.forEach(l => {
+      const reqMtr = qty; const reqSQM = areaM2;
       if (l.itemSubGroup && l.gsm > 0) {
         const fi   = FILM_ITEMS.find(x => x.subGroup === l.itemSubGroup);
         const rate = parseFloat(fi?.estimationRate ?? "0") || 0;
-        const reqWt = (l.gsm / 1000) * areaM2;
-        filmCost += reqWt * (1 + WASTE) * rate;
+        const reqWt = (l.gsm / 1000) * reqSQM;
+        const wasteMtr = reqMtr * WASTE; const wasteSQM = reqSQM * WASTE; const wasteWt = reqWt * WASTE;
+        const totalWt = reqWt + wasteWt;
+        filmCost += totalWt * rate;
+        materialRows.push({ plyNo: l.layerNo, plyType: l.plyType || "Film", itemName: l.itemSubGroup, group: "Film", gsm: l.gsm, reqMtr, reqSQM, reqWt, wasteMtr, wasteSQM, wasteWt, totalMtr: reqMtr + wasteMtr, totalSQM: reqSQM + wasteSQM, totalWt, rate, amount: totalWt * rate });
       }
       (l.consumableItems || []).forEach(ci => {
-        if (ci.gsm > 0 && ci.rate > 0) {
-          const effGsm = (ci.coveragePct ?? 100) < 100 ? ci.gsm * ((ci.coveragePct ?? 100) / 100) : ci.gsm;
-          const reqWt  = (effGsm / 1000) * areaM2;
-          consumableCost += reqWt * (1 + WASTE) * ci.rate;
-        }
+        if (!ci.gsm && ci.gsm !== 0) return;
+        const effGsm = (ci.coveragePct ?? 100) < 100 ? ci.gsm * ((ci.coveragePct ?? 100) / 100) : ci.gsm;
+        const reqWt = (effGsm / 1000) * reqSQM;
+        const wasteMtr = reqMtr * WASTE; const wasteSQM = reqSQM * WASTE; const wasteWt = reqWt * WASTE;
+        const totalWt = reqWt + wasteWt; const amount = totalWt * (ci.rate || 0);
+        consumableCost += amount;
+        materialRows.push({ plyNo: l.layerNo, plyType: l.plyType || "", itemName: ci.itemName || ci.fieldDisplayName || ci.itemSubGroup, group: ci.itemGroup, gsm: ci.gsm || 0, reqMtr, reqSQM, reqWt, wasteMtr, wasteSQM, wasteWt, totalMtr: reqMtr + wasteMtr, totalSQM: reqSQM + wasteSQM, totalWt, rate: ci.rate || 0, amount });
       });
     });
 
@@ -187,8 +201,47 @@ export default function ProductCatalogPage() {
     const profit       = (subtotal + overhead) * ((replanForm.profitPct || 0) / 100);
     const total        = subtotal + overhead + profit;
     const perMeter     = qty > 0 ? total / qty : 0;
-    return { materialCost, processCost, cylinderCost, overhead, profit, total, perMeter };
+    return { filmCost, consumableCost, materialCost, processCost, cylinderCost, overhead, profit, total, perMeter, materialRows };
   }, [replanForm]);
+
+  // ── Production Plan for Catalog ────────────────────────────
+  const replanAllPlans = useMemo(() => {
+    if (!replanForm?.machineId) return [];
+    const machine = PRINT_MACHINES.find(m => m.id === replanForm.machineId);
+    if (!machine) return [];
+    const cyls: number[] = (machine as any).cylCircumferences || [600, 612, 624, 636, 648, 660, 672];
+    return cyls.map((cylCirc, i) => {
+      const filmSize = 340;
+      const trimSize = (replanForm.trimmingSize && replanForm.trimmingSize > 0) ? replanForm.trimmingSize : (replanForm.jobWidth || filmSize);
+      const acUps    = Math.max(1, Math.floor(filmSize / trimSize));
+      const totalUPS = acUps;
+      const totalRMT = replanForm.standardQty > 0 ? parseFloat((replanForm.standardQty / totalUPS).toFixed(2)) : 0;
+      const wastage  = parseFloat((filmSize - acUps * trimSize).toFixed(1));
+      return { planId: `CP-${replanForm.machineId}-${i}`, machineName: machine.name, cylCirc, acUps, repeatUps: 1, totalUPS, totalRMT, filmSize, wastage };
+    });
+  }, [replanForm?.machineId, replanForm?.jobWidth, replanForm?.trimmingSize, replanForm?.standardQty]);
+
+  const replanVisiblePlans = useMemo(() => {
+    let rows = replanAllPlans;
+    const q = replanPlanSearch.trim().toLowerCase();
+    if (q) rows = rows.filter(r => r.machineName.toLowerCase().includes(q) || String(r.cylCirc).includes(q) || String(r.totalUPS).includes(q));
+    if (replanPlanSort.key) {
+      rows = [...rows].sort((a, b) => {
+        const av = (a as any)[replanPlanSort.key] ?? 0; const bv = (b as any)[replanPlanSort.key] ?? 0;
+        const diff = typeof av === "number" ? av - bv : String(av).localeCompare(String(bv));
+        return replanPlanSort.dir === "asc" ? diff : -diff;
+      });
+    }
+    return rows;
+  }, [replanAllPlans, replanPlanSearch, replanPlanSort]);
+
+  const replanTogglePlanSort = (key: string) =>
+    setReplanPlanSort(s => s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" });
+
+  const replanSelectedPlan = useMemo(() =>
+    replanAllPlans.find(p => p.planId === replanSelPlanId) || null,
+    [replanAllPlans, replanSelPlanId]
+  );
 
   const initCatalogPrepData = (rf: GravureProductCatalog) => {
     const n = rf.noOfColors || 0;
@@ -220,6 +273,7 @@ export default function ProductCatalogPage() {
     setReplanForm({ ...row });
     setReplanTab("info");
     setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("film");
+    setReplanSelPlanId(""); setReplanShowPlan(false); setReplanIsPlanApplied(false); setReplanPlanSearch(""); setReplanPlanSort({ key: "", dir: "asc" });
     setReplanOpen(true);
   };
 
@@ -827,23 +881,242 @@ export default function ProductCatalogPage() {
                   )}
                 </div>
 
-                {/* Live Cost Preview — inline in Planning tab */}
-                {replanCost && replanForm && (
-                  <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-2xl p-4 space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Calculator size={13} className="text-indigo-600" />
-                      <p className="text-xs font-bold text-indigo-800 uppercase tracking-widest">Live Cost Preview</p>
-                      <span className="ml-auto font-bold text-green-700 text-sm">₹{replanCost.perMeter.toFixed(3)}/m</span>
+                {/* Production Plan Selection */}
+                {replanForm.machineId && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <SH label="Production Plan Selection" />
+                      <div className="flex items-center gap-2">
+                        {replanIsPlanApplied && (
+                          <button onClick={() => { setReplanIsPlanApplied(false); setReplanShowPlan(true); }} className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg border border-gray-200">
+                            <RefreshCw size={11} /> Change Plan
+                          </button>
+                        )}
+                        <button onClick={() => setReplanShowPlan(!replanShowPlan)}
+                          className="flex items-center gap-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200">
+                          <Eye size={12} /> {replanShowPlan ? "Hide Plan" : "Select Plan"}
+                        </button>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+
+                    {replanIsPlanApplied && replanSelectedPlan && !replanShowPlan && (
+                      <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-2.5 flex items-center gap-2 text-xs text-green-700">
+                        <CheckCircle2 size={14} className="text-green-600" />
+                        Plan applied — UPS: <strong>{replanSelectedPlan.totalUPS}</strong> · Film: {replanSelectedPlan.filmSize}mm · Wastage: {replanSelectedPlan.wastage}mm · RMT: {replanSelectedPlan.totalRMT}
+                      </div>
+                    )}
+
+                    {replanShowPlan && !replanIsPlanApplied && (
+                      <div className="border-2 border-indigo-100 rounded-2xl overflow-hidden shadow-lg">
+                        <div className="bg-gradient-to-r from-indigo-800 to-purple-800 p-3 flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-white font-bold text-xs uppercase tracking-wide">Select Production Plan</p>
+                            <p className="text-indigo-200 text-[10px] mt-0.5">{replanForm.machineName} · {replanVisiblePlans.length}/{replanAllPlans.length} plans</p>
+                          </div>
+                          <input value={replanPlanSearch} onChange={e => setReplanPlanSearch(e.target.value)} placeholder="Search plans..."
+                            className="bg-indigo-700 text-white placeholder-indigo-300 text-xs rounded-lg px-3 py-1.5 border border-indigo-500 outline-none focus:ring-2 focus:ring-indigo-400 w-36" />
+                          {replanSelPlanId && (
+                            <button onClick={() => { setReplanIsPlanApplied(true); setReplanShowPlan(false); }} className="bg-green-500 hover:bg-green-600 text-white text-xs font-bold px-4 py-1.5 rounded-lg flex-shrink-0">Apply Plan</button>
+                          )}
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-[10px] whitespace-nowrap border-collapse">
+                            <thead className="bg-slate-800 text-slate-300">
+                              <tr>
+                                <th className="p-2 border border-slate-700 text-center">Select</th>
+                                {[
+                                  { key: "machineName", label: "Machine" },
+                                  { key: "cylCirc",    label: "Cyl. Circ." },
+                                  { key: "filmSize",   label: "Film Size (mm)" },
+                                  { key: "wastage",    label: "Wastage (mm)" },
+                                  { key: "acUps",      label: "Ac Ups" },
+                                  { key: "repeatUps",  label: "Repeat UPS" },
+                                  { key: "totalUPS",   label: "Total UPS" },
+                                  { key: "totalRMT",   label: "Total RMT" },
+                                ].map(col => (
+                                  <th key={col.key} className="p-2 border border-slate-700 text-center cursor-pointer select-none hover:bg-slate-700"
+                                    onClick={() => replanTogglePlanSort(col.key)}>
+                                    {col.label}{replanPlanSort.key === col.key ? (replanPlanSort.dir === "asc" ? " ▲" : " ▼") : " ⇅"}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-100">
+                              {replanVisiblePlans.map(plan => {
+                                const isSelected = replanSelPlanId === plan.planId;
+                                return (
+                                  <tr key={plan.planId} onClick={() => setReplanSelPlanId(plan.planId)}
+                                    className={`cursor-pointer transition-colors ${isSelected ? "bg-indigo-50" : "hover:bg-gray-50"}`}>
+                                    <td className="p-2 border border-gray-100 text-center">
+                                      <div className={`w-4 h-4 rounded-full border-2 mx-auto flex items-center justify-center ${isSelected ? "border-indigo-600 bg-indigo-600" : "border-gray-300 bg-white"}`}>
+                                        {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                                      </div>
+                                    </td>
+                                    <td className="p-2 border border-gray-100 font-medium text-gray-700">{plan.machineName}</td>
+                                    <td className="p-2 border border-gray-100 text-center font-mono">{plan.cylCirc}</td>
+                                    <td className="p-2 border border-gray-100 text-center font-mono text-indigo-700">{plan.filmSize}</td>
+                                    <td className={`p-2 border border-gray-100 text-center font-mono ${plan.wastage > 0 ? "text-orange-600" : "text-green-600"}`}>{plan.wastage}</td>
+                                    <td className="p-2 border border-gray-100 text-center">{plan.acUps}</td>
+                                    <td className="p-2 border border-gray-100 text-center">{plan.repeatUps}</td>
+                                    <td className="p-2 border border-gray-100 text-center font-bold">{plan.totalUPS}</td>
+                                    <td className="p-2 border border-gray-100 text-center text-blue-600 font-semibold">{plan.totalRMT}</td>
+                                  </tr>
+                                );
+                              })}
+                              {replanVisiblePlans.length === 0 && (
+                                <tr><td colSpan={9} className="p-4 text-center text-gray-400 text-xs">No plans match your search</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                        {replanSelPlanId && (
+                          <div className="bg-indigo-900 text-indigo-100 px-4 py-2.5 flex items-center justify-between text-[11px]">
+                            <span className="flex items-center gap-2"><Check size={12} className="text-green-400" /> Plan selected — UPS: {replanSelectedPlan?.totalUPS}</span>
+                            <button onClick={() => { setReplanIsPlanApplied(true); setReplanShowPlan(false); }} className="bg-green-500 hover:bg-green-600 text-white text-xs font-bold px-3 py-1 rounded-lg">Apply</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {replanIsPlanApplied && replanSelectedPlan && replanForm.secondaryLayers.length > 0 && (
+                      <div className="space-y-3">
+                        <p className="text-xs font-bold text-indigo-900">Ply / Layer Calculation — UPS: {replanSelectedPlan.totalUPS} · Film: {replanSelectedPlan.filmSize}mm · Wastage: {replanSelectedPlan.wastage}mm · RMT: {replanSelectedPlan.totalRMT}</p>
+                        <div className="border-2 border-indigo-50 rounded-2xl overflow-hidden shadow-lg">
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full text-[10px] border-collapse">
+                              <thead className="bg-indigo-700 text-white uppercase tracking-wider font-bold">
+                                <tr>
+                                  {["Layer","Type","Film / Material","Thick (μ)","Density","GSM","Width (mm)","Req.Mtr","Req.SQM","Req.Wt (Kg)","Waste Mtr","Waste Wt","Total Mtr","Total Wt (Kg)"].map(h => (
+                                    <th key={h} className="p-2 border border-indigo-600/30 text-center whitespace-nowrap">{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {replanForm.secondaryLayers.map((l, idx) => {
+                                  const WASTE_PCT = 0.03;
+                                  const rmt = replanSelectedPlan.totalRMT;
+                                  const widthM = replanForm.jobWidth / 1000;
+                                  const reqSQM = parseFloat((rmt * widthM).toFixed(3));
+                                  const reqWt  = l.gsm > 0 ? parseFloat((l.gsm * reqSQM / 1000).toFixed(4)) : 0;
+                                  const wasteMtr = parseFloat((rmt * WASTE_PCT).toFixed(2));
+                                  const wasteWt  = parseFloat((reqWt * WASTE_PCT).toFixed(4));
+                                  const totalMtr = parseFloat((rmt + wasteMtr).toFixed(2));
+                                  const totalWt  = parseFloat((reqWt + wasteWt).toFixed(4));
+                                  return (
+                                    <tr key={l.id} className="hover:bg-indigo-50/30">
+                                      <td className="p-2 border border-gray-100 text-center font-black text-indigo-900 bg-indigo-50/20">{idx + 1}</td>
+                                      <td className="p-2 border border-gray-100 text-center">
+                                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${l.plyType === "Printing" ? "bg-indigo-50 text-indigo-700 border-indigo-200" : l.plyType === "Lamination" ? "bg-teal-50 text-teal-700 border-teal-200" : l.plyType === "Coating" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-blue-50 text-blue-700 border-blue-200"}`}>{l.plyType || "Film"}</span>
+                                      </td>
+                                      <td className="p-2 border border-gray-100 font-medium text-gray-700 min-w-[140px] whitespace-normal">{l.itemSubGroup || "—"}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-mono">{l.thickness || "—"}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-mono">{l.density || "—"}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-bold text-indigo-700">{l.gsm || "—"}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-mono">{replanForm.jobWidth}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-mono">{rmt}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-mono">{reqSQM}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-bold text-blue-600">{reqWt}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-mono text-orange-600">{wasteMtr}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-mono text-orange-600">{wasteWt}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-mono text-gray-700">{totalMtr}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-black text-gray-900 bg-gray-50">{totalWt}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                              <tfoot className="bg-slate-50 border-t-2 border-indigo-200">
+                                <tr className="font-bold">
+                                  <td colSpan={13} className="p-3 text-right text-indigo-900 uppercase text-[10px]">Total Weight (Kg)</td>
+                                  <td className="p-3 text-center bg-indigo-100 text-indigo-900 text-xs">
+                                    {replanForm.secondaryLayers.reduce((sum, l) => {
+                                      const rmt = replanSelectedPlan.totalRMT;
+                                      const reqSQM = rmt * replanForm.jobWidth / 1000;
+                                      const reqWt = l.gsm > 0 ? l.gsm * reqSQM / 1000 : 0;
+                                      return sum + parseFloat((reqWt * 1.03).toFixed(4));
+                                    }, 0).toFixed(3)}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Live Cost Estimate — Material Breakdown */}
+                {(replanForm.secondaryLayers.length > 0 || replanForm.processes.length > 0) && replanCost && (
+                  <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-2xl p-4 space-y-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Calculator size={14} className="text-indigo-600" />
+                      <p className="text-xs font-bold text-indigo-800 uppercase tracking-widest">Live Cost Estimate — Material Breakdown</p>
+                      <span className="text-[10px] text-indigo-400 ml-1">(Qty: {replanForm.standardQty.toLocaleString()} {replanForm.standardUnit} · Width: {replanForm.jobWidth}mm · 3% Waste)</span>
+                    </div>
+
+                    {replanCost.materialRows.length > 0 && (
+                      <div className="overflow-x-auto rounded-xl border border-indigo-100 bg-white shadow-sm">
+                        <table className="min-w-full text-[10px] border-collapse whitespace-nowrap">
+                          <thead className="bg-indigo-700 text-white">
+                            <tr>
+                              {["Ply", "Type", "Film / Material", "Group", "GSM/Wet Wt.", "Req.Mtr", "Req.SQM", "Req.Wt(Kg)", "Waste Mtr", "Waste SQM", "Waste Wt(Kg)", "Total Mtr", "Total SQM", "Total Wt(Kg)", "Rate (₹/Kg)", "Amount (₹)"].map(h => (
+                                <th key={h} className="px-2 py-2 border border-indigo-600/30 text-center">{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {replanCost.materialRows.map((r, i) => {
+                              const typeColor =
+                                r.group === "Film"     ? "bg-blue-100 text-blue-700 border-blue-200" :
+                                r.group === "Ink"      ? "bg-violet-100 text-violet-700 border-violet-200" :
+                                r.group === "Solvent"  ? "bg-orange-100 text-orange-700 border-orange-200" :
+                                r.group === "Adhesive" ? "bg-teal-100 text-teal-700 border-teal-200" :
+                                r.group === "Hardner"  ? "bg-pink-100 text-pink-700 border-pink-200" :
+                                                         "bg-gray-100 text-gray-600 border-gray-200";
+                              return (
+                                <tr key={i} className={`hover:bg-indigo-50/30 ${r.group === "Film" ? "bg-blue-50/20 font-medium" : ""}`}>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-bold text-indigo-900">{r.plyNo}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center">
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${typeColor}`}>{r.group}</span>
+                                  </td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-gray-800 min-w-[130px] whitespace-normal">{r.itemName || "—"}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center">
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${typeColor}`}>{r.group}</span>
+                                  </td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono text-indigo-700 font-bold">{r.gsm}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono">{r.reqMtr.toFixed(0)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono">{r.reqSQM.toFixed(2)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono">{r.reqWt.toFixed(3)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono text-orange-600">{r.wasteMtr.toFixed(1)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono text-orange-600">{r.wasteSQM.toFixed(3)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono text-orange-600">{r.wasteWt.toFixed(4)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono text-gray-700">{r.totalMtr.toFixed(0)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono text-gray-700">{r.totalSQM.toFixed(2)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono font-bold text-gray-900">{r.totalWt.toFixed(3)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-mono">₹{r.rate.toFixed(2)}</td>
+                                  <td className="px-2 py-1.5 border border-gray-100 text-center font-bold text-green-700">₹{r.amount.toFixed(2)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot className="bg-indigo-50 border-t-2 border-indigo-300">
+                            <tr className="font-bold">
+                              <td colSpan={13} className="px-3 py-2 text-right text-indigo-900 text-[10px] uppercase tracking-wider">Total Material Cost</td>
+                              <td className="px-2 py-2 text-center font-bold text-indigo-900">{replanCost.materialRows.reduce((s, r) => s + r.totalWt, 0).toFixed(3)}</td>
+                              <td className="px-2 py-2"></td>
+                              <td className="px-2 py-2 text-center font-black text-green-800 bg-green-50">₹{(replanCost.filmCost + replanCost.consumableCost).toFixed(2)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                       {[
-                        { label: "Material",   val: `₹${replanCost.materialCost.toFixed(2)}`,              cls: "bg-blue-50 border-blue-200 text-blue-800"    },
-                        { label: "Processes",  val: `₹${replanCost.processCost.toFixed(2)}`,               cls: "bg-indigo-50 border-indigo-200 text-indigo-800" },
-                        { label: "Cylinder",   val: `₹${replanCost.cylinderCost.toLocaleString()}`,        cls: "bg-purple-50 border-purple-200 text-purple-800" },
-                        { label: `OH (${replanForm.overheadPct}%)`, val: `₹${replanCost.overhead.toFixed(2)}`, cls: "bg-gray-50 border-gray-200 text-gray-700" },
-                        { label: `Profit (${replanForm.profitPct}%)`, val: `₹${replanCost.profit.toFixed(2)}`, cls: "bg-gray-50 border-gray-200 text-gray-700" },
-                        { label: "Grand Total",val: `₹${replanCost.total.toFixed(2)}`,                     cls: "bg-green-50 border-green-200 text-green-800"  },
-                        { label: "₹ / Meter",  val: `₹${replanCost.perMeter.toFixed(3)}`,                  cls: "bg-amber-50 border-amber-200 text-amber-800"  },
+                        { label: "Film (Material)", val: `₹${replanCost.filmCost.toFixed(2)}`,         cls: "bg-blue-50 border-blue-200 text-blue-800"   },
+                        { label: "Consumables",      val: `₹${replanCost.consumableCost.toFixed(2)}`,  cls: "bg-teal-50 border-teal-200 text-teal-800"   },
+                        { label: "Processes",        val: `₹${replanCost.processCost.toFixed(2)}`,     cls: "bg-purple-50 border-purple-200 text-purple-800" },
+                        { label: "Cylinder",         val: `₹${replanCost.cylinderCost.toLocaleString()}`, cls: "bg-indigo-50 border-indigo-200 text-indigo-800" },
                       ].map(s => (
                         <div key={s.label} className={`rounded-xl border p-2.5 ${s.cls}`}>
                           <p className="text-[10px] font-semibold opacity-60 mb-0.5">{s.label}</p>
@@ -851,16 +1124,20 @@ export default function ProductCatalogPage() {
                         </div>
                       ))}
                     </div>
-                    <PlanViewer plan={{
-                      title: "Catalog Replan Preview", refNo: replanForm.catalogNo,
-                      jobWidth: replanForm.jobWidth, jobHeight: replanForm.jobHeight,
-                      quantity: replanForm.standardQty || 1000, unit: replanForm.standardUnit,
-                      noOfColors: replanForm.noOfColors,
-                      secondaryLayers: replanForm.secondaryLayers, processes: replanForm.processes,
-                      cylinderCostPerColor: replanForm.cylinderCostPerColor,
-                      overheadPct: replanForm.overheadPct, profitPct: replanForm.profitPct,
-                      trimmingSize: replanForm.trimmingSize, frontColors: replanForm.frontColors, backColors: replanForm.backColors,
-                    } satisfies PlanInput} />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 border-t border-indigo-100 pt-2">
+                      {[
+                        { label: `Overhead (${replanForm.overheadPct}%)`, val: `₹${replanCost.overhead.toFixed(2)}`,  cls: "bg-gray-50 border-gray-200 text-gray-700"   },
+                        { label: `Profit (${replanForm.profitPct}%)`,      val: `₹${replanCost.profit.toFixed(2)}`,   cls: "bg-gray-50 border-gray-200 text-gray-700"   },
+                        { label: "Grand Total",                             val: `₹${replanCost.total.toFixed(2)}`,   cls: "bg-green-50 border-green-200 text-green-800" },
+                        { label: "₹ / Meter",                               val: `₹${replanCost.perMeter.toFixed(3)}`, cls: "bg-amber-50 border-amber-200 text-amber-800" },
+                      ].map(s => (
+                        <div key={s.label} className={`rounded-xl border p-2.5 ${s.cls}`}>
+                          <p className="text-[10px] font-semibold opacity-60 mb-0.5">{s.label}</p>
+                          <p className="text-sm font-bold">{s.val}</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
