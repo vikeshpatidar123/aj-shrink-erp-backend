@@ -4,7 +4,7 @@ import {
   BookMarked, Eye, Trash2, Clock, CheckCircle2,
   ShoppingCart, CheckCircle, AlertCircle, Lock, ArrowRight,
   RefreshCw, Save, Plus, X, Calculator, Layers, Check, Pencil,
-  ChevronRight, Eye as EyeIcon, Factory, Send, Package,
+  ChevronRight, Eye as EyeIcon, Factory, Send, Package, Palette, Wrench, Archive,
 } from "lucide-react";
 import {
   gravureOrders, gravureWorkOrders as initWOs,
@@ -82,17 +82,15 @@ export default function ProductCatalogPage() {
   const [replanForm, setReplanForm] = useState<GravureProductCatalog | null>(null);
   const [replanTab,  setReplanTab]  = useState<"info" | "planning" | "material" | "preview">("info");
 
-  type FilmRequisition = {
-    source: "Extrusion" | "Purchase" | "";
-    status: "Pending" | "Requested" | "Available";
-    requiredDate?: string;
-    spec?: string;
-    priority?: string;
-    vendor?: string;
-    expectedRate?: number;
-    remarks?: string;
-  };
-  const [catalogFilmReqs, setCatalogFilmReqs] = useState<FilmRequisition[]>([]);
+  type FilmRequisition = { source: "Extrusion" | "Purchase" | ""; status: "Pending" | "Requested" | "Available"; requiredDate?: string; spec?: string; priority?: string; vendor?: string; expectedRate?: number; remarks?: string; };
+  type ColorShade      = { colorNo: number; colorName: string; inkType: "Spot" | "Process" | "Special"; pantoneRef: string; labL: string; labA: string; labB: string; deltaE: string; shadeCardRef: string; status: "Pending" | "Standard Received" | "Approved" | "Rejected"; remarks: string; };
+  type MaterialAlloc   = { id: string; plyNo?: number; materialType: string; materialName: string; requiredQty: number; unit: string; allocatedQty: number; lotNo: string; location: string; status: "Pending" | "Partial" | "Allocated"; };
+  type CylinderAlloc   = { colorNo: number; colorName: string; cylinderNo: string; circumference: string; cylinderType: "New" | "Existing" | "Rechromed"; status: "Pending" | "Available" | "In Use" | "Under Chrome" | "Ordered"; remarks: string; };
+  const [catalogFilmReqs,   setCatalogFilmReqs]   = useState<FilmRequisition[]>([]);
+  const [catalogColorShades,setCatalogColorShades] = useState<ColorShade[]>([]);
+  const [catalogMatAllocs,  setCatalogMatAllocs]   = useState<MaterialAlloc[]>([]);
+  const [catalogCylAllocs,  setCatalogCylAllocs]   = useState<CylinderAlloc[]>([]);
+  const [catalogPrepTab,    setCatalogPrepTab]     = useState<"film" | "shade" | "material" | "tool">("film");
 
   const rf = <K extends keyof GravureProductCatalog>(k: K, v: GravureProductCatalog[K]) => {
     setReplanForm(p => {
@@ -192,10 +190,36 @@ export default function ProductCatalogPage() {
     return { materialCost, processCost, cylinderCost, overhead, profit, total, perMeter };
   }, [replanForm]);
 
+  const initCatalogPrepData = (rf: GravureProductCatalog) => {
+    const n = rf.noOfColors || 0;
+    setCatalogColorShades(Array.from({ length: n }, (_, i) => ({
+      colorNo: i + 1, colorName: `Color ${i + 1}`, inkType: "Spot" as const,
+      pantoneRef: "", labL: "", labA: "", labB: "", deltaE: "1.0",
+      shadeCardRef: "", status: "Pending" as const, remarks: "",
+    })));
+    const reqSQM = (rf.standardQty || 0) * ((rf.jobWidth || 0) / 1000);
+    const allocs: MaterialAlloc[] = [];
+    rf.secondaryLayers.forEach((l, i) => {
+      if (l.itemSubGroup) {
+        const reqWt = l.gsm > 0 ? parseFloat(((l.gsm / 1000) * reqSQM * 1.03).toFixed(3)) : 0;
+        allocs.push({ id: `film-${i}`, plyNo: l.layerNo, materialType: "Film", materialName: l.itemSubGroup, requiredQty: reqWt, unit: "Kg", allocatedQty: 0, lotNo: "", location: "", status: "Pending" });
+      }
+      (l.consumableItems || []).forEach((ci, j) => {
+        const reqWt = ci.gsm > 0 ? parseFloat(((ci.gsm / 1000) * reqSQM * 1.03).toFixed(3)) : 0;
+        allocs.push({ id: `con-${i}-${j}`, plyNo: l.layerNo, materialType: ci.itemGroup, materialName: ci.itemName || ci.fieldDisplayName, requiredQty: reqWt, unit: "Kg", allocatedQty: 0, lotNo: "", location: "", status: "Pending" });
+      });
+    });
+    setCatalogMatAllocs(allocs);
+    setCatalogCylAllocs(Array.from({ length: n }, (_, i) => ({
+      colorNo: i + 1, colorName: `Color ${i + 1}`, cylinderNo: "",
+      circumference: "", cylinderType: "Existing" as const, status: "Pending" as const, remarks: "",
+    })));
+  };
+
   const openReplan = (row: GravureProductCatalog) => {
     setReplanForm({ ...row });
     setReplanTab("info");
-    setCatalogFilmReqs([]);
+    setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("film");
     setReplanOpen(true);
   };
 
@@ -806,14 +830,32 @@ export default function ProductCatalogPage() {
 
                 <div className="flex justify-between">
                   <Button variant="secondary" onClick={() => setReplanTab("info")}>← Back</Button>
-                  <Button onClick={() => setReplanTab("material")}>Next: Film Req. <ChevronRight size={14} className="ml-1" /></Button>
+                  <Button onClick={() => { if (catalogColorShades.length === 0 && replanForm) initCatalogPrepData(replanForm); setCatalogPrepTab("film"); setReplanTab("material"); }}>Next: Production Prep <ChevronRight size={14} className="ml-1" /></Button>
                 </div>
               </div>
             )}
 
-            {/* ── Tab 3: Film Requisition ── */}
+            {/* ── Tab 3: Production Preparation ── */}
             {replanTab === "material" && replanForm && (
-              <div className="space-y-4">
+              <div className="space-y-3">
+                {/* Sub-tab bar */}
+                <div className="flex overflow-x-auto bg-gray-100 p-1 rounded-xl gap-1">
+                  {([
+                    { key: "film",     label: "Film Requisition"    },
+                    { key: "shade",    label: "Color Shade & LAB"   },
+                    { key: "material", label: "Material Allocation" },
+                    { key: "tool",     label: "Tool / Cylinder"     },
+                  ] as const).map(t => (
+                    <button key={t.key} onClick={() => setCatalogPrepTab(t.key)}
+                      className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap ${catalogPrepTab === t.key ? "bg-white shadow text-purple-700" : "text-gray-500 hover:text-gray-700"}`}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* ─── Film Requisition ─── */}
+                {catalogPrepTab === "film" && (
+                <div className="space-y-3">
                 <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-2">
                   <Package size={14} className="text-blue-600 mt-0.5 flex-shrink-0" />
                   <div>
@@ -973,7 +1015,151 @@ export default function ProductCatalogPage() {
                   </div>
                 )}
 
-                <div className="flex justify-between">
+                </div>
+                )}
+
+                {/* ─── Color Shade & LAB ─── */}
+                {catalogPrepTab === "shade" && (
+                  <div className="space-y-3">
+                    <div className="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 flex items-start gap-2">
+                      <Palette size={14} className="text-purple-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-purple-800">Color Shade & LAB Standard</p>
+                        <p className="text-xs text-purple-700 mt-0.5">Enter client-approved color standards with CIE LAB values for production color matching.</p>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+                      <table className="min-w-full text-[11px] border-collapse">
+                        <thead className="bg-purple-700 text-white uppercase tracking-wider">
+                          <tr>{["#", "Color Name", "Type", "Pantone Ref", "L*", "a*", "b*", "ΔE Tol.", "Shade Card Ref", "Status", "Remarks"].map(h => (
+                            <th key={h} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {catalogColorShades.map((cs, i) => (
+                            <tr key={i} className="hover:bg-purple-50/20">
+                              <td className="px-2 py-1.5 text-center font-black text-purple-700">{cs.colorNo}</td>
+                              <td className="px-2 py-1.5"><input className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.colorName} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, colorName: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400" value={cs.inkType} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, inkType: e.target.value as ColorShade["inkType"] } : c))}><option value="Spot">Spot</option><option value="Process">Process</option><option value="Special">Special</option></select></td>
+                              <td className="px-2 py-1.5"><input placeholder="PMS 485 C" className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.pantoneRef} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, pantoneRef: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input type="number" step={0.01} className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.labL} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labL: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input type="number" step={0.01} className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.labA} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labA: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input type="number" step={0.01} className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.labB} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labB: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input type="number" step={0.1} placeholder="1.0" className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.deltaE} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, deltaE: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input placeholder="SC-001" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.shadeCardRef} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, shadeCardRef: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400" value={cs.status} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as ColorShade["status"] } : c))}><option value="Pending">Pending</option><option value="Standard Received">Std. Received</option><option value="Approved">Approved</option><option value="Rejected">Rejected</option></select></td>
+                              <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.remarks} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
+                            </tr>
+                          ))}
+                          {catalogColorShades.length === 0 && <tr><td colSpan={11} className="p-6 text-center text-gray-400 text-xs">No colors. Set No. of Colors in Basic Info tab first.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                    {catalogColorShades.length > 0 && (
+                      <div className="flex gap-2 flex-wrap">
+                        {(["Pending", "Standard Received", "Approved", "Rejected"] as const).map(s => {
+                          const cnt = catalogColorShades.filter(c => c.status === s).length;
+                          return cnt > 0 ? <span key={s} className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${s === "Approved" ? "bg-green-50 text-green-700 border-green-200" : s === "Standard Received" ? "bg-blue-50 text-blue-700 border-blue-200" : s === "Rejected" ? "bg-red-50 text-red-700 border-red-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>{cnt} {s}</span> : null;
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ─── Material Allocation ─── */}
+                {catalogPrepTab === "material" && (
+                  <div className="space-y-3">
+                    <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 flex items-start gap-2">
+                      <Archive size={14} className="text-teal-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-teal-800">Material Allocation</p>
+                        <p className="text-xs text-teal-700 mt-0.5">Allocate raw materials from stock — enter lot no., store location, and allocated qty for each item.</p>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+                      <table className="min-w-full text-[11px] border-collapse">
+                        <thead className="bg-teal-700 text-white uppercase tracking-wider">
+                          <tr>{["Ply", "Type", "Material", "Req. Qty", "Alloc. Qty", "Unit", "Lot / Batch No.", "Store Location", "Status", "Action"].map(h => (
+                            <th key={h} className="px-2 py-2 border border-teal-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {catalogMatAllocs.map((ma, i) => (
+                            <tr key={ma.id} className={`hover:bg-teal-50/20 ${ma.materialType === "Film" ? "bg-blue-50/30 font-medium" : ""}`}>
+                              <td className="px-2 py-1.5 text-center font-bold text-teal-700">{ma.plyNo ?? "—"}</td>
+                              <td className="px-2 py-1.5 text-center"><span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${ma.materialType === "Film" ? "bg-blue-100 text-blue-700 border-blue-200" : ma.materialType === "Ink" ? "bg-violet-100 text-violet-700 border-violet-200" : ma.materialType === "Solvent" ? "bg-orange-100 text-orange-700 border-orange-200" : ma.materialType === "Adhesive" ? "bg-teal-100 text-teal-700 border-teal-200" : "bg-gray-100 text-gray-700 border-gray-200"}`}>{ma.materialType}</span></td>
+                              <td className="px-2 py-1.5 text-gray-800 min-w-[120px]">{ma.materialName || "—"}</td>
+                              <td className="px-2 py-1.5 text-center font-mono text-blue-700 font-bold">{ma.requiredQty > 0 ? ma.requiredQty : "—"}</td>
+                              <td className="px-2 py-1.5 text-center"><input type="number" step={0.001} className="w-16 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-teal-400 text-center" value={ma.allocatedQty || ""} onChange={e => setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, allocatedQty: Number(e.target.value) } : m))} /></td>
+                              <td className="px-2 py-1.5 text-center text-gray-500">{ma.unit}</td>
+                              <td className="px-2 py-1.5"><input placeholder="LOT-001" className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-teal-400" value={ma.lotNo} onChange={e => setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, lotNo: e.target.value } : m))} /></td>
+                              <td className="px-2 py-1.5"><input placeholder="Rack A-3" className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-teal-400" value={ma.location} onChange={e => setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, location: e.target.value } : m))} /></td>
+                              <td className="px-2 py-1.5 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${ma.status === "Allocated" ? "bg-green-50 text-green-700 border-green-200" : ma.status === "Partial" ? "bg-yellow-50 text-yellow-700 border-yellow-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>{ma.status}</span></td>
+                              <td className="px-2 py-1.5 text-center"><button onClick={() => setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, status: m.allocatedQty > 0 && m.allocatedQty >= m.requiredQty ? "Allocated" : m.allocatedQty > 0 ? "Partial" : "Pending" } : m))} className="px-2.5 py-1 text-[10px] font-bold bg-teal-600 text-white rounded-lg hover:bg-teal-700 whitespace-nowrap">Allocate</button></td>
+                            </tr>
+                          ))}
+                          {catalogMatAllocs.length === 0 && <tr><td colSpan={10} className="p-6 text-center text-gray-400 text-xs">No materials. Configure plys in Planning tab first.</td></tr>}
+                        </tbody>
+                        {catalogMatAllocs.length > 0 && (
+                          <tfoot className="bg-teal-50 border-t-2 border-teal-200">
+                            <tr>
+                              <td colSpan={3} className="px-3 py-2 text-right text-teal-800 text-[10px] font-bold uppercase">Totals</td>
+                              <td className="px-2 py-2 text-center font-bold text-teal-900 font-mono">{catalogMatAllocs.reduce((s, m) => s + m.requiredQty, 0).toFixed(3)} Kg</td>
+                              <td className="px-2 py-2 text-center font-bold text-green-800 font-mono">{catalogMatAllocs.reduce((s, m) => s + m.allocatedQty, 0).toFixed(3)} Kg</td>
+                              <td colSpan={5} className="px-3 py-2 text-right"><button onClick={() => setCatalogMatAllocs(p => p.map(m => ({ ...m, allocatedQty: m.requiredQty, status: "Allocated" as const })))} className="px-3 py-1 text-xs font-bold bg-teal-700 text-white rounded-lg hover:bg-teal-800">Allocate All</button></td>
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── Tool / Cylinder Allocation ─── */}
+                {catalogPrepTab === "tool" && (
+                  <div className="space-y-3">
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-2">
+                      <Wrench size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-xs font-bold text-amber-800">Tool & Cylinder Allocation</p>
+                        <p className="text-xs text-amber-700 mt-0.5">Assign print cylinders to each color. Track cylinder status, type, and circumference.</p>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+                      <table className="min-w-full text-[11px] border-collapse">
+                        <thead className="bg-amber-700 text-white uppercase tracking-wider">
+                          <tr>{["Color #", "Color Name", "Cylinder No.", "Circumference (mm)", "Type", "Status", "Remarks"].map(h => (
+                            <th key={h} className="px-2 py-2 border border-amber-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {catalogCylAllocs.map((ca, i) => (
+                            <tr key={i} className="hover:bg-amber-50/20">
+                              <td className="px-2 py-1.5 text-center font-black text-amber-700">{ca.colorNo}</td>
+                              <td className="px-2 py-1.5"><input className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400" value={ca.colorName} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, colorName: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input placeholder="CYL-001" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400" value={ca.cylinderNo} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderNo: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input type="number" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 text-center" value={ca.circumference} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, circumference: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400" value={ca.cylinderType} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderType: e.target.value as CylinderAlloc["cylinderType"] } : c))}><option value="Existing">Existing</option><option value="New">New</option><option value="Rechromed">Rechromed</option></select></td>
+                              <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400" value={ca.status} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as CylinderAlloc["status"] } : c))}><option value="Pending">Pending</option><option value="Available">Available</option><option value="In Use">In Use</option><option value="Under Chrome">Under Chrome</option><option value="Ordered">Ordered</option></select></td>
+                              <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-32 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400" value={ca.remarks} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
+                            </tr>
+                          ))}
+                          {catalogCylAllocs.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-gray-400 text-xs">No cylinders. Set No. of Colors in Basic Info tab first.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                    {catalogCylAllocs.length > 0 && (
+                      <div className="flex gap-2 flex-wrap">
+                        {(["Pending", "Available", "In Use", "Under Chrome", "Ordered"] as const).map(s => {
+                          const cnt = catalogCylAllocs.filter(c => c.status === s).length;
+                          return cnt > 0 ? <span key={s} className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${s === "Available" ? "bg-green-50 text-green-700 border-green-200" : s === "In Use" ? "bg-blue-50 text-blue-700 border-blue-200" : s === "Under Chrome" ? "bg-orange-50 text-orange-700 border-orange-200" : s === "Ordered" ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>{cnt} {s}</span> : null;
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex justify-between pt-2">
                   <Button variant="secondary" onClick={() => setReplanTab("planning")}>← Back</Button>
                   <Button onClick={() => setReplanTab("preview")}>Preview Cost <ChevronRight size={14} className="ml-1" /></Button>
                 </div>
