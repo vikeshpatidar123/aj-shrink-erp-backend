@@ -877,10 +877,10 @@ export default function ProductCatalogPage() {
                                 <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
                                   value={l.plyType} onChange={e => onPlyTypeChange(index, e.target.value)}>
                                   <option value="">-- Select Ply Type --</option>
-                                  <option value="Film">Film</option>
-                                  <option value="Printing">Printing</option>
-                                  <option value="Lamination">Lamination</option>
-                                  <option value="Coating">Coating</option>
+                                  <option value="Film">Ply 1</option>
+                                  <option value="Printing">Ply 2</option>
+                                  <option value="Lamination">Ply 3</option>
+                                  <option value="Coating">Ply 4</option>
                                 </select>
                               </div>
                               {l.plyType && (

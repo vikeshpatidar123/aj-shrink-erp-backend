@@ -891,7 +891,7 @@ export default function GravureEstimationPage() {
                               l.plyType === "Coating"    ? "bg-green-50 text-green-700 border-green-200" :
                               "bg-indigo-50 text-indigo-700 border-indigo-200"
                             }`}>
-                              {l.plyType}
+                              {l.plyType === "Film" ? "Ply 1" : l.plyType === "Printing" ? "Ply 2" : l.plyType === "Lamination" ? "Ply 3" : l.plyType === "Coating" ? "Ply 4" : l.plyType}
                             </span>
                           )}
                         </div>
@@ -906,10 +906,10 @@ export default function GravureEstimationPage() {
                               onChange={e => onPlyTypeChange(index, e.target.value)}
                             >
                               <option value="">-- Select Ply Type --</option>
-                              <option value="Film">Film</option>
-                              <option value="Printing">Printing</option>
-                              <option value="Lamination">Lamination</option>
-                              <option value="Coating">Coating</option>
+                              <option value="Film">Ply 1</option>
+                              <option value="Printing">Ply 2</option>
+                              <option value="Lamination">Ply 3</option>
+                              <option value="Coating">Ply 4</option>
                             </select>
                           </div>
 
