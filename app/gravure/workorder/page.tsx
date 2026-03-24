@@ -4,6 +4,7 @@ import {
   Eye, Pencil, Trash2, Printer, CheckCircle2, ClipboardList,
   Clock, RefreshCw, Edit3, Calculator, BookMarked, ChevronRight,
   Layers, AlertCircle, ArrowRight, Plus, X, Check, Save,
+  Factory, Send, Package, ShoppingCart,
 } from "lucide-react";
 import {
   gravureWorkOrders as initWOs, gravureOrders as initOrders,
@@ -98,11 +99,24 @@ export default function GravureWorkOrderPage() {
   const [form,      setForm]     = useState<Omit<GravureWorkOrder, "id" | "workOrderNo">>(blankWO);
   const [replanOpen, setReplan]  = useState(false);
   const [deleteId,  setDeleteId] = useState<string | null>(null);
-  const [modalTab,  setModalTab] = useState<"basic" | "planning" | "operator">("basic");
+  const [modalTab,  setModalTab] = useState<"basic" | "planning" | "material">("basic");
   const [showPlan,      setShowPlan]      = useState(false);
   const [isPlanApplied, setIsPlanApplied] = useState(false);
   const [planSearch,    setPlanSearch]    = useState("");
   const [planSort,      setPlanSort]      = useState<{ key: string; dir: "asc" | "desc" }>({ key: "", dir: "asc" });
+
+  // ── Film Requisition ────────────────────────────────────────
+  type FilmRequisition = {
+    source: "Extrusion" | "Purchase" | "";
+    status: "Pending" | "Requested" | "Available";
+    requiredDate?: string;
+    spec?: string;
+    priority?: string;
+    vendor?: string;
+    expectedRate?: number;
+    remarks?: string;
+  };
+  const [filmReqs, setFilmReqs] = useState<FilmRequisition[]>([]);
 
   // ── View Plan ─────────────────────────────────────────────
   const [viewPlanWO, setViewPlanWO]   = useState<GravureWorkOrder | null>(null);
@@ -391,6 +405,7 @@ export default function GravureWorkOrderPage() {
     });
     setModalTab("basic");
     setShowPlan(false); setIsPlanApplied(false);
+    setFilmReqs([]);
     setModal(true);
   };
 
@@ -410,6 +425,7 @@ export default function GravureWorkOrderPage() {
     setForm({ ...wo });
     setModalTab("basic");
     setShowPlan(false); setIsPlanApplied(false);
+    setFilmReqs([]);
     setModal(true);
   };
 
@@ -457,10 +473,10 @@ export default function GravureWorkOrderPage() {
     <div className="space-y-4">
       {/* Modal tabs */}
       <div className="flex bg-gray-100 p-1 rounded-xl gap-1">
-        {(["basic", "planning"] as const).map(t => (
+        {(["basic", "planning", "material"] as const).map(t => (
           <button key={t} onClick={() => setModalTab(t)}
-            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all capitalize ${modalTab === t ? "bg-white shadow text-purple-700" : "text-gray-500 hover:text-gray-700"}`}>
-            {t === "basic" ? "1. Basic Info" : "2. Planning"}
+            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${modalTab === t ? "bg-white shadow text-purple-700" : "text-gray-500 hover:text-gray-700"}`}>
+            {t === "basic" ? "1. Basic Info" : t === "planning" ? "2. Planning" : "3. Film Req."}
           </button>
         ))}
       </div>
@@ -1068,6 +1084,178 @@ export default function GravureWorkOrderPage() {
 
           <div className="flex justify-between">
             <Button variant="secondary" onClick={() => setModalTab("basic")}>← Back</Button>
+            <Button onClick={() => setModalTab("material")}>Next: Film Req. <ChevronRight size={14} className="ml-1" /></Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tab 3: Film Requisition ── */}
+      {modalTab === "material" && (
+        <div className="space-y-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-2">
+            <Package size={14} className="text-blue-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-xs font-bold text-blue-800">Film & Material Requisition</p>
+              <p className="text-xs text-blue-700 mt-0.5">Select source for each ply — request from Extrusion Unit (internal) or raise a Purchase Request (external vendor).</p>
+            </div>
+          </div>
+
+          {form.secondaryLayers.length === 0 ? (
+            <div className="flex flex-col items-center py-12 text-gray-400">
+              <Package size={36} className="mb-3 opacity-30" />
+              <p className="text-sm font-medium text-gray-500">No plys configured</p>
+              <p className="text-xs mt-1">Go to Planning tab to add ply layers first.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {form.secondaryLayers.map((l, idx) => {
+                const req: FilmRequisition = filmReqs[idx] ?? { source: "", status: "Pending" };
+                const reqSQM  = form.quantity * ((form.jobWidth || 0) / 1000);
+                const reqWt   = l.gsm > 0 ? parseFloat(((l.gsm / 1000) * reqSQM * 1.03).toFixed(3)) : 0;
+                const setReq  = (patch: Partial<FilmRequisition>) =>
+                  setFilmReqs(prev => {
+                    const next = [...prev];
+                    next[idx]  = { ...(next[idx] ?? { source: "", status: "Pending" }), ...patch };
+                    return next;
+                  });
+                const plyColor =
+                  l.plyType === "Film"       ? { hdr: "bg-blue-50 border-blue-100",   badge: "bg-blue-100 text-blue-700 border-blue-200"   } :
+                  l.plyType === "Printing"   ? { hdr: "bg-indigo-50 border-indigo-100", badge: "bg-indigo-100 text-indigo-700 border-indigo-200" } :
+                  l.plyType === "Lamination" ? { hdr: "bg-orange-50 border-orange-100", badge: "bg-orange-100 text-orange-700 border-orange-200" } :
+                                               { hdr: "bg-green-50 border-green-100",   badge: "bg-green-100 text-green-700 border-green-200"   };
+                return (
+                  <div key={l.id} className="bg-white border-2 border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+                    {/* Ply header */}
+                    <div className={`flex items-center justify-between px-4 py-2.5 border-b ${plyColor.hdr}`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-gray-800">Ply {idx + 1} — {l.itemSubGroup || "No film selected"}</span>
+                        {l.plyType && <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${plyColor.badge}`}>{l.plyType}</span>}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-gray-600">
+                        <span>GSM: <strong>{l.gsm || "—"}</strong></span>
+                        <span>Thick: <strong>{l.thickness || "—"}μ</strong></span>
+                        {reqWt > 0 && <span className="font-bold text-blue-700">~{reqWt} Kg</span>}
+                        {req.source && (
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            req.status === "Available" ? "bg-green-50 text-green-700 border-green-200" :
+                            req.status === "Requested" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                            "bg-gray-50 text-gray-500 border-gray-200"
+                          }`}>● {req.status}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="p-4 space-y-3">
+                      {/* Source selection */}
+                      <div>
+                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Select Source *</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button onClick={() => setReq({ source: "Extrusion", status: "Pending" })}
+                            className={`py-3 px-4 rounded-xl border-2 text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                              req.source === "Extrusion" ? "bg-teal-600 text-white border-teal-600 shadow-md" : "bg-white text-teal-700 border-teal-200 hover:border-teal-400"
+                            }`}>
+                            <Factory size={14} /> Extrusion Unit
+                            <span className={`text-[10px] ${req.source === "Extrusion" ? "text-teal-100" : "text-gray-400"}`}>(Internal)</span>
+                          </button>
+                          <button onClick={() => setReq({ source: "Purchase", status: "Pending" })}
+                            className={`py-3 px-4 rounded-xl border-2 text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                              req.source === "Purchase" ? "bg-blue-600 text-white border-blue-600 shadow-md" : "bg-white text-blue-700 border-blue-200 hover:border-blue-400"
+                            }`}>
+                            <ShoppingCart size={14} /> Purchase Request
+                            <span className={`text-[10px] ${req.source === "Purchase" ? "text-blue-100" : "text-gray-400"}`}>(External)</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {req.source && (
+                        <>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Required Qty</p>
+                              <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-xl text-sm font-bold text-blue-700">{reqWt > 0 ? `${reqWt} Kg` : "—"}</div>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Film Type</p>
+                              <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-medium">{l.itemSubGroup || "—"}</div>
+                            </div>
+                            <Input label="Required By" type="date" value={req.requiredDate || form.plannedDate || ""}
+                              onChange={e => setReq({ requiredDate: e.target.value })} />
+                          </div>
+
+                          {req.source === "Extrusion" && (
+                            <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 space-y-2">
+                              <p className="text-[10px] font-bold text-teal-800 uppercase tracking-widest">Extrusion Request Details</p>
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input label="Film Specification" value={req.spec ?? `${l.itemSubGroup || ""}${l.thickness ? ` ${l.thickness}μ` : ""}`}
+                                  onChange={e => setReq({ spec: e.target.value })} />
+                                <Select label="Priority" value={req.priority ?? "Normal"}
+                                  onChange={e => setReq({ priority: e.target.value })}
+                                  options={[{ value: "Normal", label: "Normal" }, { value: "Urgent", label: "Urgent" }, { value: "Critical", label: "Critical" }]} />
+                              </div>
+                            </div>
+                          )}
+
+                          {req.source === "Purchase" && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 space-y-2">
+                              <p className="text-[10px] font-bold text-blue-800 uppercase tracking-widest">Purchase Request Details</p>
+                              <div className="grid grid-cols-2 gap-2">
+                                <Input label="Preferred Vendor" value={req.vendor ?? ""}
+                                  onChange={e => setReq({ vendor: e.target.value })} placeholder="Vendor name…" />
+                                <Input label="Expected Rate (₹/Kg)" type="number" value={req.expectedRate ?? ""}
+                                  onChange={e => setReq({ expectedRate: Number(e.target.value) })} />
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex items-end gap-2">
+                            <div className="flex-1">
+                              <Input label="Remarks" value={req.remarks ?? ""}
+                                onChange={e => setReq({ remarks: e.target.value })} placeholder="Special instructions…" />
+                            </div>
+                            <button onClick={() => setReq({ status: req.status === "Requested" ? "Pending" : "Requested" })}
+                              className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl border transition-all whitespace-nowrap ${
+                                req.status === "Requested"
+                                  ? "bg-green-100 text-green-700 border-green-300"
+                                  : "bg-purple-700 text-white border-purple-700 hover:bg-purple-800"
+                              }`}>
+                              <Send size={11} />
+                              {req.status === "Requested" ? "✓ Sent" : req.source === "Extrusion" ? "Send to Extrusion" : "Raise PR"}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Summary */}
+          {form.secondaryLayers.length > 0 && filmReqs.some(r => r?.source) && (
+            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-indigo-800 uppercase tracking-widest mb-1.5">Requisition Summary</p>
+                <div className="flex gap-2 flex-wrap">
+                  <span className="px-2.5 py-1 bg-teal-100 text-teal-700 rounded-full border border-teal-200 text-xs font-semibold">
+                    {filmReqs.filter(r => r?.source === "Extrusion").length} → Extrusion
+                  </span>
+                  <span className="px-2.5 py-1 bg-blue-100 text-blue-700 rounded-full border border-blue-200 text-xs font-semibold">
+                    {filmReqs.filter(r => r?.source === "Purchase").length} → Purchase
+                  </span>
+                  <span className="px-2.5 py-1 bg-green-100 text-green-700 rounded-full border border-green-200 text-xs font-semibold">
+                    {filmReqs.filter(r => r?.status === "Requested").length}/{form.secondaryLayers.length} Sent
+                  </span>
+                </div>
+              </div>
+              <button onClick={() => setFilmReqs(prev => prev.map(r => r?.source ? { ...r, status: "Requested" } : r))}
+                className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold bg-indigo-700 text-white rounded-xl hover:bg-indigo-800 transition-colors">
+                <Send size={13} /> Send All Requests
+              </button>
+            </div>
+          )}
+
+          <div className="flex justify-between">
+            <Button variant="secondary" onClick={() => setModalTab("planning")}>← Back</Button>
             <Button icon={<Printer size={14} />} onClick={save}>{editing ? "Update Work Order" : "Create Work Order"}</Button>
           </div>
         </div>
