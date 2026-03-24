@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Plus, Eye, Pencil, Trash2, ArrowRight, Layers } from "lucide-react";
 import { gravureEnquiries as initData, customers, GravureEnquiry } from "@/data/dummyData";
+import { generateCode, UNIT_CODE, MODULE_CODE } from "@/lib/generateCode";
 import { DataTable, Column } from "@/components/tables/DataTable";
 import { statusBadge } from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
@@ -51,8 +52,9 @@ export default function GravureEnquiryPage() {
     if (editing) {
       setData(d => d.map(r => r.id === editing.id ? { ...form, id: editing.id, enquiryNo: editing.enquiryNo } : r));
     } else {
-      const n = data.length + 1;
-      setData(d => [...d, { ...form, id: `GE${String(n + 10).padStart(3, "0")}`, enquiryNo: `GRV-ENQ-2024-${String(n + 5).padStart(3, "0")}` }]);
+      const enquiryNo = generateCode(UNIT_CODE.Gravure, MODULE_CODE.Enquiry, data.map(d => d.enquiryNo));
+      const id = `GE${String(data.length + 11).padStart(3, "0")}`;
+      setData(d => [...d, { ...form, id, enquiryNo }]);
     }
     setModal(false);
   };
@@ -126,6 +128,20 @@ export default function GravureEnquiryPage() {
 
       {/* Add / Edit Modal */}
       <Modal open={modalOpen} onClose={() => setModal(false)} title={editing ? "Edit Enquiry" : "New Gravure Enquiry"} size="xl">
+        {/* Enquiry No badge */}
+        <div className="flex items-center gap-3 mb-4 pb-3 border-b border-gray-100">
+          <div>
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Enquiry No</p>
+            <div className="flex items-center gap-2">
+              <span className="font-mono font-bold text-blue-700 text-sm bg-blue-50 border border-blue-200 rounded-lg px-3 py-1">
+                {editing ? editing.enquiryNo : generateCode(UNIT_CODE.Gravure, MODULE_CODE.Enquiry, data.map(d => d.enquiryNo))}
+              </span>
+              {!editing && (
+                <span className="px-2 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded-full uppercase">AUTO</span>
+              )}
+            </div>
+          </div>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <Input label="Date" type="date" value={form.date} onChange={e => f("date", e.target.value)} />
           <Select
