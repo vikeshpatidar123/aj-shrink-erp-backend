@@ -100,6 +100,7 @@ export default function GravureWorkOrderPage() {
   const [replanOpen, setReplan]  = useState(false);
   const [deleteId,  setDeleteId] = useState<string | null>(null);
   const [modalTab,  setModalTab] = useState<"basic" | "planning" | "material">("basic");
+  const [pendingWOCategoryId, setPendingWOCategoryId] = useState<string | null>(null);
   const [showPlan,      setShowPlan]      = useState(false);
   const [isPlanApplied, setIsPlanApplied] = useState(false);
   const [planSearch,    setPlanSearch]    = useState("");
@@ -307,6 +308,25 @@ export default function GravureWorkOrderPage() {
       }
       return next;
     });
+
+  // ── Auto-build plys from category (same as Estimation) ──────
+  const applyWOCategory = (categoryId: string) => {
+    const cat = categories.find(c => c.id === categoryId);
+    const plyOrder = ["Film", "Printing", "Lamination", "Coating"];
+    const usedTypes = new Set((cat?.plyConsumables || []).map(pc => pc.plyType));
+    const autoTypes = plyOrder.filter(pt => pt === "Film" || usedTypes.has(pt));
+    const autoLayers: SecondaryLayer[] = autoTypes.map((plyType, i) => {
+      const consumableItems: PlyConsumableItem[] = (cat?.plyConsumables || [])
+        .filter(pc => pc.plyType === plyType)
+        .map(pc => ({
+          consumableId: pc.id, fieldDisplayName: pc.fieldDisplayName,
+          itemGroup: pc.itemGroup, itemSubGroup: pc.itemSubGroup,
+          itemId: "", itemName: "", gsm: pc.defaultValue, rate: 0,
+        }));
+      return { id: Math.random().toString(), layerNo: i + 1, plyType, itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems };
+    });
+    setForm(p => ({ ...p, categoryId, categoryName: cat?.name || "", content: "", secondaryLayers: autoLayers }));
+  };
 
   // ── Ply helpers ─────────────────────────────────────────────
   const getCategoryConsumables = (categoryId: string, plyType: string): CategoryPlyConsumable[] => {
@@ -573,25 +593,10 @@ export default function GravureWorkOrderPage() {
               {form.sourceOrderType === "Direct" ? (
                 <Select label="Category *" value={form.categoryId}
                   onChange={e => {
-                    const cat = categories.find(c => c.id === e.target.value);
-                    if (cat) {
-                      setForm(p => ({
-                        ...p,
-                        categoryId: cat.id,
-                        categoryName: cat.name,
-                        // reset secondaryLayers with 1 empty ply slot (user adjusts count via No. of Plys)
-                        secondaryLayers: Array.from({ length: 1 }, (_, i) => ({
-                          id: Math.random().toString(),
-                          layerNo: i + 1,
-                          plyType: "",
-                          itemSubGroup: "",
-                          density: 0, thickness: 0, gsm: 0,
-                          consumableItems: [],
-                        } as SecondaryLayer)),
-                      }));
-                    } else {
-                      setForm(p => ({ ...p, categoryId: "", categoryName: "", secondaryLayers: [] }));
-                    }
+                    if (!e.target.value) { setForm(p => ({ ...p, categoryId: "", categoryName: "", secondaryLayers: [] })); return; }
+                    const hasPlys = form.secondaryLayers.some(l => l.plyType || l.consumableItems.length > 0);
+                    if (hasPlys) { setPendingWOCategoryId(e.target.value); }
+                    else { applyWOCategory(e.target.value); }
                   }}
                   options={[{ value: "", label: "-- Select Category --" }, ...categories.map(c => ({ value: c.id, label: c.name }))]}
                 />
@@ -1867,6 +1872,22 @@ export default function GravureWorkOrderPage() {
           <div className="flex justify-between mt-4">
             <Button variant="secondary" onClick={() => setViewPlanWO(null)}>Close</Button>
             <Button icon={<BookMarked size={14} />} onClick={() => { setViewPlanWO(null); openSaveToCatalog(viewPlanWO); }}>Save to Catalog</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ CATEGORY CHANGE CONFIRM ══════════════════════════════ */}
+      {pendingWOCategoryId && (
+        <Modal open={!!pendingWOCategoryId} onClose={() => setPendingWOCategoryId(null)} title="Replace Ply Configuration?" size="sm">
+          <div className="space-y-3">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+              Ply details already added. Selecting a new category will <strong>reset your current ply configuration</strong> with the new category&apos;s default plys.
+            </div>
+            <p className="text-sm text-gray-600">Do you want to replace the ply details with the selected category?</p>
+            <div className="flex justify-end gap-3 mt-4">
+              <Button variant="secondary" onClick={() => setPendingWOCategoryId(null)}>No — Keep My Plys</Button>
+              <Button onClick={() => { applyWOCategory(pendingWOCategoryId!); setPendingWOCategoryId(null); }}>Yes — Reset Plys</Button>
+            </div>
           </div>
         </Modal>
       )}

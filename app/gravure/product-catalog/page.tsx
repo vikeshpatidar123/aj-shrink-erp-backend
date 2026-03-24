@@ -244,6 +244,26 @@ export default function ProductCatalogPage() {
     [replanAllPlans, replanSelPlanId]
   );
 
+  // ── Auto-build plys from category (same as Estimation) ──────
+  const [pendingReplanCategoryId, setPendingReplanCategoryId] = useState<string | null>(null);
+  const applyReplanCategory = (categoryId: string) => {
+    const cat = categories.find(c => c.id === categoryId);
+    const plyOrder = ["Film", "Printing", "Lamination", "Coating"];
+    const usedTypes = new Set((cat?.plyConsumables || []).map(pc => pc.plyType));
+    const autoTypes = plyOrder.filter(pt => pt === "Film" || usedTypes.has(pt));
+    const autoLayers: SecondaryLayer[] = autoTypes.map((plyType, i) => {
+      const consumableItems: PlyConsumableItem[] = (cat?.plyConsumables || [])
+        .filter(pc => pc.plyType === plyType)
+        .map(pc => ({
+          consumableId: pc.id, fieldDisplayName: pc.fieldDisplayName,
+          itemGroup: pc.itemGroup, itemSubGroup: pc.itemSubGroup,
+          itemId: "", itemName: "", gsm: pc.defaultValue, rate: 0,
+        }));
+      return { id: Math.random().toString(), layerNo: i + 1, plyType, itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems };
+    });
+    setReplanForm(p => p ? { ...p, categoryId, categoryName: cat?.name || "", secondaryLayers: autoLayers } : p);
+  };
+
   const initCatalogPrepData = (rf: GravureProductCatalog) => {
     const n = rf.noOfColors || 0;
     setCatalogColorShades(Array.from({ length: n }, (_, i) => ({
@@ -747,6 +767,29 @@ export default function ProductCatalogPage() {
                   <Select label="Unit" value={replanForm.standardUnit}
                     onChange={e => rf("standardUnit", e.target.value)}
                     options={[{ value: "Meter", label: "Meter" }, { value: "Kg", label: "Kg" }]} />
+                  {/* Category — auto-fills ply configuration */}
+                  <div className="sm:col-span-2 lg:col-span-1">
+                    <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Category (Auto-fill Plys)</label>
+                    <select
+                      className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                      value={replanForm.categoryId || ""}
+                      onChange={e => {
+                        if (!e.target.value) { setReplanForm(p => p ? { ...p, categoryId: "", categoryName: "" } : p); return; }
+                        const hasPlys = replanForm.secondaryLayers.some(l => l.plyType || l.consumableItems.length > 0);
+                        if (hasPlys) { setPendingReplanCategoryId(e.target.value); }
+                        else { applyReplanCategory(e.target.value); }
+                      }}>
+                      <option value="">-- Select Category --</option>
+                      {categories.filter(c => c.status === "Active").map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    {replanForm.categoryName && (
+                      <p className="text-[10px] text-purple-600 mt-1 flex items-center gap-1">
+                        <Check size={10} /> {replanForm.categoryName} — {replanForm.secondaryLayers.length} plys auto-loaded
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <Textarea label="Remarks" value={replanForm.remarks}
                   onChange={e => rf("remarks", e.target.value)} placeholder="Special notes…" />
@@ -1610,6 +1653,22 @@ export default function ProductCatalogPage() {
               Use in Order
             </Button>
             <Button variant="secondary" onClick={() => setViewPlanRow(null)}>Close</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ CATEGORY CHANGE CONFIRM ═══════════════════════════════ */}
+      {pendingReplanCategoryId && (
+        <Modal open={!!pendingReplanCategoryId} onClose={() => setPendingReplanCategoryId(null)} title="Replace Ply Configuration?" size="sm">
+          <div className="space-y-3">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+              Ply details already added. Selecting a new category will <strong>reset your current ply configuration</strong> with the new category&apos;s default plys.
+            </div>
+            <p className="text-sm text-gray-600">Do you want to replace the ply details with the selected category?</p>
+            <div className="flex justify-end gap-3 mt-4">
+              <Button variant="secondary" onClick={() => setPendingReplanCategoryId(null)}>No — Keep My Plys</Button>
+              <Button onClick={() => { applyReplanCategory(pendingReplanCategoryId!); setPendingReplanCategoryId(null); }}>Yes — Reset Plys</Button>
+            </div>
           </div>
         </Modal>
       )}
