@@ -70,6 +70,7 @@ const blankForm = (): FormState => ({
   totalMeterRun: 0, wasteMeter: 0, netMeter: 0,
   noOfColors: 0, cylinderCode: "", impressionCount: 0,
   materialLines: [],
+  inkRows: [],
   processEntries: [],
   substrate: "", rollNo: "",
   inkConsumption: 0,
