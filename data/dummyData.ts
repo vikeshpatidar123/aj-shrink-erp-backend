@@ -2245,6 +2245,18 @@ export type MaterialConsumptionLine = {
   unit: string; variance: number;
 };
 
+export type InkMixRow = {
+  colorNo: number;
+  colorName: string;
+  inkItemName: string;
+  inkUsed: number;
+  solventItemName: string;
+  solventUsed: number;
+  ratio: string;
+  viscosity: number;
+  isManualSolvent: boolean;
+};
+
 export type ProductionProcessEntry = {
   id: string; processName: string;
   startTime: string; endTime: string;
@@ -2276,6 +2288,7 @@ export type GravureProductionEntry = {
   // Detail grids
   materialLines: MaterialConsumptionLine[];
   processEntries: ProductionProcessEntry[];
+  inkRows: InkMixRow[];
   // Legacy / quality
   substrate: string; rollNo: string;
   inkConsumption: number;
@@ -2652,6 +2665,12 @@ export const gravureProductionEntries: GravureProductionEntry[] = [
     processEntries: [
       { id: "P1", processName: "Printing", startTime: "07:00", endTime: "14:30", outputQty: 45000, wastageQty: 1800, remarks: "All 8 colors registered OK" },
     ],
+    inkRows: [
+      { colorNo: 1, colorName: "Cyan",    inkItemName: "Cyan Gravure Ink (PU)",    inkUsed: 4.2, solventItemName: "Ethyl Acetate (EA)", solventUsed: 1.8, ratio: "70:30", viscosity: 18, isManualSolvent: false },
+      { colorNo: 2, colorName: "Magenta", inkItemName: "Magenta Gravure Ink (PU)", inkUsed: 3.8, solventItemName: "Ethyl Acetate (EA)", solventUsed: 1.6, ratio: "70:30", viscosity: 17, isManualSolvent: false },
+      { colorNo: 3, colorName: "Yellow",  inkItemName: "Yellow Gravure Ink (PU)",  inkUsed: 4.0, solventItemName: "Ethyl Acetate (EA)", solventUsed: 1.7, ratio: "70:30", viscosity: 18, isManualSolvent: false },
+      { colorNo: 4, colorName: "Black",   inkItemName: "Black Gravure Ink (PU)",   inkUsed: 3.5, solventItemName: "Ethyl Acetate (EA)", solventUsed: 1.5, ratio: "70:30", viscosity: 19, isManualSolvent: false },
+    ],
   },
   {
     id: "GPE002", entryNo: "GRV-PROD-2024-002", date: "2024-03-10",
@@ -2675,6 +2694,7 @@ export const gravureProductionEntries: GravureProductionEntry[] = [
     processEntries: [
       { id: "P1", processName: "Printing", startTime: "07:00", endTime: "15:00", outputQty: 48000, wastageQty: 1440, remarks: "" },
     ],
+    inkRows: [],
   },
   {
     id: "GPE003", entryNo: "GRV-PROD-2024-003", date: "2024-03-11",
@@ -2697,6 +2717,9 @@ export const gravureProductionEntries: GravureProductionEntry[] = [
     ],
     processEntries: [
       { id: "P1", processName: "Printing", startTime: "15:00", endTime: "23:00", outputQty: 42000, wastageQty: 2100, remarks: "Ink pause at 17:30. Viscosity corrected." },
+    ],
+    inkRows: [
+      { colorNo: 1, colorName: "Yellow", inkItemName: "Yellow Gravure Ink (PU)", inkUsed: 4.5, solventItemName: "Ethyl Acetate (EA)", solventUsed: 2.0, ratio: "68:32", viscosity: 22, isManualSolvent: true },
     ],
   },
   {
@@ -2721,6 +2744,7 @@ export const gravureProductionEntries: GravureProductionEntry[] = [
     processEntries: [
       { id: "P1", processName: "Printing", startTime: "07:00", endTime: "15:00", outputQty: 52000, wastageQty: 1560, remarks: "Best run of the batch. Speed increased." },
     ],
+    inkRows: [],
   },
 ];
 

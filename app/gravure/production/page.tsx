@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import {
   Plus, Eye, Pencil, Trash2, PlayCircle,
   Play, Pause, Square, RotateCcw,
-  Gauge, BarChart2, Package, Layers, FileText, Clock,
+  Gauge, BarChart2, Package, Layers, FileText, Clock, Droplets,
 } from "lucide-react";
 import {
   gravureProductionEntries as initData,
@@ -12,7 +12,20 @@ import {
   GravureProductionEntry,
   MaterialConsumptionLine,
   ProductionProcessEntry,
+  InkMixRow,
 } from "@/data/dummyData";
+
+// ─── INK-SOLVENT HELPERS ──────────────────────────────────────
+function parseRatio(ratio: string): { inkPart: number; solventPart: number } | null {
+  const parts = ratio.split(":").map(s => Number(s.trim()));
+  if (parts.length !== 2 || parts.some(isNaN) || parts[0] <= 0) return null;
+  return { inkPart: parts[0], solventPart: parts[1] };
+}
+function calcSolvent(inkUsed: number, ratio: string): number {
+  const r = parseRatio(ratio);
+  if (!r) return 0;
+  return parseFloat(((inkUsed * r.solventPart) / r.inkPart).toFixed(3));
+}
 import { generateCode, UNIT_CODE, MODULE_CODE } from "@/lib/generateCode";
 import { DataTable, Column } from "@/components/tables/DataTable";
 import Button from "@/components/ui/Button";
@@ -45,6 +58,7 @@ const TABS = [
   { id: "machine",  label: "Machine Control",      icon: Gauge },
   { id: "output",   label: "Production Output",    icon: BarChart2 },
   { id: "material", label: "Material Consumption", icon: Package },
+  { id: "inkMix",   label: "Ink Mixing",           icon: Droplets },
   { id: "process",  label: "Process Entry",        icon: Layers },
   { id: "summary",  label: "Summary",              icon: FileText },
 ] as const;
@@ -70,6 +84,7 @@ const blankForm = (): FormState => ({
   totalMeterRun: 0, wasteMeter: 0, netMeter: 0,
   noOfColors: 0, cylinderCode: "", impressionCount: 0,
   materialLines: [],
+  inkRows: [],
   processEntries: [],
   substrate: "", rollNo: "",
   inkConsumption: 0,
@@ -127,6 +142,14 @@ export default function GravureProductionPage() {
           startTime: "", endTime: "", outputQty: 0, wastageQty: 0, remarks: "",
         }))
       : [{ id: "1", processName: "Printing", startTime: "", endTime: "", outputQty: 0, wastageQty: 0, remarks: "" }];
+    const colors = wo.noOfColors > 0
+      ? Array.from({ length: wo.noOfColors }, (_, ci) => ({
+          colorNo: ci + 1, colorName: `Color ${ci + 1}`,
+          inkItemName: "Gravure Ink", inkUsed: 0,
+          solventItemName: "Ethyl Acetate (EA)", solventUsed: 0,
+          ratio: "70:30", viscosity: 0, isManualSolvent: false,
+        }))
+      : [];
     setForm(p => ({
       ...p,
       workOrderId: wo.id, workOrderNo: wo.workOrderNo,
@@ -135,7 +158,7 @@ export default function GravureProductionPage() {
       operatorName: wo.operatorName, substrate: wo.substrate,
       noOfColors: wo.noOfColors, cylinderCode: wo.cylinderSet || "",
       totalMeterRun: wo.quantity,
-      materialLines: mats, processEntries: procs,
+      materialLines: mats, inkRows: colors, processEntries: procs,
     }));
   };
 
@@ -156,6 +179,26 @@ export default function GravureProductionPage() {
     });
   const addMat    = () => setForm(p => ({ ...p, materialLines: [...p.materialLines, { itemId: "", itemName: "", itemType: "Other", plannedQty: 0, actualQty: 0, unit: "Kg", variance: 0 }] }));
   const removeMat = (i: number) => setForm(p => ({ ...p, materialLines: p.materialLines.filter((_, x) => x !== i) }));
+
+  // ── ink mix helpers
+  const blankInkRow = (colorNo: number): InkMixRow => ({
+    colorNo, colorName: "", inkItemName: "", inkUsed: 0,
+    solventItemName: "Ethyl Acetate (EA)", solventUsed: 0,
+    ratio: "70:30", viscosity: 0, isManualSolvent: false,
+  });
+  const addInkRow = () => setForm(p => ({ ...p, inkRows: [...p.inkRows, blankInkRow(p.inkRows.length + 1)] }));
+  const removeInkRow = (i: number) => setForm(p => ({ ...p, inkRows: p.inkRows.filter((_, x) => x !== i) }));
+  const updateInkRow = (i: number, patch: Partial<InkMixRow>) =>
+    setForm(p => {
+      const rows = [...p.inkRows];
+      const updated = { ...rows[i], ...patch };
+      // auto-recalc solvent unless user has manually overridden
+      if (!updated.isManualSolvent && (patch.inkUsed !== undefined || patch.ratio !== undefined)) {
+        updated.solventUsed = calcSolvent(updated.inkUsed, updated.ratio);
+      }
+      rows[i] = updated;
+      return { ...p, inkRows: rows };
+    });
 
   // ── process helpers
   const updateProc = (i: number, k: keyof ProductionProcessEntry, v: string | number) =>
@@ -581,7 +624,172 @@ export default function GravureProductionPage() {
           </div>
         )}
 
-        {/* ── TAB 4: Process Entry ── */}
+        {/* ── TAB 4: Ink Mixing ── */}
+        {activeTab === "inkMix" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                  <Droplets size={14} className="text-blue-500" /> Ink-Solvent Mixing per Color
+                </h4>
+                <p className="text-xs text-gray-400 mt-0.5">Solvent = (Ink Used × Solvent Part) ÷ Ink Part</p>
+              </div>
+              <Button size="sm" icon={<Plus size={13} />} onClick={addInkRow}>Add Color</Button>
+            </div>
+
+            {form.inkRows.length === 0 && (
+              <div className="text-center text-gray-400 py-10 text-xs border border-dashed border-gray-200 rounded-xl">
+                No colors added. Select a Work Order to auto-load, or click "Add Color".
+              </div>
+            )}
+
+            <div className="overflow-x-auto rounded-xl border border-gray-200">
+              {form.inkRows.length > 0 && (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 text-xs font-medium text-gray-600 border-b">
+                      <th className="text-left p-2.5 w-8">#</th>
+                      <th className="text-left p-2.5">Color Name</th>
+                      <th className="text-left p-2.5">Ink Item</th>
+                      <th className="text-right p-2.5">Ink Used (Kg)</th>
+                      <th className="text-left p-2.5 w-24">Ratio (Ink:Sol)</th>
+                      <th className="text-left p-2.5">Solvent Item</th>
+                      <th className="text-right p-2.5">Solvent Used (Kg)</th>
+                      <th className="text-right p-2.5 w-20">Viscosity</th>
+                      <th className="p-2.5 w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {form.inkRows.map((row, i) => (
+                      <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 align-top">
+                        <td className="p-1.5 text-center text-xs text-gray-400 pt-3">{row.colorNo}</td>
+                        <td className="p-1.5">
+                          <input
+                            className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-purple-400"
+                            value={row.colorName}
+                            onChange={e => updateInkRow(i, { colorName: e.target.value })}
+                            placeholder="e.g. Cyan"
+                          />
+                        </td>
+                        <td className="p-1.5">
+                          <input
+                            className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-purple-400"
+                            value={row.inkItemName}
+                            onChange={e => updateInkRow(i, { inkItemName: e.target.value })}
+                            placeholder="Ink item name"
+                          />
+                        </td>
+                        <td className="p-1.5">
+                          <input
+                            type="number" step="0.001" min="0"
+                            className="w-20 border border-gray-200 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-1 focus:ring-purple-400"
+                            value={row.inkUsed}
+                            onChange={e => updateInkRow(i, { inkUsed: Number(e.target.value) })}
+                          />
+                        </td>
+                        <td className="p-1.5">
+                          <input
+                            className="w-20 border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-purple-400"
+                            value={row.ratio}
+                            onChange={e => updateInkRow(i, { ratio: e.target.value })}
+                            placeholder="70:30"
+                          />
+                          {parseRatio(row.ratio) === null && row.ratio && (
+                            <p className="text-xs text-red-500 mt-0.5">Invalid format</p>
+                          )}
+                        </td>
+                        <td className="p-1.5">
+                          <input
+                            className="w-full border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-purple-400"
+                            value={row.solventItemName}
+                            onChange={e => updateInkRow(i, { solventItemName: e.target.value })}
+                            placeholder="Solvent item"
+                          />
+                        </td>
+                        <td className="p-1.5">
+                          <input
+                            type="number" step="0.001" min="0"
+                            className={`w-20 border rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-1 focus:ring-purple-400 ${
+                              row.isManualSolvent ? "border-amber-300 bg-amber-50" : "border-gray-200"
+                            }`}
+                            value={row.solventUsed}
+                            onChange={e => updateInkRow(i, { solventUsed: Number(e.target.value), isManualSolvent: true })}
+                          />
+                          {!row.isManualSolvent && row.inkUsed > 0 && (
+                            <p className="text-xs text-blue-500 mt-0.5">Auto ({row.ratio})</p>
+                          )}
+                          {row.isManualSolvent && (
+                            <button
+                              className="text-xs text-amber-600 hover:text-amber-800 mt-0.5 underline"
+                              onClick={() => updateInkRow(i, { isManualSolvent: false, solventUsed: calcSolvent(row.inkUsed, row.ratio) })}
+                            >
+                              Reset to auto
+                            </button>
+                          )}
+                        </td>
+                        <td className="p-1.5">
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number" min="0"
+                              className="w-16 border border-gray-200 rounded px-2 py-1 text-xs text-right focus:outline-none"
+                              value={row.viscosity}
+                              onChange={e => updateInkRow(i, { viscosity: Number(e.target.value) })}
+                            />
+                            <span className="text-xs text-gray-400">s</span>
+                          </div>
+                        </td>
+                        <td className="p-1.5 text-center pt-3">
+                          <button onClick={() => removeInkRow(i)} className="text-red-400 hover:text-red-600">
+                            <Trash2 size={13} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-gray-50 text-xs font-semibold text-gray-700 border-t">
+                      <td colSpan={3} className="p-2.5">Totals</td>
+                      <td className="p-2.5 text-right text-blue-700">
+                        {form.inkRows.reduce((s, r) => s + r.inkUsed, 0).toFixed(3)} Kg
+                      </td>
+                      <td colSpan={2}></td>
+                      <td className="p-2.5 text-right text-purple-700">
+                        {form.inkRows.reduce((s, r) => s + r.solventUsed, 0).toFixed(3)} Kg
+                      </td>
+                      <td colSpan={2}></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+
+            {/* Summary cards */}
+            {form.inkRows.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                  <p className="text-xs text-blue-600">Total Ink Used</p>
+                  <p className="text-lg font-bold text-blue-700">
+                    {form.inkRows.reduce((s, r) => s + r.inkUsed, 0).toFixed(3)} Kg
+                  </p>
+                </div>
+                <div className="bg-purple-50 border border-purple-200 rounded-xl p-3">
+                  <p className="text-xs text-purple-600">Total Solvent Used</p>
+                  <p className="text-lg font-bold text-purple-700">
+                    {form.inkRows.reduce((s, r) => s + r.solventUsed, 0).toFixed(3)} Kg
+                  </p>
+                </div>
+                <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                  <p className="text-xs text-green-600">Total Ink+Solvent</p>
+                  <p className="text-lg font-bold text-green-700">
+                    {form.inkRows.reduce((s, r) => s + r.inkUsed + r.solventUsed, 0).toFixed(3)} Kg
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB 5: Process Entry ── */}
         {activeTab === "process" && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -727,6 +935,41 @@ export default function GravureProductionPage() {
                           {m.variance > 0 ? "+" : ""}{m.variance.toFixed(1)}
                         </td>
                         <td className="pl-2 text-gray-500">{m.unit}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Ink Mixing */}
+            {form.inkRows.length > 0 && (
+              <div className="bg-gray-50 rounded-xl border p-4">
+                <p className="text-xs font-semibold text-gray-400 uppercase mb-3">Ink-Solvent Mixing</p>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-gray-500 border-b">
+                      <th className="text-left pb-2">#</th>
+                      <th className="text-left pb-2">Color</th>
+                      <th className="text-left pb-2">Ink Item</th>
+                      <th className="text-right pb-2">Ink (Kg)</th>
+                      <th className="text-left pb-2 pl-2">Ratio</th>
+                      <th className="text-right pb-2">Solvent (Kg)</th>
+                      <th className="text-right pb-2">Viscosity</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {form.inkRows.map((r, i) => (
+                      <tr key={i} className="border-b border-gray-100">
+                        <td className="py-1.5">{r.colorNo}</td>
+                        <td className="py-1.5 font-medium">{r.colorName || `Color ${r.colorNo}`}</td>
+                        <td className="py-1.5 text-gray-600">{r.inkItemName || "—"}</td>
+                        <td className="text-right font-semibold text-blue-700">{r.inkUsed.toFixed(3)}</td>
+                        <td className="pl-2 text-gray-500">{r.ratio}</td>
+                        <td className={`text-right font-semibold ${r.isManualSolvent ? "text-amber-600" : "text-purple-700"}`}>
+                          {r.solventUsed.toFixed(3)}{r.isManualSolvent ? " ✎" : ""}
+                        </td>
+                        <td className="text-right text-gray-500">{r.viscosity > 0 ? `${r.viscosity}s` : "—"}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -25,6 +25,83 @@ import Modal     from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 
 const INK_COLORS = ["Cyan","Magenta","Yellow","Black","White","Red","Green","Blue","Orange","Gold","Silver","Violet","Brown","Pink"];
+
+// ─── COLOR QC — MODULAR FUNCTIONS ────────────────────────────────────────────
+
+/** 1. ΔE CIE 1976 */
+function calculateDeltaE(
+  stdL: string, stdA: string, stdB: string,
+  measL: string, measA: string, measB: string,
+): string {
+  if (!stdL || !stdA || !stdB || !measL || !measA || !measB) return "--";
+  const dL = Number(stdL) - Number(measL);
+  const da = Number(stdA) - Number(measA);
+  const db = Number(stdB) - Number(measB);
+  return Math.sqrt(dL * dL + da * da + db * db).toFixed(2);
+}
+
+/** 2. Individual channel deltas (std − meas) */
+type DeltaLAB = { dL: number; da: number; db: number } | null;
+function calculateDeltaLAB(
+  stdL: string, stdA: string, stdB: string,
+  measL: string, measA: string, measB: string,
+): DeltaLAB {
+  if (!stdL || !stdA || !stdB || !measL || !measA || !measB) return null;
+  return {
+    dL: parseFloat((Number(stdL) - Number(measL)).toFixed(2)),
+    da: parseFloat((Number(stdA) - Number(measA)).toFixed(2)),
+    db: parseFloat((Number(stdB) - Number(measB)).toFixed(2)),
+  };
+}
+
+/** 3. QC Status — strict threshold logic */
+type QCStatus = "PASS" | "WARNING" | "FAIL" | "NOT MEASURED";
+function getStatus(deltaE: string, tol: string): QCStatus {
+  if (deltaE === "--") return "NOT MEASURED";
+  const de = Number(deltaE), t = Number(tol) || 1;
+  if (de < t)                   return "PASS";
+  if (Math.abs(de - t) < 0.005) return "WARNING"; // de ≈ tolerance
+  return "FAIL";
+}
+
+/** 4. Severity level based on ΔE magnitude */
+type Severity = "Low" | "Medium" | "High";
+function getSeverity(deltaE: string): Severity | null {
+  if (deltaE === "--") return null;
+  const de = Number(deltaE);
+  if (de <= 1.0) return "Low";
+  if (de <= 3.0) return "Medium";
+  return "High";
+}
+
+/** 5. Priority-based color correction insights */
+type InsightEntry = { axis: string; val: number; suggestion: string; inkAdj: string; cls: string };
+type InsightResult = { primary: InsightEntry | null; secondary: InsightEntry[] };
+function getColorInsight(
+  stdL: string, stdA: string, stdB: string,
+  measL: string, measA: string, measB: string,
+): InsightResult {
+  const d = calculateDeltaLAB(stdL, stdA, stdB, measL, measA, measB);
+  if (!d) return { primary: null, secondary: [] };
+  const THR = 0.5;
+  // ΔL = std − meas: positive → measured darker; negative → measured lighter
+  const candidates: InsightEntry[] = [
+    d.dL > THR  ? { axis: "ΔL", val: d.dL, suggestion: "Too Dark",   inkAdj: `Reduce ink ~${Math.min(50, Math.round(Math.abs(d.dL) * 2))}%`,  cls: "text-slate-700  bg-slate-50  border-slate-300"  } : null,
+    d.dL < -THR ? { axis: "ΔL", val: d.dL, suggestion: "Too Light",  inkAdj: `Increase ink ~${Math.min(50, Math.round(Math.abs(d.dL) * 2))}%`, cls: "text-orange-700 bg-orange-50 border-orange-300" } : null,
+    d.da > THR  ? { axis: "Δa", val: d.da, suggestion: "Too Red",    inkAdj: "Add green pigment",  cls: "text-red-700   bg-red-50    border-red-300"    } : null,
+    d.da < -THR ? { axis: "Δa", val: d.da, suggestion: "Too Green",  inkAdj: "Add red pigment",    cls: "text-green-700 bg-green-50  border-green-300"  } : null,
+    d.db > THR  ? { axis: "Δb", val: d.db, suggestion: "Too Yellow", inkAdj: "Add blue pigment",   cls: "text-yellow-700 bg-yellow-50 border-yellow-300"} : null,
+    d.db < -THR ? { axis: "Δb", val: d.db, suggestion: "Too Blue",   inkAdj: "Add yellow pigment", cls: "text-blue-700  bg-blue-50   border-blue-300"   } : null,
+  ].filter(Boolean) as InsightEntry[];
+
+  if (candidates.length === 0) return { primary: null, secondary: [] };
+  candidates.sort((a, b) => Math.abs(b.val) - Math.abs(a.val));
+  const [primary, ...secondary] = candidates;
+  return { primary, secondary };
+}
+
+// Keep alias so existing onChange handlers compile without change
+const calcDeltaE = calculateDeltaE;
 const INK_ITEMS     = items.filter(i => i.group === "Ink" && i.active);
 const VENDOR_LEDGERS = ledgers.filter(l => (l.ledgerType === "Supplier" || l.ledgerType === "Vendor") && l.status === "Active");
 const CYLINDER_TOOLS_ALL = allTools.filter(t => t.toolType === "Cylinder");
@@ -116,7 +193,7 @@ export default function GravureWorkOrderPage() {
 
   // ── Production Preparation Types ────────────────────────────
   type FilmRequisition = { source: "Extrusion" | "Purchase" | ""; status: "Pending" | "Requested" | "Available"; requiredDate?: string; spec?: string; priority?: string; vendor?: string; expectedRate?: number; remarks?: string; };
-  type ColorShade      = { colorNo: number; colorName: string; inkType: "Spot" | "Process" | "Special"; pantoneRef: string; labL: string; labA: string; labB: string; deltaE: string; shadeCardRef: string; status: "Pending" | "Standard Received" | "Approved" | "Rejected"; remarks: string; };
+  type ColorShade      = { colorNo: number; colorName: string; inkType: "Spot" | "Process" | "Special"; pantoneRef: string; labL: string; labA: string; labB: string; labLMeas: string; labAMeas: string; labBMeas: string; deltaE: string; deltaETol: string; shadeCardRef: string; status: "Pending" | "Standard Received" | "Approved" | "Rejected"; remarks: string; };
   type MaterialAlloc   = { id: string; plyNo?: number; materialType: string; materialName: string; requiredQty: number; unit: string; allocatedQty: number; lotNo: string; location: string; status: "Pending" | "Partial" | "Allocated"; };
   type CylinderAlloc   = { colorNo: number; colorName: string; cylinderNo: string; circumference: string; cylinderType: "New" | "Existing" | "Rechromed"; status: "Pending" | "Available" | "In Use" | "Under Chrome" | "Ordered"; remarks: string; };
   const [filmReqs,       setFilmReqs]       = useState<FilmRequisition[]>([]);
@@ -379,7 +456,9 @@ export default function GravureWorkOrderPage() {
     const n = f.noOfColors || 0;
     setColorShades(Array.from({ length: n }, (_, i) => ({
       colorNo: i + 1, colorName: `Color ${i + 1}`, inkType: "Spot" as const,
-      pantoneRef: "", labL: "", labA: "", labB: "", deltaE: "1.0",
+      pantoneRef: "", labL: "", labA: "", labB: "",
+      labLMeas: "", labAMeas: "", labBMeas: "",
+      deltaE: "--", deltaETol: "1.0",
       shadeCardRef: "", status: "Pending" as const, remarks: "",
     })));
     const allocs: MaterialAlloc[] = [];
@@ -1393,29 +1472,51 @@ export default function GravureWorkOrderPage() {
                 <table className="min-w-full text-[11px] border-collapse">
                   <thead className="bg-purple-700 text-white uppercase tracking-wider">
                     <tr>
+                      {["#","Ink Item (Master)","Color Name","Type","Pantone Ref"].map(h => (
+                        <th key={h} rowSpan={2} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold align-middle">{h}</th>
+                      ))}
+                      <th colSpan={3} className="px-2 py-1.5 border border-purple-600/30 text-center text-xs font-semibold bg-blue-900/30 text-blue-200">Standard LAB (Reference)</th>
+                      <th colSpan={3} className="px-2 py-1.5 border border-purple-600/30 text-center text-xs font-semibold bg-green-900/30 text-green-200">Measured LAB (Actual)</th>
+                      <th rowSpan={2} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold align-middle">
+                        ΔE<div className="text-[9px] font-normal opacity-70 text-green-200">CIE 1976</div>
+                      </th>
+                      <th rowSpan={2} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold align-middle">
+                        ΔE Tol.<div className="text-[9px] font-normal opacity-70">max allowed</div>
+                      </th>
+                      <th rowSpan={2} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold align-middle">
+                        QC Result<div className="text-[9px] font-normal opacity-70">PASS/FAIL</div>
+                      </th>
+                      <th rowSpan={2} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold align-middle min-w-[140px]">
+                        Insight<div className="text-[9px] font-normal opacity-70">color correction</div>
+                      </th>
+                      {["Shade Card Ref","Status","Remarks"].map(h => (
+                        <th key={h} rowSpan={2} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold align-middle">{h}</th>
+                      ))}
+                    </tr>
+                    <tr>
                       {[
-                        { label: "#" },
-                        { label: "Ink Item (Master)" },
-                        { label: "Color Name" },
-                        { label: "Type" },
-                        { label: "Pantone Ref" },
-                        { label: "L*", sub: "0–100", cls: "text-blue-200" },
-                        { label: "a*", sub: "-128–127", cls: "text-red-200" },
-                        { label: "b*", sub: "-128–127", cls: "text-yellow-200" },
-                        { label: "ΔE Tol." },
-                        { label: "Shade Card Ref" },
-                        { label: "Status" },
-                        { label: "Remarks" },
-                      ].map(h => (
-                        <th key={h.label} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">
+                        { label: "L*", sub: "0–100",    cls: "text-blue-300",   bg: "bg-blue-900/20" },
+                        { label: "a*", sub: "-128–127", cls: "text-red-300",    bg: "bg-blue-900/20" },
+                        { label: "b*", sub: "-128–127", cls: "text-yellow-300", bg: "bg-blue-900/20" },
+                        { label: "L*", sub: "0–100",    cls: "text-blue-300",   bg: "bg-green-900/20" },
+                        { label: "a*", sub: "-128–127", cls: "text-red-300",    bg: "bg-green-900/20" },
+                        { label: "b*", sub: "-128–127", cls: "text-yellow-300", bg: "bg-green-900/20" },
+                      ].map((h, i) => (
+                        <th key={i} className={`px-2 py-1.5 border border-purple-600/30 text-center whitespace-nowrap font-semibold ${h.bg}`}>
                           <span>{h.label}</span>
-                          {h.sub && <div className={`text-[9px] font-normal opacity-80 ${h.cls}`}>{h.sub}</div>}
+                          <div className={`text-[9px] font-normal opacity-80 ${h.cls}`}>{h.sub}</div>
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {colorShades.map((cs, i) => (
+                    {colorShades.map((cs, i) => {
+                      const dlabs   = calculateDeltaLAB(cs.labL, cs.labA, cs.labB, cs.labLMeas, cs.labAMeas, cs.labBMeas);
+                      const qcSt    = getStatus(cs.deltaE, cs.deltaETol);
+                      const sev     = getSeverity(cs.deltaE);
+                      const insight = getColorInsight(cs.labL, cs.labA, cs.labB, cs.labLMeas, cs.labAMeas, cs.labBMeas);
+                      const fmtD    = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}`;
+                      return (
                       <tr key={i} className="hover:bg-purple-50/20">
                         <td className="px-2 py-1.5 text-center font-black text-purple-700">{cs.colorNo}</td>
                         {/* Ink Item from Item Master */}
@@ -1448,26 +1549,149 @@ export default function GravureWorkOrderPage() {
                             value={cs.labL}
                             onChange={e => {
                               const v = Math.min(100, Math.max(0, Number(e.target.value)));
-                              setColorShades(p => p.map((c, ci) => ci === i ? { ...c, labL: String(v) } : c));
+                              setColorShades(p => p.map((c, ci) => {
+                                if (ci !== i) return c;
+                                const de = calcDeltaE(String(v), c.labA, c.labB, c.labLMeas, c.labAMeas, c.labBMeas);
+                                return { ...c, labL: String(v), deltaE: de };
+                              }));
                             }} />
                         </td>
                         <td className="px-2 py-1.5">
                           <input type="number" step={1} min={-128} max={127} placeholder="-128–127"
                             className="w-[72px] text-xs border border-red-200 bg-red-50 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-red-400 text-red-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                             value={cs.labA}
-                            onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, labA: e.target.value } : c))} />
+                            onChange={e => {
+                              const v = e.target.value;
+                              setColorShades(p => p.map((c, ci) => {
+                                if (ci !== i) return c;
+                                const de = calcDeltaE(c.labL, v, c.labB, c.labLMeas, c.labAMeas, c.labBMeas);
+                                return { ...c, labA: v, deltaE: de };
+                              }));
+                            }} />
                         </td>
                         <td className="px-2 py-1.5">
                           <input type="number" step={1} min={-128} max={127} placeholder="-128–127"
                             className="w-[72px] text-xs border border-yellow-300 bg-yellow-50 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-yellow-400 text-yellow-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                             value={cs.labB}
-                            onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, labB: e.target.value } : c))} />
+                            onChange={e => {
+                              const v = e.target.value;
+                              setColorShades(p => p.map((c, ci) => {
+                                if (ci !== i) return c;
+                                const de = calcDeltaE(c.labL, c.labA, v, c.labLMeas, c.labAMeas, c.labBMeas);
+                                return { ...c, labB: v, deltaE: de };
+                              }));
+                            }} />
                         </td>
+                        {/* Measured LAB */}
+                        <td className="px-2 py-1.5 bg-green-50/30">
+                          <input type="number" step={1} min={0} max={100} placeholder="0–100"
+                            className="w-[68px] text-xs border border-green-300 bg-green-50 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-green-400 text-green-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={cs.labLMeas}
+                            onChange={e => {
+                              const v = String(Math.min(100, Math.max(0, Number(e.target.value))));
+                              setColorShades(p => p.map((c, ci) => {
+                                if (ci !== i) return c;
+                                const de = calcDeltaE(c.labL, c.labA, c.labB, v, c.labAMeas, c.labBMeas);
+                                return { ...c, labLMeas: v, deltaE: de };
+                              }));
+                            }} />
+                        </td>
+                        <td className="px-2 py-1.5 bg-green-50/30">
+                          <input type="number" step={1} min={-128} max={127} placeholder="-128–127"
+                            className="w-[68px] text-xs border border-green-300 bg-green-50 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-green-400 text-green-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={cs.labAMeas}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setColorShades(p => p.map((c, ci) => {
+                                if (ci !== i) return c;
+                                const de = calcDeltaE(c.labL, c.labA, c.labB, c.labLMeas, v, c.labBMeas);
+                                return { ...c, labAMeas: v, deltaE: de };
+                              }));
+                            }} />
+                        </td>
+                        <td className="px-2 py-1.5 bg-green-50/30">
+                          <input type="number" step={1} min={-128} max={127} placeholder="-128–127"
+                            className="w-[68px] text-xs border border-green-300 bg-green-50 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-green-400 text-green-800 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={cs.labBMeas}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setColorShades(p => p.map((c, ci) => {
+                                if (ci !== i) return c;
+                                const de = calcDeltaE(c.labL, c.labA, c.labB, c.labLMeas, c.labAMeas, v);
+                                return { ...c, labBMeas: v, deltaE: de };
+                              }));
+                            }} />
+                        </td>
+                        {/* ΔE auto-computed */}
+                        <td className="px-2 py-1.5 text-center">
+                          {cs.deltaE !== "--" ? (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold font-mono border ${
+                                qcSt === "PASS"    ? "bg-green-50 text-green-700 border-green-300"
+                                : qcSt === "WARNING" ? "bg-yellow-50 text-yellow-700 border-yellow-300"
+                                : "bg-red-50 text-red-600 border-red-300"
+                              }`}>{cs.deltaE}</span>
+                              {sev && (
+                                <span className={`text-[9px] font-semibold px-1.5 rounded-full ${
+                                  sev === "Low" ? "bg-green-100 text-green-700" : sev === "Medium" ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"
+                                }`}>{sev}</span>
+                              )}
+                              {dlabs && (
+                                <div className="text-[9px] font-mono text-gray-400 leading-tight mt-0.5">
+                                  <span>ΔL{fmtD(dlabs.dL)}</span>
+                                  <span className="mx-0.5">Δa{fmtD(dlabs.da)}</span>
+                                  <span>Δb{fmtD(dlabs.db)}</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-300 font-mono">--</span>
+                          )}
+                        </td>
+                        {/* ΔE Tolerance (manual) */}
                         <td className="px-2 py-1.5">
                           <input type="number" step={0.1} min={0} max={10} placeholder="1.0"
-                            className="w-[60px] text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                            value={cs.deltaE}
-                            onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, deltaE: e.target.value } : c))} />
+                            className="w-[56px] text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={cs.deltaETol}
+                            onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, deltaETol: e.target.value } : c))} />
+                        </td>
+                        {/* QC Result */}
+                        <td className="px-2 py-1.5 text-center">
+                          {qcSt === "NOT MEASURED" ? (
+                            <span className="text-[10px] text-gray-400 font-medium italic">Not Measured</span>
+                          ) : (
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                              qcSt === "PASS"    ? "bg-green-100 text-green-800 border-green-400"
+                              : qcSt === "WARNING" ? "bg-yellow-100 text-yellow-800 border-yellow-400"
+                              : "bg-red-100 text-red-700 border-red-400"
+                            }`}>
+                              {qcSt === "PASS" ? "✓" : qcSt === "WARNING" ? "⚠" : "✗"} {qcSt}
+                            </span>
+                          )}
+                        </td>
+                        {/* Production Insight — priority-based */}
+                        <td className="px-2 py-1.5 min-w-[160px]">
+                          {!insight.primary ? (
+                            <span className="text-[10px] text-gray-300">
+                              {cs.deltaE === "--" ? "Enter measured LAB" : "Within tolerance ✓"}
+                            </span>
+                          ) : (
+                            <div className="flex flex-col gap-1">
+                              {/* Primary issue — bold, prominent */}
+                              <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${insight.primary.cls}`}>
+                                <span className="opacity-70">{insight.primary.axis} = {fmtD(insight.primary.val)}</span>
+                                <span className="mx-1">→</span>
+                                <span>{insight.primary.suggestion}</span>
+                                <div className="font-normal opacity-80 mt-0.5">↳ {insight.primary.inkAdj}</div>
+                              </div>
+                              {/* Secondary issues — smaller */}
+                              {insight.secondary.map((s, si) => (
+                                <span key={si} className={`text-[9px] font-medium px-1.5 py-0.5 rounded border ${s.cls}`}>
+                                  {s.axis} = {fmtD(s.val)} → {s.suggestion}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </td>
                         <td className="px-2 py-1.5"><input placeholder="SC-001" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.shadeCardRef} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, shadeCardRef: e.target.value } : c))} /></td>
                         <td className="px-2 py-1.5">
@@ -1477,19 +1701,31 @@ export default function GravureWorkOrderPage() {
                         </td>
                         <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.remarks} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {colorShades.length === 0 && (
-                      <tr><td colSpan={12} className="p-6 text-center text-gray-400 text-xs">No colors. Set No. of Colors in Basic Info tab first.</td></tr>
+                      <tr><td colSpan={18} className="p-6 text-center text-gray-400 text-xs">No colors. Set No. of Colors in Basic Info tab first.</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
               {colorShades.length > 0 && (
-                <div className="flex gap-2 flex-wrap">
+                <div className="flex gap-2 flex-wrap items-center">
+                  {/* Approval status */}
                   {(["Pending", "Standard Received", "Approved", "Rejected"] as const).map(s => {
                     const cnt = colorShades.filter(c => c.status === s).length;
                     return cnt > 0 ? (
                       <span key={s} className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${s === "Approved" ? "bg-green-50 text-green-700 border-green-200" : s === "Standard Received" ? "bg-blue-50 text-blue-700 border-blue-200" : s === "Rejected" ? "bg-red-50 text-red-700 border-red-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>{cnt} {s}</span>
+                    ) : null;
+                  })}
+                  <span className="text-gray-300 text-xs">|</span>
+                  {/* QC counts */}
+                  {(["PASS","WARNING","FAIL"] as const).map(q => {
+                    const cnt = colorShades.filter(c => getStatus(c.deltaE, c.deltaETol) === q).length;
+                    return cnt > 0 ? (
+                      <span key={q} className={`px-2.5 py-1 rounded-full text-xs font-bold border ${q === "PASS" ? "bg-green-100 text-green-800 border-green-400" : q === "WARNING" ? "bg-yellow-100 text-yellow-800 border-yellow-400" : "bg-red-100 text-red-700 border-red-400"}`}>
+                        {q === "PASS" ? "✓" : q === "WARNING" ? "⚠" : "✗"} {cnt} {q}
+                      </span>
                     ) : null;
                   })}
                 </div>
