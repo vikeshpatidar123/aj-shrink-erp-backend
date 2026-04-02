@@ -252,6 +252,13 @@ export const tools: Tool[] = [
   { id: "T032", code: "SLV-008", name: "Sleeve 1130mm – OPS", toolType: "Sleeve", ...bt, printWidth: "1130", cylinderMaterial: "OPS", engravingType: "N/A", surfaceFinish: "Matte", chromeStatus: "N/A", location: "Sleeve Store – Rack D" },
   { id: "T033", code: "SLV-009", name: "Sleeve 1280mm – PVC", toolType: "Sleeve", ...bt, printWidth: "1280", cylinderMaterial: "PVC", engravingType: "N/A", surfaceFinish: "Glossy", chromeStatus: "N/A", location: "Sleeve Store – Rack E" },
   { id: "T034", code: "SLV-010", name: "Sleeve 1430mm – PETG", toolType: "Sleeve", ...bt, printWidth: "1430", cylinderMaterial: "PETG", engravingType: "N/A", surfaceFinish: "Semi-Gloss", chromeStatus: "N/A", location: "Sleeve Store – Rack E" },
+  // Demo sleeves: 950mm and 990mm
+  { id: "T048", code: "SLV-013", name: "Sleeve 950mm – PVC", toolType: "Sleeve", ...bt, printWidth: "950", cylinderMaterial: "PVC", engravingType: "N/A", surfaceFinish: "Glossy", chromeStatus: "N/A", location: "Sleeve Store – Rack C" },
+  { id: "T052", code: "SLV-014", name: "Sleeve 990mm – PETG", toolType: "Sleeve", ...bt, printWidth: "990", cylinderMaterial: "PETG", engravingType: "N/A", surfaceFinish: "Semi-Gloss", chromeStatus: "N/A", location: "Sleeve Store – Rack C" },
+  // Demo cylinders: 1100mm print width, 3 different circumferences to show Repeat UPS variation
+  { id: "T049", code: "CYL-DEM-001", name: "Cylinder 1100mm – Circ 480mm (4 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "480", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-1" },
+  { id: "T050", code: "CYL-DEM-002", name: "Cylinder 1100mm – Circ 360mm (3 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "360", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-2" },
+  { id: "T051", code: "CYL-DEM-003", name: "Cylinder 1100mm – Circ 240mm (2 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "240", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-3" },
   // Extra-wide sleeves — require Special-Order cylinders (no stock cylinder ≥ 1800mm exists)
   { id: "T044", code: "SLV-011", name: "Sleeve 1800mm – PVC", toolType: "Sleeve", ...bt, printWidth: "1800", cylinderMaterial: "PVC", engravingType: "N/A", surfaceFinish: "Glossy", chromeStatus: "N/A", location: "Sleeve Store – Rack F" },
   { id: "T045", code: "SLV-012", name: "Sleeve 2000mm – PETG", toolType: "Sleeve", ...bt, printWidth: "2000", cylinderMaterial: "PETG", engravingType: "N/A", surfaceFinish: "Semi-Gloss", chromeStatus: "N/A", location: "Sleeve Store – Rack F" },
@@ -302,6 +309,12 @@ export const toolInventory: ToolInventory[] = [
   { id: "TI047", code: "INV-T047-A", toolId: "T047", toolCode: "CYL-UWD-002", toolName: "Ultra-Wide Cylinder 3200mm – Steel", toolType: "Cylinder", serialNo: "SN-CYL-047", condition: "New", status: "Available", location: "Rack E-2", remarks: "" },
   { id: "TI044", code: "INV-SLV-011", toolId: "T044", toolCode: "SLV-011", toolName: "Sleeve 1800mm – PVC", toolType: "Sleeve", serialNo: "SN-SLV-011", condition: "New", status: "Available", location: "Sleeve Store – Rack F", remarks: "" },
   { id: "TI045", code: "INV-SLV-012", toolId: "T045", toolCode: "SLV-012", toolName: "Sleeve 2000mm – PETG", toolType: "Sleeve", serialNo: "SN-SLV-012", condition: "New", status: "Available", location: "Sleeve Store – Rack F", remarks: "" },
+  // Demo entries
+  { id: "TI048", code: "INV-SLV-013", toolId: "T048", toolCode: "SLV-013", toolName: "Sleeve 950mm – PVC", toolType: "Sleeve", serialNo: "SN-SLV-013", condition: "New", status: "Available", location: "Sleeve Store – Rack C", remarks: "" },
+  { id: "TI052", code: "INV-SLV-014", toolId: "T052", toolCode: "SLV-014", toolName: "Sleeve 990mm – PETG", toolType: "Sleeve", serialNo: "SN-SLV-014", condition: "New", status: "Available", location: "Sleeve Store – Rack C", remarks: "" },
+  { id: "TI049", code: "INV-T049-A", toolId: "T049", toolCode: "CYL-DEM-001", toolName: "Cylinder 1100mm – Circ 480mm", toolType: "Cylinder", serialNo: "SN-CYL-049", condition: "New", status: "Available", location: "Rack F-1", remarks: "" },
+  { id: "TI050", code: "INV-T050-A", toolId: "T050", toolCode: "CYL-DEM-002", toolName: "Cylinder 1100mm – Circ 360mm", toolType: "Cylinder", serialNo: "SN-CYL-050", condition: "New", status: "Available", location: "Rack F-2", remarks: "" },
+  { id: "TI051", code: "INV-T051-A", toolId: "T051", toolCode: "CYL-DEM-003", toolName: "Cylinder 1100mm – Circ 240mm", toolType: "Cylinder", serialNo: "SN-CYL-051", condition: "New", status: "Available", location: "Rack F-3", remarks: "" },
 ];
 
 // ─── Tool Inventory Transaction Types ────────────────────────
@@ -1300,9 +1313,10 @@ export const machines: Machine[] = [
   { id: "M001", code: "CYL-01", name: "Cylinder Engraver 1", department: "Pre-Press", status: "Running", ...bm, displayName: "CYL-ENG-1", machineType: "Electromechanical Engraver", maxCylinderWidth: "1600", maxCircumference: "1200", costPerHour: "450", electricConsumption: "15", operator: "Mahesh Gupta" },
   { id: "M002", code: "CYL-02", name: "Chrome Plating Bath", department: "Pre-Press", status: "Running", ...bm, displayName: "Chrome Bath", machineType: "Chrome Plating", maxCylinderWidth: "1600", costPerHour: "120", operator: "Ramesh Patel" },
   // Printing
-  { id: "M004", code: "ROTO-01", name: "Roto Press 1 – 8 Color", department: "Printing", status: "Running", ...bm, displayName: "ROTO-1", machineType: "Rotogravure Press", noOfColors: "8", maxWebWidth: "1300", minWebWidth: "200", speedMax: "150", repeatLengthMin: "300", repeatLengthMax: "1200", gripper: "10", printingMargin: "15", makeReadyWastage: "50", makeReadyCharges: "1500", makeReadyTime: "20", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1200", jobChangeOverTime: "30", minPrintingImpr: "500", basicPrintingCharged: "800", roundImpWith: "100", electricConsumption: "80", costPerHour: "1200", operator: "Amit Tiwari" },
+  { id: "M004", code: "ROTO-01", name: "Roto Press 1 – 8 Color", department: "Printing", status: "Running", ...bm, displayName: "ROTO-1", machineType: "Rotogravure Press", noOfColors: "8", maxWebWidth: "1200", minWebWidth: "500", speedMax: "150", repeatLengthMin: "300", repeatLengthMax: "1200", gripper: "10", printingMargin: "15", makeReadyWastage: "50", makeReadyCharges: "1500", makeReadyTime: "20", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1200", jobChangeOverTime: "30", minPrintingImpr: "500", basicPrintingCharged: "800", roundImpWith: "100", electricConsumption: "80", costPerHour: "1200", operator: "Amit Tiwari" },
   { id: "M005", code: "ROTO-02", name: "Roto Press 2 – 9 Color", department: "Printing", status: "Running", ...bm, displayName: "ROTO-2", machineType: "Rotogravure Press", noOfColors: "9", maxWebWidth: "1450", minWebWidth: "200", speedMax: "160", repeatLengthMin: "300", repeatLengthMax: "1400", gripper: "10", printingMargin: "15", makeReadyWastage: "55", makeReadyCharges: "1800", makeReadyTime: "20", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1300", jobChangeOverTime: "30", minPrintingImpr: "500", basicPrintingCharged: "900", roundImpWith: "100", electricConsumption: "90", costPerHour: "1350", operator: "Deepak Verma" },
   { id: "M006", code: "ROTO-03", name: "Roto Press 3 – 10 Color", department: "Printing", status: "Maintenance", ...bm, displayName: "ROTO-3", machineType: "Rotogravure Press", noOfColors: "10", maxWebWidth: "3500", minWebWidth: "200", speedMax: "180", repeatLengthMin: "300", repeatLengthMax: "1500", gripper: "10", printingMargin: "15", makeReadyWastage: "60", makeReadyCharges: "2000", makeReadyTime: "22", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1400", jobChangeOverTime: "35", minPrintingImpr: "500", basicPrintingCharged: "1000", roundImpWith: "100", electricConsumption: "95", costPerHour: "1400", operator: "Santosh Rao" },
+  { id: "M018", code: "ROTO-05", name: "Roto Press 5 – 8 Color (Demo)", department: "Printing", status: "Running", ...bm, displayName: "ROTO-5", machineType: "Rotogravure Press", noOfColors: "8", maxWebWidth: "1200", minWebWidth: "500", speedMax: "150", repeatLengthMin: "200", repeatLengthMax: "1000", gripper: "10", printingMargin: "15", makeReadyWastage: "50", makeReadyCharges: "1500", makeReadyTime: "20", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1200", jobChangeOverTime: "30", minPrintingImpr: "500", basicPrintingCharged: "800", roundImpWith: "100", electricConsumption: "80", costPerHour: "1200", operator: "Demo Operator" },
   { id: "M003", code: "ROTO-04", name: "Roto Press 4 – 6 Color", department: "Printing", status: "Idle", ...bm, displayName: "ROTO-4", machineType: "Rotogravure Press", noOfColors: "6", maxWebWidth: "1100", minWebWidth: "150", speedMax: "120", repeatLengthMin: "250", repeatLengthMax: "1000", gripper: "10", printingMargin: "12", makeReadyWastage: "40", makeReadyCharges: "1200", makeReadyTime: "18", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1000", jobChangeOverTime: "25", minPrintingImpr: "500", basicPrintingCharged: "700", roundImpWith: "100", electricConsumption: "65", costPerHour: "1000", operator: "Vikram Singh" },
   // Lamination
   { id: "M007", code: "LAM-01", name: "Dry Bond Laminator 1", department: "Lamination", status: "Running", ...bm, displayName: "LAM-1", machineType: "Dry Bond", maxWebWidth: "1300", minWebWidth: "150", speedMax: "200", noOfUnwinds: "2", adhesiveCoverage: "2.5–4.5", electricConsumption: "55", costPerHour: "650", operator: "Suresh Bhatia" },
@@ -2188,6 +2202,14 @@ export type GravureProductCatalog = {
   trimmingSize?: number;
   widthShrinkage?: number;
   frontColors?: number; backColors?: number;
+  // ── Product Details (merged master) ──
+  packSize?: string;
+  brandName?: string;
+  productType?: string;
+  skuType?: string;
+  bottleType?: string;
+  addressType?: "Single" | "Multi";
+  specialSpecs?: string;
   status: "Active" | "Inactive";
   remarks: string;
 };

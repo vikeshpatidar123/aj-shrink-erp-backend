@@ -115,14 +115,14 @@ function scaleToCanvas(w: number, h: number) {
 }
 
 // ── Trimming + Width Shrinkage overlays ──
-// ox/oy = top-left of the main shape in canvas coords
-// dw/dh = drawn shape size in pixels
-// scale = px per mm
 function DimOverlays({ ox, oy, dw, dh, scale, dims }: {
   ox: number; oy: number; dw: number; dh: number; scale: number; dims: DimValues;
 }) {
-  const trimPx   = (dims.trimming        ?? 0) * scale;
-  const shrinkPx = (dims.widthShrinkage  ?? 0) * scale;
+  const trimPx   = (dims.trimming       ?? 0) * scale;
+  // Shrinkage: minimum 10px so it's always visible
+  const rawShrink = (dims.widthShrinkage ?? 0);
+  const shrinkPx  = rawShrink > 0 ? Math.max(rawShrink * scale, 10) : 0;
+
   return (
     <>
       {/* Trimming / Bleed — orange dashed rect outside the main shape */}
@@ -140,31 +140,51 @@ function DimOverlays({ ox, oy, dw, dh, scale, dims }: {
           </text>
         </g>
       )}
-      {/* Width Shrinkage — rose strip on right side */}
+      {/* Width Shrinkage — vivid magenta/pink band on right with diagonal hatching */}
       {shrinkPx > 0 && (
         <g>
+          {/* Solid colored band */}
           <rect
             x={ox + dw} y={oy}
             width={shrinkPx} height={dh}
-            fill="#fda4af" fillOpacity={0.5}
-            stroke="#f43f5e" strokeWidth={1} strokeDasharray="3 2"
+            fill="#f0abfc" fillOpacity={0.7}
+            stroke="#c026d3" strokeWidth={1.5}
           />
-          {/* diagonal hatch lines */}
-          {Array.from({ length: Math.ceil(dh / 6) }).map((_, i) => (
-            <line key={i}
-              x1={ox + dw} y1={oy + i * 6}
-              x2={Math.min(ox + dw + shrinkPx, ox + dw + shrinkPx)} y2={oy + i * 6}
-              stroke="#f43f5e" strokeWidth={0.5} opacity={0.4}
-            />
-          ))}
+          {/* Diagonal hatch lines inside band */}
+          {Array.from({ length: Math.ceil((dh + shrinkPx) / 5) }).map((_, i) => {
+            const offset = i * 5;
+            const x1 = ox + dw + Math.max(0, offset - dh);
+            const y1 = oy + Math.min(dh, offset);
+            const x2 = ox + dw + Math.min(shrinkPx, offset);
+            const y2 = oy + Math.max(0, offset - shrinkPx);
+            return x1 < ox + dw + shrinkPx && x2 > ox + dw
+              ? <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#c026d3" strokeWidth={1} opacity={0.5} />
+              : null;
+          })}
+          {/* Dimension arrow + label */}
+          <line x1={ox + dw} y1={oy + dh + 10} x2={ox + dw + shrinkPx} y2={oy + dh + 10}
+            stroke="#c026d3" strokeWidth={1.5} markerEnd="url(#arrow-shrink)" />
+          <circle cx={ox + dw} cy={oy + dh + 10} r={2.5} fill="#c026d3" />
+          <circle cx={ox + dw + shrinkPx} cy={oy + dh + 10} r={2.5} fill="#c026d3" />
+          <text x={ox + dw + shrinkPx / 2} y={oy + dh + 22}
+            textAnchor="middle" fontSize={8} fill="#86198f" fontWeight="800">
+            SHRINK +{rawShrink}mm
+          </text>
+          {/* Vertical label inside band (rotated) */}
           <text
             x={ox + dw + shrinkPx / 2} y={oy + dh / 2}
-            textAnchor="middle" fontSize={6} fill="#be123c" fontWeight="700"
-            transform={`rotate(-90, ${ox + dw + shrinkPx / 2}, ${oy + dh / 2})`}>
-            +{dims.widthShrinkage}mm
+            textAnchor="middle" fontSize={7} fill="#86198f" fontWeight="700"
+            transform={`rotate(-90,${ox + dw + shrinkPx / 2},${oy + dh / 2})`}>
+            +{rawShrink}mm
           </text>
         </g>
       )}
+      {/* Arrow marker def */}
+      <defs>
+        <marker id="arrow-shrink" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="#c026d3" />
+        </marker>
+      </defs>
     </>
   );
 }
@@ -358,9 +378,40 @@ export function DimensionDiagram({ contentType, dims }: DimensionDiagramProps) {
 
   const Diagram = DiagramMap[cfg.diagramType];
 
+  const hasTrim   = (dims.trimming ?? 0) > 0;
+  const hasShrink = (dims.widthShrinkage ?? 0) > 0;
+
   return (
-    <div className="bg-gradient-to-br from-slate-50 to-indigo-50 border border-indigo-100 rounded-2xl flex items-center justify-center min-h-[220px]">
-      <Diagram dims={dims} />
+    <div className="flex flex-col gap-2">
+      <div className="bg-gradient-to-br from-slate-50 to-indigo-50 border border-indigo-100 rounded-2xl flex items-center justify-center min-h-[220px]">
+        <Diagram dims={dims} />
+      </div>
+      {/* Legend */}
+      {(hasTrim || hasShrink) && (
+        <div className="flex flex-wrap gap-2 px-2">
+          <div className="flex items-center gap-1.5">
+            <div className="w-8 h-3 rounded border-2 border-dashed border-orange-500 bg-orange-100 flex-shrink-0" />
+            <span className="text-[9px] text-orange-700 font-semibold uppercase tracking-wide">
+              Trimming / Bleed{hasTrim ? ` (+${dims.trimming}mm)` : ""}
+            </span>
+          </div>
+          {hasShrink && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-8 h-3 rounded border border-fuchsia-500 bg-fuchsia-200 flex-shrink-0"
+                style={{ backgroundImage: "repeating-linear-gradient(-45deg, transparent, transparent 2px, #c026d3 2px, #c026d3 3px)" }} />
+              <span className="text-[9px] text-fuchsia-700 font-semibold uppercase tracking-wide">
+                Width Shrinkage (+{dims.widthShrinkage}mm)
+              </span>
+            </div>
+          )}
+          <div className="flex items-center gap-1.5">
+            <div className="w-8 h-3 rounded border border-indigo-400 bg-indigo-100 flex-shrink-0" />
+            <span className="text-[9px] text-indigo-600 font-semibold uppercase tracking-wide">
+              Product Area
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

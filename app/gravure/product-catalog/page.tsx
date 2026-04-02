@@ -1,10 +1,10 @@
 "use client";
-import { useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import {
   BookMarked, Eye, Trash2, Clock, CheckCircle2,
   ShoppingCart, CheckCircle, AlertCircle, Lock, ArrowRight,
   RefreshCw, Save, Plus, X, Calculator, Layers, Check, Pencil,
-  ChevronRight, Eye as EyeIcon, Factory, Send, Package, Palette, Wrench, Archive,
+  ChevronRight, Eye as EyeIcon, Factory, Send, Package, Palette, Wrench, Archive, Copy,
 } from "lucide-react";
 import {
   gravureOrders, gravureWorkOrders as initWOs,
@@ -96,6 +96,8 @@ export default function ProductCatalogPage() {
   const [replanPlanSearch,    setReplanPlanSearch]    = useState("");
   const [replanPlanSort,      setReplanPlanSort]      = useState<{ key: string; dir: "asc" | "desc" }>({ key: "", dir: "asc" });
   const [replanSelPlanId,     setReplanSelPlanId]     = useState("");
+  const [upsPreviewPlan,      setUpsPreviewPlan]      = useState<any>(null);
+  const [cylGuideOpen,        setCylGuideOpen]        = useState(false);
 
   const rf = <K extends keyof GravureProductCatalog>(k: K, v: GravureProductCatalog[K]) => {
     setReplanForm(p => {
@@ -145,6 +147,21 @@ export default function ProductCatalogPage() {
     const layers = [...replanForm.secondaryLayers];
     const layer = { ...layers[layerIdx] };
     layer.consumableItems = layer.consumableItems.filter((_, i) => i !== ciIdx);
+    layers[layerIdx] = layer;
+    rf("secondaryLayers", layers);
+  };
+
+  const clonePlyConsumable = (layerIdx: number, ciIdx: number) => {
+    if (!replanForm) return;
+    const layers = [...replanForm.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    const source = layer.consumableItems[ciIdx];
+    const clone: PlyConsumableItem = { ...source, consumableId: Math.random().toString() };
+    layer.consumableItems = [
+      ...layer.consumableItems.slice(0, ciIdx + 1),
+      clone,
+      ...layer.consumableItems.slice(ciIdx + 1),
+    ];
     layers[layerIdx] = layer;
     rf("secondaryLayers", layers);
   };
@@ -235,9 +252,10 @@ export default function ProductCatalogPage() {
     if (!machine) return [];
 
     const machineMaxFilm = parseFloat((machine as any).maxWebWidth) || 1300;
+    const machineMinFilm = parseFloat((machine as any).minWebWidth) || 0;
     const shrink    = replanForm.widthShrinkage || 0;
     const jobH      = replanForm.jobHeight || 0;
-    const laneWidth = planWidth + shrink + (replanForm.trimmingSize || 0);
+    const laneWidth = planWidth + shrink; // trim is only on outer film edges, not per lane
     const trim      = replanForm.trimmingSize || 0;
 
     // per-cylinder: UPS around = floor(cylinder.repeatLength / jobHeight)
@@ -255,6 +273,7 @@ export default function ProductCatalogPage() {
         const printingWidth = acUps * laneWidth;
         const filmWidth = printingWidth + 2 * trim;
         if (filmWidth > sleeveWidthVal) return [];
+        if (filmWidth < machineMinFilm) return [];
         const req    = filmWidth + 100;
         const minCyl = req < sleeveWidthVal ? req : sleeveWidthVal + 100;
         const validCylinders = CYLINDER_TOOLS.filter(t => parseFloat(t.printWidth) >= minCyl);
@@ -296,6 +315,7 @@ export default function ProductCatalogPage() {
         const printingWidth = acUps * laneWidth;
         const filmWidth = printingWidth + 2 * trim;
         if (filmWidth > machineMaxFilm) return [];
+        if (filmWidth < machineMinFilm) return [];
         const realSleeveExists = SLEEVE_TOOLS.some(s => {
           const sw = parseFloat(s.printWidth);
           if (sw < filmWidth || sw > machineMaxFilm) return false;
@@ -923,14 +943,117 @@ export default function ProductCatalogPage() {
                       </>
                     )}
                   </div>
-                  <Input label="Front Colors" type="number" value={replanForm.frontColors || ""}
-                    onChange={e => rf("frontColors", Number(e.target.value))} min={0} max={12} />
-                  <Input label="Back Colors" type="number" value={replanForm.backColors || ""}
-                    onChange={e => rf("backColors", Number(e.target.value))} min={0} max={12} />
-                  <div>
-                    <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Total Colors (Auto)</label>
-                    <div className="px-3 py-2 bg-purple-50 border border-purple-200 rounded-xl text-sm font-bold text-purple-700">{replanForm.noOfColors} Colors</div>
+                  {/* ── Product Details (merged master) ── */}
+                  <div className="sm:col-span-2 lg:col-span-3">
+                    <p className="text-[10px] font-bold text-orange-500 uppercase tracking-widest mb-2 pb-1 border-b border-orange-100">Product Details</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {/* Type of Product (was Category) */}
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Type of Product</label>
+                        <select
+                          className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                          value={replanForm.categoryId || ""}
+                          onChange={e => {
+                            if (!e.target.value) { setReplanForm(p => p ? { ...p, categoryId: "", categoryName: "", content: "" } : p); return; }
+                            const hasPlys = replanForm.secondaryLayers.some(l => l.plyType || l.consumableItems.length > 0);
+                            if (hasPlys) { setPendingReplanCategoryId(e.target.value); }
+                            else { applyReplanCategory(e.target.value); }
+                          }}>
+                          <option value="">-- Select Type --</option>
+                          {categories.filter(c => c.status === "Active").map(c => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                        {replanForm.categoryName && (
+                          <p className="text-[10px] text-purple-600 mt-1 flex items-center gap-1">
+                            <Check size={10} /> {replanForm.categoryName} — {replanForm.secondaryLayers.length} plys auto-loaded
+                          </p>
+                        )}
+                      </div>
+                      {/* Sub Type (was Content Type) */}
+                      {replanForm.categoryId && (() => {
+                        const selCat = categories.find(c => c.id === replanForm.categoryId);
+                        const contentOptions = selCat?.contents ?? [];
+                        if (contentOptions.length === 0) return null;
+                        return (
+                          <div>
+                            <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Sub Type</label>
+                            <select
+                              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                              value={replanForm.content || ""}
+                              onChange={e => { rf("content", e.target.value); setDimValues({}); }}>
+                              <option value="">-- Select Sub Type --</option>
+                              {contentOptions.map(ct => (
+                                <option key={ct} value={ct}>{ct}</option>
+                              ))}
+                            </select>
+                            {replanForm.content && (
+                              <p className="text-[10px] text-teal-600 mt-1 flex items-center gap-1">
+                                <Check size={10} /> {replanForm.content}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Pack Size</label>
+                        <input placeholder="e.g. 250ml, 1L" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                          value={(replanForm as any).packSize ?? ""}
+                          onChange={e => rf("packSize" as any, e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Brand Name</label>
+                        <input placeholder="e.g. ThumsUp, Amul" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                          value={(replanForm as any).brandName ?? ""}
+                          onChange={e => rf("brandName" as any, e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Product Type</label>
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                          value={(replanForm as any).productType ?? ""}
+                          onChange={e => rf("productType" as any, e.target.value)}>
+                          <option value="">-- Select --</option>
+                          {["CSD", "Water", "Juice", "Sleeve", "Label", "Pouch", "Roll Form", "Other"].map(t => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">SKU Type</label>
+                        <input placeholder="e.g. ThumsUp, Fanta" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                          value={(replanForm as any).skuType ?? ""}
+                          onChange={e => rf("skuType" as any, e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Bottle Type</label>
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                          value={(replanForm as any).bottleType ?? ""}
+                          onChange={e => rf("bottleType" as any, e.target.value)}>
+                          <option value="">-- Select --</option>
+                          {["RPET", "VPET", "Glass", "Tin", "Pouch", "Carton", "N/A"].map(t => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Address Type</label>
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                          value={(replanForm as any).addressType ?? ""}
+                          onChange={e => rf("addressType" as any, e.target.value)}>
+                          <option value="">-- Select --</option>
+                          <option value="Single">Single</option>
+                          <option value="Multi">Multi</option>
+                        </select>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Special Specifications</label>
+                        <input placeholder="e.g. @20 Rs, Free, Promo, Export" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                          value={(replanForm as any).specialSpecs ?? ""}
+                          onChange={e => rf("specialSpecs" as any, e.target.value)} />
+                      </div>
+                    </div>
                   </div>
+
                   <Select label="Print Type" value={replanForm.printType}
                     onChange={e => rf("printType", e.target.value as GravureProductCatalog["printType"])}
                     options={[{ value: "Surface Print", label: "Surface Print" }, { value: "Reverse Print", label: "Reverse Print" }, { value: "Combination", label: "Combination" }]} />
@@ -941,54 +1064,6 @@ export default function ProductCatalogPage() {
                     options={[{ value: "Meter", label: "Meter" }, { value: "Pcs", label: "Pcs" }, { value: "Kg", label: "Kg" }]} />
                   <Input label={`Rate / ${replanForm.standardUnit || "Unit"} (₹)`} type="number" value={replanForm.perMeterRate || ""}
                     onChange={e => rf("perMeterRate", Number(e.target.value))} step={0.001} />
-                  {/* Category — auto-fills ply configuration */}
-                  <div className="sm:col-span-2 lg:col-span-1">
-                    <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Category (Auto-fill Plys)</label>
-                    <select
-                      className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
-                      value={replanForm.categoryId || ""}
-                      onChange={e => {
-                        if (!e.target.value) { setReplanForm(p => p ? { ...p, categoryId: "", categoryName: "", content: "" } : p); return; }
-                        const hasPlys = replanForm.secondaryLayers.some(l => l.plyType || l.consumableItems.length > 0);
-                        if (hasPlys) { setPendingReplanCategoryId(e.target.value); }
-                        else { applyReplanCategory(e.target.value); }
-                      }}>
-                      <option value="">-- Select Category --</option>
-                      {categories.filter(c => c.status === "Active").map(c => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
-                    {replanForm.categoryName && (
-                      <p className="text-[10px] text-purple-600 mt-1 flex items-center gap-1">
-                        <Check size={10} /> {replanForm.categoryName} — {replanForm.secondaryLayers.length} plys auto-loaded
-                      </p>
-                    )}
-                  </div>
-                  {/* Content Type — populated from selected category's contents */}
-                  {replanForm.categoryId && (() => {
-                    const selCat = categories.find(c => c.id === replanForm.categoryId);
-                    const contentOptions = selCat?.contents ?? [];
-                    if (contentOptions.length === 0) return null;
-                    return (
-                      <div>
-                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Content Type</label>
-                        <select
-                          className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
-                          value={replanForm.content || ""}
-                          onChange={e => { rf("content", e.target.value); setDimValues({}); }}>
-                          <option value="">-- Select Content Type --</option>
-                          {contentOptions.map(ct => (
-                            <option key={ct} value={ct}>{ct}</option>
-                          ))}
-                        </select>
-                        {replanForm.content && (
-                          <p className="text-[10px] text-teal-600 mt-1 flex items-center gap-1">
-                            <Check size={10} /> {replanForm.content}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })()}
                 </div>
 
                 {/* ── Dimension Input + Live Diagram — appears only after Content Type is selected ── */}
@@ -1037,6 +1112,30 @@ export default function ProductCatalogPage() {
                             />
                           </div>
                         </div>
+                        {/* ── Colors inside Dimension Setup ── */}
+                        <div className="border-t border-indigo-100 pt-3">
+                          <p className="text-[10px] font-semibold text-purple-500 uppercase tracking-widest mb-2">Colors & Print</p>
+                          <div className="grid grid-cols-3 gap-3">
+                            <div>
+                              <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Front Colors</label>
+                              <input type="number" min={0} max={12} placeholder="0"
+                                value={replanForm.frontColors || ""}
+                                onChange={e => rf("frontColors", Number(e.target.value))}
+                                className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400 font-mono" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Back Colors</label>
+                              <input type="number" min={0} max={12} placeholder="0"
+                                value={replanForm.backColors || ""}
+                                onChange={e => rf("backColors", Number(e.target.value))}
+                                className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400 font-mono" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Total Colors (Auto)</label>
+                              <div className="px-3 py-2 bg-purple-50 border border-purple-200 rounded-xl text-sm font-bold text-purple-700 text-center">{replanForm.noOfColors} Colors</div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                       <DimensionDiagram contentType={replanForm.content} dims={dimValues} />
                     </div>
@@ -1062,6 +1161,25 @@ export default function ProductCatalogPage() {
                       onChange={e => { const m = PRINT_MACHINES.find(x => x.id === e.target.value); if (m) { rf("machineId", m.id); rf("machineName", m.name); } }}
                       options={[{ value: "", label: "-- Select Machine --" }, ...PRINT_MACHINES.map(m => ({ value: m.id, label: `${m.name} (${m.status})` }))]} />
                   </div>
+                  {(() => {
+                    const selMachine = replanForm.machineId ? PRINT_MACHINES.find(m => m.id === replanForm.machineId) : null;
+                    if (!selMachine) return null;
+                    const minW = parseFloat((selMachine as any).minWebWidth) || 0;
+                    const maxW = parseFloat((selMachine as any).maxWebWidth) || 0;
+                    const colors = (selMachine as any).noOfColors || "";
+                    const speed  = (selMachine as any).speedMax   || "";
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 mt-2 p-2.5 rounded-xl border border-blue-200 bg-blue-50">
+                        <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Machine Specs:</span>
+                        <span className="flex items-center gap-1 text-[11px] font-semibold text-blue-800">
+                          <span className="px-2 py-0.5 rounded-full bg-blue-100 border border-blue-300">Min Film: <strong>{minW} mm</strong></span>
+                          <span className="px-2 py-0.5 rounded-full bg-blue-100 border border-blue-300">Max Film: <strong>{maxW} mm</strong></span>
+                          {colors && <span className="px-2 py-0.5 rounded-full bg-indigo-100 border border-indigo-300 text-indigo-700">Colors: <strong>{colors}</strong></span>}
+                          {speed  && <span className="px-2 py-0.5 rounded-full bg-green-100 border border-green-300 text-green-700">Speed: <strong>{speed} m/min</strong></span>}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Process Planning */}
@@ -1230,10 +1348,18 @@ export default function ProductCatalogPage() {
                                       <div key={ci.consumableId} className="bg-teal-50/40 border border-teal-100 rounded-xl p-3">
                                         <div className="flex items-center justify-between mb-2">
                                           <span className="text-[10px] font-bold text-teal-700 uppercase">Consumable {ciIdx + 1}</span>
-                                          <button onClick={() => removePlyConsumable(index, ciIdx)}
-                                            className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition">
-                                            <X size={12} />
-                                          </button>
+                                          <div className="flex items-center gap-1">
+                                            <button
+                                              onClick={() => clonePlyConsumable(index, ciIdx)}
+                                              title="Clone this consumable"
+                                              className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition">
+                                              <Copy size={11} /> Clone
+                                            </button>
+                                            <button onClick={() => removePlyConsumable(index, ciIdx)}
+                                              className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition">
+                                              <X size={12} />
+                                            </button>
+                                          </div>
                                         </div>
                                         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                                           <div>
@@ -1317,6 +1443,12 @@ export default function ProductCatalogPage() {
                             <RefreshCw size={11} /> Change Plan
                           </button>
                         )}
+                        {(replanForm.jobHeight || 0) > 0 && (
+                          <button onClick={() => setCylGuideOpen(true)}
+                            className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg border border-emerald-200">
+                            <Calculator size={12} /> Cyl. Circ Guide
+                          </button>
+                        )}
                         <button onClick={() => setReplanShowPlan(!replanShowPlan)}
                           className="flex items-center gap-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200">
                           <Eye size={12} /> {replanShowPlan ? "Hide Plan" : "Select Plan"}
@@ -1349,6 +1481,7 @@ export default function ProductCatalogPage() {
                             <thead className="bg-slate-800 text-slate-300">
                               <tr>
                                 <th className="p-2 border border-slate-700 text-center">Select</th>
+                                <th className="p-2 border border-slate-700 text-center">Layout</th>
                                 {[
                                   { key: "machineName",      label: "Machine" },
                                   { key: "acUps",            label: "AC UPS" },
@@ -1385,13 +1518,48 @@ export default function ProductCatalogPage() {
                                         {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                                       </div>
                                     </td>
+                                    <td className="p-2 border border-gray-100 text-center">
+                                      <button
+                                        onClick={e => { e.stopPropagation(); setUpsPreviewPlan(plan); }}
+                                        className="p-1 rounded-md hover:bg-indigo-100 text-indigo-500 hover:text-indigo-700 transition-colors"
+                                        title="View UPS Layout">
+                                        <EyeIcon size={13} />
+                                      </button>
+                                    </td>
                                     <td className="p-2 border border-gray-100 font-medium text-gray-700">{plan.machineName}{p.isBest && <span className="ml-1.5 px-1.5 py-0.5 bg-green-500 text-white text-[9px] font-bold rounded-full">BEST</span>}{p.isSpecial && !p.isSpecialSleeve && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded-full">SPECIAL CYL</span>}{p.isSpecialSleeve && <span className="ml-1.5 px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-bold rounded-full">SPECIAL SLV</span>}</td>
                                     <td className="p-2 border border-gray-100 text-center font-bold text-indigo-700">{plan.acUps}</td>
                                     <td className="p-2 border border-gray-100 text-center font-mono">{p.printingWidth}</td>
                                     <td className="p-2 border border-gray-100"><span className={`font-semibold ${p.isSpecialSleeve ? "text-rose-600" : "text-blue-600"}`}>{p.sleeveCode}</span><br/><span className={`text-[9px] ${p.isSpecialSleeve ? "text-rose-500" : "text-gray-400"}`}>{p.sleeveName}</span></td>
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.isSpecialSleeve ? "text-rose-600" : "text-blue-700"}`}>{p.sleeveWidthVal}</td>
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.sideWaste > 100 ? "text-red-600" : "text-amber-600"}`}>{p.sideWaste}</td>
-                                    <td className="p-2 border border-gray-100 text-center text-indigo-700">{plan.filmSize}</td>
+                                    <td className="p-2 border border-gray-100 text-center">
+                                      <div className="font-bold text-indigo-700 text-xs">{plan.filmSize}</div>
+                                      {(() => {
+                                        const jobW   = replanForm?.actualWidth || replanForm?.jobWidth || 0;
+                                        const shrink = replanForm?.widthShrinkage || 0;
+                                        const trim   = replanForm?.trimmingSize   || 0;
+                                        const hasShrink = shrink > 0;
+                                        const hasTrim   = trim   > 0;
+                                        if (!hasShrink && !hasTrim) return null;
+                                        return (
+                                          <div className="flex items-center justify-center flex-wrap gap-0.5 mt-1">
+                                            <span className="text-[8px] text-indigo-500 font-semibold leading-none">{plan.acUps}×{jobW}</span>
+                                            {hasShrink && (
+                                              <span className="text-[8px] font-bold leading-none px-1 py-0.5 rounded"
+                                                style={{ background: "#fdf4ff", color: "#a21caf" }}>
+                                                +{plan.acUps * shrink}S
+                                              </span>
+                                            )}
+                                            {hasTrim && (
+                                              <span className="text-[8px] font-bold leading-none px-1 py-0.5 rounded"
+                                                style={{ background: "#fff7ed", color: "#c2410c" }}>
+                                                +{2 * trim}T
+                                              </span>
+                                            )}
+                                          </div>
+                                        );
+                                      })()}
+                                    </td>
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.deadMargin < 0 ? "text-red-600" : "text-orange-600"}`}>{p.deadMargin}</td>
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.isBest ? "text-green-700" : p.totalWaste > 300 ? "text-red-600" : "text-amber-600"}`}>{p.totalWaste}</td>
                                     <td className="p-2 border border-gray-100"><span className={`font-semibold ${p.isSpecial ? "text-amber-600" : "text-violet-600"}`}>{p.cylinderCode}</span><br/><span className={`text-[9px] ${p.isSpecial ? "text-amber-500" : "text-gray-400"}`}>{p.cylinderName}</span></td>
@@ -1404,7 +1572,7 @@ export default function ProductCatalogPage() {
                                 );
                               })}
                               {replanVisiblePlans.length === 0 && (
-                                <tr><td colSpan={9} className="p-4 text-center text-gray-400 text-xs">No plans match your search</td></tr>
+                                <tr><td colSpan={17} className="p-4 text-center text-gray-400 text-xs">No plans match your search</td></tr>
                               )}
                             </tbody>
                           </table>
@@ -1923,6 +2091,225 @@ export default function ProductCatalogPage() {
         </Modal>
       )}
 
+      {/* ══ CYLINDER CIRCUMFERENCE GUIDE MODAL ══════════════════ */}
+      {cylGuideOpen && replanForm && (() => {
+        const jobH    = replanForm.jobHeight || 0;
+        const jobW    = replanForm.actualWidth || replanForm.jobWidth || 0;
+        const shrink  = replanForm.widthShrinkage || 0;
+        const trim    = replanForm.trimmingSize   || 0;
+        const laneW   = jobW + shrink;
+        // Available sleeves from stock
+        const stockSleeves = SLEEVE_TOOLS.map(s => parseFloat(s.printWidth)).filter(w => w > 0).sort((a, b) => a - b);
+        // Circumference options: 1× to 8× jobHeight (practical range)
+        const maxRepeat = 8;
+        const rows = Array.from({ length: maxRepeat }, (_, i) => {
+          const repeatUPS = i + 1;
+          const circ = repeatUPS * jobH;
+          // For each sleeve, what AC UPS can this sleeve support?
+          const sleeveResults = stockSleeves.map(sw => {
+            const acUps = laneW > 0 ? Math.floor(sw / laneW) : 0;
+            const filmW = acUps * laneW + 2 * trim;
+            if (acUps === 0 || filmW > sw) return null;
+            return { sw, acUps, filmW, totalUPS: acUps * repeatUPS };
+          }).filter(Boolean) as { sw: number; acUps: number; filmW: number; totalUPS: number }[];
+          return { repeatUPS, circ, sleeveResults };
+        });
+        return (
+          <Modal open onClose={() => setCylGuideOpen(false)} title="Cylinder Circumference Guide" size="xl">
+            <div className="space-y-4">
+              {/* Input summary */}
+              <div className="flex flex-wrap gap-2 text-xs">
+                {[
+                  { l: "Job Height",  v: `${jobH} mm`,    cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+                  { l: "Job Width",   v: `${jobW} mm`,    cls: "bg-blue-50 text-blue-700 border-blue-200" },
+                  { l: "Lane Width",  v: `${laneW} mm`,   cls: "bg-purple-50 text-purple-700 border-purple-200" },
+                  { l: "Trimming",    v: trim > 0 ? `${trim} mm` : "—", cls: "bg-orange-50 text-orange-700 border-orange-200" },
+                ].map(s => (
+                  <div key={s.l} className={`px-2.5 py-1.5 rounded-lg border font-medium ${s.cls}`}>
+                    <span className="opacity-60 text-[10px] uppercase tracking-wider block leading-none mb-0.5">{s.l}</span>
+                    <span className="font-bold">{s.v}</span>
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <strong className="text-amber-700">How to use:</strong> Choose the <em>Repeat UPS</em> (impressions per cylinder revolution) you need → the <strong>Circumference</strong> column tells you what circumference to order for your 1100mm cylinder. Cross-check the sleeve columns to see your AC UPS and Total UPS for each sleeve size.
+              </p>
+
+              <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+                <table className="min-w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-indigo-700 text-white">
+                      <th className="px-3 py-2.5 text-left whitespace-nowrap">Repeat UPS<br/><span className="text-indigo-300 font-normal text-[10px]">(around cylinder)</span></th>
+                      <th className="px-3 py-2.5 text-center whitespace-nowrap">Circumference<br/><span className="text-indigo-300 font-normal text-[10px]">= Repeat × {jobH}mm</span></th>
+                      {stockSleeves.map(sw => (
+                        <th key={sw} className="px-3 py-2.5 text-center whitespace-nowrap border-l border-indigo-600">
+                          Sleeve {sw}mm<br/>
+                          <span className="text-indigo-300 font-normal text-[10px]">AC UPS · Film · Total UPS</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-100">
+                    {rows.map(row => (
+                      <tr key={row.repeatUPS} className={row.repeatUPS % 2 === 0 ? "bg-gray-50" : "bg-white"}>
+                        <td className="px-3 py-2.5 font-bold text-indigo-700 text-sm">{row.repeatUPS}×</td>
+                        <td className="px-3 py-2.5 text-center">
+                          <span className="inline-block px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold text-sm border border-emerald-300">
+                            {row.circ} mm
+                          </span>
+                        </td>
+                        {row.sleeveResults.map((res, si) => (
+                          <td key={si} className="px-3 py-2.5 text-center border-l border-gray-100">
+                            {res ? (
+                              <div className="space-y-0.5">
+                                <div className="text-[10px] text-gray-500">{res.acUps} AC UPS · {res.filmW}mm film</div>
+                                <div className="inline-block px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-bold text-[11px]">
+                                  {res.totalUPS} total UPS
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-gray-300 text-[10px]">—</span>
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-[10px] text-gray-400">
+                * AC UPS = how many lanes fit across the sleeve width. Total UPS = AC UPS × Repeat UPS. Cylinder print width must be ≥ film width + 100mm.
+              </p>
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* ══ UPS LAYOUT PREVIEW MODAL ═════════════════════════════ */}
+      {upsPreviewPlan && replanForm && (() => {
+        const plan   = upsPreviewPlan as any;
+        const jobW   = replanForm.actualWidth || replanForm.jobWidth || 0;
+        const shrink = replanForm.widthShrinkage || 0;
+        const trim   = replanForm.trimmingSize   || 0;
+        const acUps  = plan.acUps as number;
+        const filmW  = plan.filmSize as number;
+        // pixel scaling: fit into ~640px canvas
+        const CANVAS = 640;
+        const scale  = filmW > 0 ? CANVAS / filmW : 1;
+        const toW    = (mm: number) => Math.max(mm * scale, mm > 0 ? 2 : 0);
+        // sections list for drawing
+        const sections: { label: string; mm: number; color: string; text: string }[] = [];
+        // Left bleed only
+        if (trim > 0) sections.push({ label: `${trim}mm`, mm: trim, color: "#fed7aa", text: "#c2410c" });
+        // Lanes: job + shrinkage only (no per-lane trim)
+        for (let i = 0; i < acUps; i++) {
+          sections.push({ label: `${jobW}mm`, mm: jobW, color: "#e0e7ff", text: "#4338ca" });
+          if (shrink > 0) sections.push({ label: `${shrink}mm`, mm: shrink, color: "#fae8ff", text: "#a21caf" });
+        }
+        // Right bleed only
+        if (trim > 0) sections.push({ label: `${trim}mm`, mm: trim, color: "#fed7aa", text: "#c2410c" });
+        return (
+          <Modal open onClose={() => setUpsPreviewPlan(null)} title="UPS Layout Design" size="xl">
+            <div className="space-y-4">
+              {/* Stats row */}
+              <div className="flex flex-wrap gap-2 text-xs">
+                {[
+                  { l: "Film Width",  v: `${filmW} mm`,  cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+                  { l: "AC UPS",      v: String(acUps),   cls: "bg-purple-50 text-purple-700 border-purple-200" },
+                  { l: "Job Width",   v: `${jobW} mm`,    cls: "bg-blue-50 text-blue-700 border-blue-200" },
+                  { l: "Shrinkage",   v: shrink > 0 ? `+${shrink} mm` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                  { l: "Trimming",    v: trim > 0 ? `${trim} mm` : "—",      cls: "bg-orange-50 text-orange-700 border-orange-200" },
+                  { l: "Repeat UPS",  v: String(plan.repeatUPS), cls: "bg-teal-50 text-teal-700 border-teal-200" },
+                  { l: "Total UPS",   v: String(plan.totalUPS),  cls: "bg-green-50 text-green-700 border-green-200" },
+                  { l: "Cylinder",    v: plan.cylinderCode,       cls: "bg-violet-50 text-violet-700 border-violet-200" },
+                  { l: "Cyl. Circ",   v: `${plan.cylCirc} mm`,   cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+                ].map(s => (
+                  <div key={s.l} className={`px-2.5 py-1.5 rounded-lg border font-medium ${s.cls}`}>
+                    <span className="opacity-60 text-[10px] uppercase tracking-wider block leading-none mb-0.5">{s.l}</span>
+                    <span className="font-bold">{s.v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Visual strip */}
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3">Film Web Cross-Section View (top view, not to scale)</p>
+                <div className="flex items-stretch rounded-md overflow-hidden border border-gray-300 shadow" style={{ height: 56 }}>
+                  {sections.map((sec, i) => (
+                    <div key={i}
+                      style={{ width: toW(sec.mm), background: sec.color, borderRight: i < sections.length - 1 ? "1px solid rgba(0,0,0,0.10)" : "none", flexShrink: 0 }}
+                      className="flex flex-col items-center justify-center overflow-hidden relative group"
+                      title={`${sec.label}`}>
+                      {toW(sec.mm) > 18 && (
+                        <span className="text-[8px] font-bold leading-none" style={{ color: sec.text, writingMode: "horizontal-tb" }}>{sec.label}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Bottom ruler */}
+                <div className="flex mt-1" style={{ width: CANVAS }}>
+                  <span className="text-[9px] text-gray-400">0</span>
+                  <span className="flex-1 text-center text-[9px] text-gray-400">{Math.round(filmW / 2)} mm</span>
+                  <span className="text-[9px] text-gray-400">{filmW} mm</span>
+                </div>
+
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 mt-3">
+                  {[
+                    { color: "#e0e7ff", border: "#6366f1", label: `Job Width (${jobW}mm × ${acUps} lanes)` },
+                    ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: `Shrinkage (+${shrink}mm × ${acUps} lanes = +${acUps * shrink}mm)` }] : []),
+                    ...(trim > 0   ? [{ color: "#fed7aa", border: "#c2410c", label: `Trimming (left ${trim}mm + right ${trim}mm = ${2 * trim}mm total)` }] : []),
+                  ].map(l => (
+                    <div key={l.label} className="flex items-center gap-1.5">
+                      <div className="w-4 h-4 rounded border-2 flex-shrink-0" style={{ background: l.color, borderColor: l.border }} />
+                      <span className="text-[11px] text-gray-600">{l.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Lane breakdown table */}
+              <div>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Lane-by-Lane Breakdown</p>
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        {["Position", "Type", "Width (mm)", "Color"].map(h => (
+                          <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      {trim > 0 && (
+                        <tr><td className="px-3 py-1.5 text-gray-500">Left Bleed</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#fff7ed", color: "#c2410c" }}>Trim</span></td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">{trim}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#fed7aa", border: "1px solid #c2410c" }} /></td></tr>
+                      )}
+                      {Array.from({ length: acUps }, (_, i) => (
+                        <React.Fragment key={`lane-${i}`}>
+                          <tr><td className="px-3 py-1.5 text-gray-500">Lane {i + 1} — Job</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#e0e7ff", color: "#4338ca" }}>Job Width</span></td><td className="px-3 py-1.5 font-mono font-bold text-indigo-600">{jobW}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#e0e7ff", border: "1px solid #6366f1" }} /></td></tr>
+                          {shrink > 0 && <tr><td className="px-3 py-1.5 text-gray-500">Lane {i + 1} — Shrink</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#fae8ff", color: "#a21caf" }}>Shrinkage</span></td><td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">{shrink}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#fae8ff", border: "1px solid #a21caf" }} /></td></tr>}
+                        </React.Fragment>
+                      ))}
+                      {trim > 0 && (
+                        <tr><td className="px-3 py-1.5 text-gray-500">Right Bleed</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#fff7ed", color: "#c2410c" }}>Trim</span></td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">{trim}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#fed7aa", border: "1px solid #c2410c" }} /></td></tr>
+                      )}
+                      <tr className="bg-gray-50 font-bold">
+                        <td className="px-3 py-2 text-gray-700" colSpan={2}>Total Film Width</td>
+                        <td className="px-3 py-2 font-mono text-indigo-700">{filmW}</td>
+                        <td />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
       {/* ══ VIEW MODAL ════════════════════════════════════════════ */}
       {viewPlanRow && (
         <Modal open={!!viewPlanRow} onClose={() => setViewPlanRow(null)}
@@ -1943,6 +2330,13 @@ export default function ProductCatalogPage() {
             {viewPlanRow.sourceWorkOrderNo && (
               <span className="px-3 py-1 bg-green-50 border border-green-200 text-green-700 rounded-full font-semibold">WO: {viewPlanRow.sourceWorkOrderNo}</span>
             )}
+            {(viewPlanRow as any).packSize && <span className="px-3 py-1 bg-orange-50 border border-orange-200 text-orange-700 rounded-full">📦 {(viewPlanRow as any).packSize}</span>}
+            {(viewPlanRow as any).brandName && <span className="px-3 py-1 bg-orange-50 border border-orange-200 text-orange-800 rounded-full font-semibold">{(viewPlanRow as any).brandName}</span>}
+            {(viewPlanRow as any).productType && <span className="px-3 py-1 bg-amber-50 border border-amber-200 text-amber-700 rounded-full">{(viewPlanRow as any).productType}</span>}
+            {(viewPlanRow as any).skuType && <span className="px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full">{(viewPlanRow as any).skuType}</span>}
+            {(viewPlanRow as any).bottleType && <span className="px-3 py-1 bg-sky-50 border border-sky-200 text-sky-700 rounded-full">{(viewPlanRow as any).bottleType}</span>}
+            {(viewPlanRow as any).addressType && <span className="px-3 py-1 bg-sky-50 border border-sky-200 text-sky-700 rounded-full">{(viewPlanRow as any).addressType} Address</span>}
+            {(viewPlanRow as any).specialSpecs && <span className="px-3 py-1 bg-rose-50 border border-rose-200 text-rose-700 rounded-full font-semibold">★ {(viewPlanRow as any).specialSpecs}</span>}
           </div>
 
           {viewPlanRow.remarks && (
