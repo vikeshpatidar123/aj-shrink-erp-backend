@@ -10,13 +10,15 @@ import {
   gravureOrders, gravureWorkOrders as initWOs,
   GravureProductCatalog, GravureOrder, GravureWorkOrder,
   machines, processMasters, items, ledgers, GravureEstimationProcess,
-  SecondaryLayer, PlyConsumableItem, CategoryPlyConsumable,
+  SecondaryLayer, PlyConsumableItem,
   CATEGORY_GROUP_SUBGROUP,
   tools as allTools, toolInventory,
+  customers,
 } from "@/data/dummyData";
 import { useCategories } from "@/context/CategoriesContext";
 import { useProductCatalog } from "@/context/ProductCatalogContext";
 import { PlanViewer, PlanInput } from "@/components/gravure/PlanViewer";
+import { DimensionDiagram, DimensionInputPanel, DimValues, CONTENT_TYPE_CONFIG } from "@/components/gravure/DimensionDiagram";
 import { DataTable, Column } from "@/components/tables/DataTable";
 import { statusBadge } from "@/components/ui/Badge";
 import Button   from "@/components/ui/Button";
@@ -39,20 +41,6 @@ const FILM_SUBGROUPS = Array.from(
   FILM_ITEMS.filter(i => i.subGroup === subGroup).forEach(i => { const t = parseFloat(i.thickness); if (!isNaN(t) && t > 0) data.thicknesses.add(t); });
   return { subGroup, density: data.density, thicknesses: Array.from(data.thicknesses).sort((a, b) => a - b) };
 });
-
-const DEFAULT_PLY_CONSUMABLES: Record<string, CategoryPlyConsumable[]> = {
-  Printing:   [
-    { id: "DEF_INK", plyType: "Printing",   itemGroup: "Ink",     itemSubGroup: "Solvent Based Ink",  fieldDisplayName: "Ink",     defaultValue: 3.5, minValue: 1,   maxValue: 8,   sharePercentageFormula: "" },
-    { id: "DEF_SOL", plyType: "Printing",   itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", fieldDisplayName: "Solvent", defaultValue: 2.0, minValue: 0.5, maxValue: 5,   sharePercentageFormula: "" },
-  ],
-  Lamination: [
-    { id: "DEF_ADH", plyType: "Lamination", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive",   fieldDisplayName: "Adhesive", defaultValue: 3.5, minValue: 2,   maxValue: 6,   sharePercentageFormula: "" },
-    { id: "DEF_HRD", plyType: "Lamination", itemGroup: "Hardner",  itemSubGroup: "PU Hardener",   fieldDisplayName: "Hardener", defaultValue: 0.7, minValue: 0.3, maxValue: 1.5, sharePercentageFormula: "" },
-  ],
-  Coating: [
-    { id: "DEF_CTG", plyType: "Coating",    itemGroup: "Adhesive", itemSubGroup: "Coating Adhesive", fieldDisplayName: "Coating", defaultValue: 3.0, minValue: 1, maxValue: 6, sharePercentageFormula: "" },
-  ],
-};
 
 // ─── Section Header ───────────────────────────────────────────
 const SH = ({ label }: { label: string }) => (
@@ -84,6 +72,10 @@ export default function ProductCatalogPage() {
   const [editRate,   setEditRate]   = useState(0);
   const [editRemark, setEditRemark] = useState("");
 
+  // ── Dimension diagram state ───────────────────────────────
+  const [dimValues, setDimValues] = useState<DimValues>({});
+  const patchDim = (patch: DimValues) => setDimValues(p => ({ ...p, ...patch }));
+
   // ── Replan / Edit state ───────────────────────────────────
   const [replanOpen,    setReplanOpen]    = useState(false);
   const [replanForm,    setReplanForm]    = useState<GravureProductCatalog | null>(null);
@@ -91,7 +83,7 @@ export default function ProductCatalogPage() {
   const [isNewCatalog,  setIsNewCatalog]  = useState(false);
 
   type FilmRequisition = { source: "Extrusion" | "Purchase" | ""; status: "Pending" | "Requested" | "Available"; requiredDate?: string; spec?: string; priority?: string; vendor?: string; expectedRate?: number; remarks?: string; };
-  type ColorShade      = { colorNo: number; colorName: string; inkType: "Spot" | "Process" | "Special"; pantoneRef: string; labL: string; labA: string; labB: string; deltaE: string; shadeCardRef: string; status: "Pending" | "Standard Received" | "Approved" | "Rejected"; remarks: string; };
+  type ColorShade      = { colorNo: number; colorName: string; inkType: "Spot" | "Process" | "Special"; pantoneRef: string; labL: string; labA: string; labB: string; actualL: string; actualA: string; actualB: string; deltaE: string; shadeCardRef: string; status: "Pending" | "Standard Received" | "Approved" | "Rejected"; remarks: string; };
   type MaterialAlloc   = { id: string; plyNo?: number; materialType: string; materialName: string; requiredQty: number; unit: string; allocatedQty: number; lotNo: string; location: string; status: "Pending" | "Partial" | "Allocated"; };
   type CylinderAlloc   = { colorNo: number; colorName: string; cylinderNo: string; circumference: string; cylinderType: "New" | "Existing" | "Rechromed"; status: "Pending" | "Available" | "In Use" | "Under Chrome" | "Ordered"; remarks: string; };
   const [catalogFilmReqs,   setCatalogFilmReqs]   = useState<FilmRequisition[]>([]);
@@ -117,23 +109,10 @@ export default function ProductCatalogPage() {
   };
 
   // ── Ply helpers ───────────────────────────────────────────
-  const getCategoryConsumables = (categoryId: string, plyType: string): CategoryPlyConsumable[] => {
-    if (!plyType || plyType === "Film") return [];
-    const cat = categories.find(c => c.id === categoryId);
-    const catDefs = cat?.plyConsumables?.filter(pc => pc.plyType === plyType) ?? [];
-    return catDefs.length > 0 ? catDefs : (DEFAULT_PLY_CONSUMABLES[plyType] ?? []);
-  };
-
   const onPlyTypeChange = (index: number, plyType: string) => {
     if (!replanForm) return;
-    const consumables = getCategoryConsumables(replanForm.categoryId || "", plyType);
-    const consumableItems: PlyConsumableItem[] = consumables.map(pc => ({
-      consumableId: pc.id, fieldDisplayName: pc.fieldDisplayName,
-      itemGroup: pc.itemGroup, itemSubGroup: pc.itemSubGroup,
-      itemId: "", itemName: "", gsm: pc.defaultValue, rate: 0,
-    }));
     const layers = [...replanForm.secondaryLayers];
-    layers[index] = { ...layers[index], plyType, consumableItems };
+    layers[index] = { ...layers[index], plyType, consumableItems: [] };
     rf("secondaryLayers", layers);
   };
 
@@ -144,6 +123,28 @@ export default function ProductCatalogPage() {
     const ci = [...layer.consumableItems];
     ci[ciIdx] = { ...ci[ciIdx], ...patch };
     layer.consumableItems = ci;
+    layers[layerIdx] = layer;
+    rf("secondaryLayers", layers);
+  };
+
+  const addPlyConsumable = (layerIdx: number) => {
+    if (!replanForm) return;
+    const layers = [...replanForm.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    layer.consumableItems = [...layer.consumableItems, {
+      consumableId: Math.random().toString(),
+      fieldDisplayName: "", itemGroup: "", itemSubGroup: "",
+      itemId: "", itemName: "", gsm: 0, rate: 0,
+    } as PlyConsumableItem];
+    layers[layerIdx] = layer;
+    rf("secondaryLayers", layers);
+  };
+
+  const removePlyConsumable = (layerIdx: number, ciIdx: number) => {
+    if (!replanForm) return;
+    const layers = [...replanForm.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    layer.consumableItems = layer.consumableItems.filter((_, i) => i !== ciIdx);
     layers[layerIdx] = layer;
     rf("secondaryLayers", layers);
   };
@@ -234,11 +235,14 @@ export default function ProductCatalogPage() {
     if (!machine) return [];
 
     const machineMaxFilm = parseFloat((machine as any).maxWebWidth) || 1300;
-    const baseCirc  = replanForm.jobHeight > 0 ? Math.ceil(replanForm.jobHeight / 12) * 12 : 450;
-    const laneWidth = planWidth + (replanForm.trimmingSize || 0);
-
+    const shrink    = replanForm.widthShrinkage || 0;
+    const jobH      = replanForm.jobHeight || 0;
+    const laneWidth = planWidth + shrink + (replanForm.trimmingSize || 0);
     const trim      = replanForm.trimmingSize || 0;
-    const repeatUPS = replanForm.jobHeight > 0 ? Math.max(1, Math.floor(baseCirc / replanForm.jobHeight)) : 10;
+
+    // per-cylinder: UPS around = floor(cylinder.repeatLength / jobHeight)
+    const calcRepeatUPS = (cylRepeatLength: number) =>
+      jobH > 0 ? Math.max(1, Math.floor(cylRepeatLength / jobH)) : 1;
 
     // ── LOOP A: Sleeve in stock → cylinder (or SPECIAL CYL) ──
     const loopA = SLEEVE_TOOLS.flatMap(sleeve => {
@@ -255,26 +259,30 @@ export default function ProductCatalogPage() {
         const minCyl = req < sleeveWidthVal ? req : sleeveWidthVal + 100;
         const validCylinders = CYLINDER_TOOLS.filter(t => parseFloat(t.printWidth) >= minCyl);
         const cylList = validCylinders.length > 0
-          ? validCylinders.map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, isSpecial: false, isSpecialSleeve: false }))
-          : [{ id: "SPECIAL-CYL", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), isSpecial: true, isSpecialSleeve: false }];
+          ? validCylinders.map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, repeatLength: c.repeatLength || "450", isSpecial: false, isSpecialSleeve: false }))
+          : [{ id: "SPECIAL-CYL", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: jobH > 0 ? String(Math.ceil(jobH / 12) * 12) : "450", isSpecial: true, isSpecialSleeve: false }];
         const sideWaste  = parseFloat((2 * trim).toFixed(1));
         const deadMargin = parseFloat((sleeveWidthVal - filmWidth).toFixed(1));
         const totalWaste = parseFloat((sideWaste + deadMargin).toFixed(1));
-        const totalUPS   = acUps * repeatUPS;
-        const reqRMT     = replanForm.standardQty > 0 ? Math.ceil(replanForm.standardQty / totalUPS) : 1;
-        const totalRMT   = Math.ceil(reqRMT * 1.01);
-        return cylList.map(cylinder => ({
-          planId: `CP-${machine.id}-${sleeve.id}-UPS${acUps}-${cylinder.id}`,
-          machineName: machine.name,
-          filmSize: filmWidth, acUps, printingWidth,
-          sleeveCode: sleeve.code, sleeveName: sleeve.name, sleeveWidthVal,
-          cylinderCode: cylinder.code, cylinderName: cylinder.name,
-          cylinderWidthVal: parseFloat(cylinder.printWidth),
-          sideWaste, deadMargin, totalWaste,
-          cylCirc: baseCirc, repeatUPS, totalUPS,
-          reqRMT, totalRMT, wastage: totalWaste,
-          isSpecial: cylinder.isSpecial, isSpecialSleeve: false, isBest: false,
-        }));
+        return cylList.map(cylinder => {
+          const cylCirc   = parseFloat(cylinder.repeatLength) || 450;
+          const repeatUPS = calcRepeatUPS(cylCirc);
+          const totalUPS  = acUps * repeatUPS;
+          const reqRMT    = replanForm.standardQty > 0 ? Math.ceil(replanForm.standardQty / totalUPS) : 1;
+          const totalRMT  = Math.ceil(reqRMT * 1.01);
+          return {
+            planId: `CP-${machine.id}-${sleeve.id}-UPS${acUps}-${cylinder.id}`,
+            machineName: machine.name,
+            filmSize: filmWidth, acUps, printingWidth,
+            sleeveCode: sleeve.code, sleeveName: sleeve.name, sleeveWidthVal,
+            cylinderCode: cylinder.code, cylinderName: cylinder.name,
+            cylinderWidthVal: parseFloat(cylinder.printWidth),
+            sideWaste, deadMargin, totalWaste,
+            cylCirc, repeatUPS, totalUPS,
+            reqRMT, totalRMT, wastage: totalWaste,
+            isSpecial: cylinder.isSpecial, isSpecialSleeve: false, isBest: false,
+          };
+        });
       }).flat();
     });
 
@@ -300,6 +308,8 @@ export default function ProductCatalogPage() {
         const sideWaste  = parseFloat((2 * trim).toFixed(1));
         const deadMargin = 0;
         const totalWaste = sideWaste;
+        const cylCirc    = parseFloat(cylinder.repeatLength || "450") || 450;
+        const repeatUPS  = calcRepeatUPS(cylCirc);
         const totalUPS   = acUps * repeatUPS;
         const reqRMT     = replanForm.standardQty > 0 ? Math.ceil(replanForm.standardQty / totalUPS) : 1;
         const totalRMT   = Math.ceil(reqRMT * 1.01);
@@ -311,7 +321,7 @@ export default function ProductCatalogPage() {
           cylinderCode: cylinder.code, cylinderName: cylinder.name,
           cylinderWidthVal: cylWidthVal,
           sideWaste, deadMargin, totalWaste,
-          cylCirc: baseCirc, repeatUPS, totalUPS,
+          cylCirc, repeatUPS, totalUPS,
           reqRMT, totalRMT, wastage: totalWaste,
           isSpecial: true, isSpecialSleeve: true, isBest: false,
         }];
@@ -328,7 +338,7 @@ export default function ProductCatalogPage() {
       b.acUps       !== a.acUps       ? b.acUps        - a.acUps       : 0
     );
     return sorted.map((p, idx) => ({ ...p, isBest: !p.isSpecial && idx === 0 }));
-  }, [replanForm?.machineId, replanForm?.actualWidth, replanForm?.jobWidth, replanForm?.jobHeight, replanForm?.trimmingSize, replanForm?.standardQty]);
+  }, [replanForm?.machineId, replanForm?.actualWidth, replanForm?.jobWidth, replanForm?.jobHeight, replanForm?.trimmingSize, replanForm?.widthShrinkage, replanForm?.standardQty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const replanVisiblePlans = useMemo(() => {
     let rows = replanAllPlans;
@@ -369,14 +379,14 @@ export default function ProductCatalogPage() {
         }));
       return { id: Math.random().toString(), layerNo: i + 1, plyType, itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems };
     });
-    setReplanForm(p => p ? { ...p, categoryId, categoryName: cat?.name || "", secondaryLayers: autoLayers } : p);
+    setReplanForm(p => p ? { ...p, categoryId, categoryName: cat?.name || "", secondaryLayers: autoLayers, content: "" } : p);
   };
 
   const initCatalogPrepData = (rf: GravureProductCatalog) => {
     const n = rf.noOfColors || 0;
     setCatalogColorShades(Array.from({ length: n }, (_, i) => ({
       colorNo: i + 1, colorName: `Color ${i + 1}`, inkType: "Spot" as const,
-      pantoneRef: "", labL: "", labA: "", labB: "", deltaE: "1.0",
+      pantoneRef: "", labL: "", labA: "", labB: "", actualL: "", actualA: "", actualB: "", deltaE: "1.0",
       shadeCardRef: "", status: "Pending" as const, remarks: "",
     })));
     const reqSQM = (rf.standardQty || 0) * ((rf.jobWidth || 0) / 1000);
@@ -436,10 +446,7 @@ export default function ProductCatalogPage() {
     [catalogedOrderIds]
   );
 
-  const processedCatalog = useMemo(() =>
-    catalog.filter(c => !!c.sourceOrderId),
-    [catalog]
-  );
+  const processedCatalog = useMemo(() => catalog, [catalog]);
 
   // ── Open Create — opens full 3-tab modal directly ─────────
   const openCreate = (order: GravureOrder) => {
@@ -481,6 +488,42 @@ export default function ProductCatalogPage() {
       backColors:   wo?.backColors,
       status: "Active",
       remarks: wo?.specialInstructions || "",
+    };
+    setIsNewCatalog(true);
+    setReplanForm(draft);
+    setReplanTab("info");
+    setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("film");
+    setReplanSelPlanId(""); setReplanShowPlan(false); setReplanIsPlanApplied(false); setReplanPlanSearch(""); setReplanPlanSort({ key: "", dir: "asc" });
+    setReplanOpen(true);
+  };
+
+  // ── Open Direct Create — blank catalog without an order ──
+  const openDirectCreate = () => {
+    const n = catalog.length + 1;
+    const draft: GravureProductCatalog = {
+      id:          `GPC${String(n).padStart(3, "0")}-DRAFT`,
+      catalogNo:   `GRV-CAT-${String(n).padStart(3, "0")}`,
+      createdDate: new Date().toISOString().slice(0, 10),
+      productName:  "",
+      customerId:   "", customerName: "",
+      categoryId:   "", categoryName: "", content: "",
+      jobWidth: 0, jobHeight: 0,
+      actualWidth: 0, actualHeight: 0,
+      noOfColors: 0,
+      printType: "Surface Print",
+      substrate: "",
+      secondaryLayers: [],
+      processes: [],
+      machineId: "", machineName: "",
+      cylinderCostPerColor: 3500,
+      overheadPct: 12, profitPct: 15,
+      perMeterRate: 0,
+      standardQty: 0, standardUnit: "Meter",
+      sourceEstimationId: "", sourceEstimationNo: "",
+      sourceOrderId: "", sourceOrderNo: "",
+      sourceWorkOrderId: "", sourceWorkOrderNo: "",
+      status: "Active",
+      remarks: "",
     };
     setIsNewCatalog(true);
     setReplanForm(draft);
@@ -571,9 +614,11 @@ export default function ProductCatalogPage() {
             {stats.pending} orders pending · {stats.processed} in catalog
           </p>
         </div>
-        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-500">
-          <Lock size={12} />
-          Created from Work Order / Order only
+        <div className="flex items-center gap-2">
+          <Button icon={<Plus size={14} />} onClick={openDirectCreate}
+            className="bg-purple-600 text-white hover:bg-purple-700 border-0">
+            Create Direct Catalog
+          </Button>
         </div>
       </div>
 
@@ -802,7 +847,7 @@ export default function ProductCatalogPage() {
       {/* ══ REPLAN / CREATE CATALOG MODAL ═════════════════════════ */}
       {replanOpen && replanForm && (
         <Modal open={replanOpen} onClose={() => { setReplanOpen(false); setReplanForm(null); setIsNewCatalog(false); }}
-          title={isNewCatalog ? `Create Catalog — ${replanForm.sourceOrderNo}` : `Replan — ${replanForm.catalogNo}`} size="xl">
+          title={isNewCatalog ? (replanForm.sourceOrderNo ? `Create Catalog — ${replanForm.sourceOrderNo}` : "Create Direct Catalog") : `Replan — ${replanForm.catalogNo}`} size="xl">
 
           {/* Header info */}
           <div className={`border rounded-xl p-3 mb-4 flex flex-wrap gap-4 text-xs ${isNewCatalog ? "bg-teal-50 border-teal-200" : "bg-purple-50 border-purple-200"}`}>
@@ -810,8 +855,8 @@ export default function ProductCatalogPage() {
               <p className={`font-bold ${isNewCatalog ? "text-teal-800" : "text-purple-800"}`}>{replanForm.productName || "—"}</p></div>
             <div><p className={`text-[10px] uppercase font-semibold ${isNewCatalog ? "text-teal-500" : "text-purple-500"}`}>Customer</p>
               <p className={`font-bold ${isNewCatalog ? "text-teal-800" : "text-purple-800"}`}>{replanForm.customerName}</p></div>
-            <div><p className={`text-[10px] uppercase font-semibold ${isNewCatalog ? "text-teal-500" : "text-purple-500"}`}>{isNewCatalog ? "From Order" : "Catalog No"}</p>
-              <p className={`font-bold ${isNewCatalog ? "text-teal-800" : "text-purple-800"}`}>{isNewCatalog ? replanForm.sourceOrderNo : replanForm.catalogNo}</p></div>
+            <div><p className={`text-[10px] uppercase font-semibold ${isNewCatalog ? "text-teal-500" : "text-purple-500"}`}>{isNewCatalog ? (replanForm.sourceOrderNo ? "From Order" : "Direct Entry") : "Catalog No"}</p>
+              <p className={`font-bold ${isNewCatalog ? "text-teal-800" : "text-purple-800"}`}>{isNewCatalog ? (replanForm.sourceOrderNo || "—") : replanForm.catalogNo}</p></div>
             {isNewCatalog && replanForm.sourceWorkOrderNo && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 bg-green-50 border border-green-200 rounded-lg self-center">
                 <CheckCircle size={12} className="text-green-600" />
@@ -841,18 +886,43 @@ export default function ProductCatalogPage() {
               <div className="space-y-4">
                 <SH label="Product Details" />
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  <div className="sm:col-span-2">
+                  <div className="sm:col-span-2 lg:col-span-3">
                     <Input label="Product Name *" value={replanForm.productName}
                       onChange={e => rf("productName", e.target.value)} />
                   </div>
-                  <Input label={`Rate / ${replanForm.standardUnit || "Unit"} (₹)`} type="number" value={replanForm.perMeterRate || ""}
-                    onChange={e => rf("perMeterRate", Number(e.target.value))} step={0.001} />
-                  <Input label="Job Width (mm)" type="number" value={replanForm.jobWidth || ""}
-                    onChange={e => rf("jobWidth", Number(e.target.value))} />
-                  <Input label="Job Height (mm)" type="number" value={replanForm.jobHeight || ""}
-                    onChange={e => rf("jobHeight", Number(e.target.value))} />
-                  <Input label="Trimming Size (mm)" type="number" value={replanForm.trimmingSize || ""}
-                    onChange={e => rf("trimmingSize", Number(e.target.value))} placeholder="e.g. 118" />
+                  {/* Customer — dropdown for direct catalog; readonly if from order */}
+                  <div className="sm:col-span-2 lg:col-span-3">
+                    <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">
+                      Customer / Client Name *
+                    </label>
+                    {replanForm.sourceOrderId ? (
+                      <div className="px-3 py-2 bg-gray-100 border border-gray-200 rounded-xl text-sm font-semibold text-gray-700 flex items-center gap-2">
+                        <Lock size={12} className="text-gray-400" /> {replanForm.customerName || "—"}
+                        <span className="ml-auto text-[10px] text-gray-400 font-normal">From Order</span>
+                      </div>
+                    ) : (
+                      <>
+                        <select
+                          className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                          value={replanForm.customerId || ""}
+                          onChange={e => {
+                            const c = customers.find(x => x.id === e.target.value);
+                            rf("customerId", c?.id ?? "");
+                            rf("customerName", c?.name ?? "");
+                          }}>
+                          <option value="">-- Select Customer --</option>
+                          {customers.map(c => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                        {replanForm.customerName && (
+                          <p className="text-[10px] text-teal-600 mt-1 flex items-center gap-1">
+                            <Check size={10} /> {replanForm.customerName}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
                   <Input label="Front Colors" type="number" value={replanForm.frontColors || ""}
                     onChange={e => rf("frontColors", Number(e.target.value))} min={0} max={12} />
                   <Input label="Back Colors" type="number" value={replanForm.backColors || ""}
@@ -868,7 +938,9 @@ export default function ProductCatalogPage() {
                     onChange={e => rf("standardQty", Number(e.target.value))} />
                   <Select label="Unit" value={replanForm.standardUnit}
                     onChange={e => rf("standardUnit", e.target.value)}
-                    options={[{ value: "Pcs", label: "Pcs" }, { value: "Kg", label: "Kg" }]} />
+                    options={[{ value: "Meter", label: "Meter" }, { value: "Pcs", label: "Pcs" }, { value: "Kg", label: "Kg" }]} />
+                  <Input label={`Rate / ${replanForm.standardUnit || "Unit"} (₹)`} type="number" value={replanForm.perMeterRate || ""}
+                    onChange={e => rf("perMeterRate", Number(e.target.value))} step={0.001} />
                   {/* Category — auto-fills ply configuration */}
                   <div className="sm:col-span-2 lg:col-span-1">
                     <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Category (Auto-fill Plys)</label>
@@ -876,7 +948,7 @@ export default function ProductCatalogPage() {
                       className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
                       value={replanForm.categoryId || ""}
                       onChange={e => {
-                        if (!e.target.value) { setReplanForm(p => p ? { ...p, categoryId: "", categoryName: "" } : p); return; }
+                        if (!e.target.value) { setReplanForm(p => p ? { ...p, categoryId: "", categoryName: "", content: "" } : p); return; }
                         const hasPlys = replanForm.secondaryLayers.some(l => l.plyType || l.consumableItems.length > 0);
                         if (hasPlys) { setPendingReplanCategoryId(e.target.value); }
                         else { applyReplanCategory(e.target.value); }
@@ -892,7 +964,85 @@ export default function ProductCatalogPage() {
                       </p>
                     )}
                   </div>
+                  {/* Content Type — populated from selected category's contents */}
+                  {replanForm.categoryId && (() => {
+                    const selCat = categories.find(c => c.id === replanForm.categoryId);
+                    const contentOptions = selCat?.contents ?? [];
+                    if (contentOptions.length === 0) return null;
+                    return (
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Content Type</label>
+                        <select
+                          className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                          value={replanForm.content || ""}
+                          onChange={e => { rf("content", e.target.value); setDimValues({}); }}>
+                          <option value="">-- Select Content Type --</option>
+                          {contentOptions.map(ct => (
+                            <option key={ct} value={ct}>{ct}</option>
+                          ))}
+                        </select>
+                        {replanForm.content && (
+                          <p className="text-[10px] text-teal-600 mt-1 flex items-center gap-1">
+                            <Check size={10} /> {replanForm.content}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
+
+                {/* ── Dimension Input + Live Diagram — appears only after Content Type is selected ── */}
+                {replanForm.content && CONTENT_TYPE_CONFIG[replanForm.content] && (
+                  <div className="border border-indigo-200 rounded-2xl overflow-hidden">
+                    <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-2.5 flex items-center gap-2">
+                      <Calculator size={14} className="text-white" />
+                      <p className="text-xs font-bold text-white uppercase tracking-widest">Dimension Setup — {replanForm.content}</p>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* Left: inputs */}
+                      <div className="space-y-4">
+                        <div>
+                          <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-widest mb-2">Packaging Dimensions</p>
+                          <DimensionInputPanel
+                            contentType={replanForm.content}
+                            dims={dimValues}
+                            onChange={patch => {
+                              patchDim(patch);
+                              if ("width"        in patch && patch.width        !== undefined) rf("jobWidth",  patch.width);
+                              if ("layflatWidth"  in patch && patch.layflatWidth !== undefined) rf("jobWidth",  patch.layflatWidth);
+                              if ("height"       in patch && patch.height       !== undefined) rf("jobHeight", patch.height);
+                              if ("cutHeight"    in patch && patch.cutHeight    !== undefined) rf("jobHeight", patch.cutHeight);
+                            }}
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] font-semibold text-amber-500 uppercase block mb-1">Trimming / Bleed (mm)</label>
+                            <input
+                              type="number" min={0} step={0.5} placeholder="e.g. 5"
+                              value={dimValues.trimming ?? replanForm.trimmingSize ?? ""}
+                              onChange={e => { const v = Number(e.target.value) || 0; patchDim({ trimming: v }); rf("trimmingSize", v); }}
+                              className="w-full text-sm border border-amber-200 rounded-xl px-3 py-2 bg-amber-50 focus:bg-white outline-none focus:ring-2 focus:ring-amber-400 font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-semibold text-rose-500 uppercase block mb-1">
+                              Width Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— optional</span>
+                            </label>
+                            <input
+                              type="number" min={0} max={20} step={0.5} placeholder="e.g. 2"
+                              value={dimValues.widthShrinkage ?? replanForm.widthShrinkage ?? ""}
+                              onChange={e => { const v = Number(e.target.value) || 0; patchDim({ widthShrinkage: v }); rf("widthShrinkage", v || undefined); }}
+                              className="w-full text-sm border border-rose-200 rounded-xl px-3 py-2 bg-rose-50 focus:bg-white outline-none focus:ring-2 focus:ring-rose-400 font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <DimensionDiagram contentType={replanForm.content} dims={dimValues} />
+                    </div>
+                  </div>
+                )}
+
                 <Textarea label="Remarks" value={replanForm.remarks}
                   onChange={e => rf("remarks", e.target.value)} placeholder="Special notes…" />
                 <div className="flex justify-end">
@@ -983,7 +1133,6 @@ export default function ProductCatalogPage() {
                     <div className="space-y-3">
                       {replanForm.secondaryLayers.map((l, index) => {
                         const thicknesses = FILM_SUBGROUPS.find(s => s.subGroup === l.itemSubGroup)?.thicknesses || [];
-                        const consumableDefs = getCategoryConsumables(replanForm.categoryId || "", l.plyType);
                         return (
                           <div key={l.id} className="bg-white border-2 border-purple-50 rounded-2xl shadow-sm relative overflow-hidden">
                             <div className="flex items-center justify-between bg-purple-50 px-4 py-2 border-b border-purple-100">
@@ -1059,43 +1208,76 @@ export default function ProductCatalogPage() {
                                   </div>
                                 </div>
                               )}
-                              {consumableDefs.length > 0 && (
-                                <div className="space-y-3">
-                                  {consumableDefs.map((pc, ciIdx) => {
-                                    const ci = l.consumableItems[ciIdx] ?? { consumableId: pc.id, fieldDisplayName: pc.fieldDisplayName, itemGroup: pc.itemGroup, itemSubGroup: pc.itemSubGroup, itemId: "", itemName: "", gsm: pc.defaultValue, rate: 0 };
-                                    const subGroups: string[] = (CATEGORY_GROUP_SUBGROUP as Record<string, Record<string, string[]>>)["Raw Material (RM)"]?.[pc.itemGroup] ?? [];
-                                    const filteredItems = items.filter(i => i.group === pc.itemGroup && i.active && (!ci.itemSubGroup || i.subGroup === ci.itemSubGroup));
+                              {l.plyType && (
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-bold text-teal-700 uppercase tracking-widest">Consumable Items ({l.consumableItems.length})</span>
+                                    <button
+                                      onClick={() => addPlyConsumable(index)}
+                                      className="flex items-center gap-1 text-[10px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 px-2.5 py-1 rounded-lg border border-teal-200 transition">
+                                      <Plus size={10} /> Add Consumable
+                                    </button>
+                                  </div>
+
+                                  {l.consumableItems.map((ci, ciIdx) => {
+                                    const CONSUMABLE_GROUPS = ["Ink", "Solvent", "Adhesive", "Hardner"];
+                                    const subGroups = ci.itemGroup ? (CATEGORY_GROUP_SUBGROUP["Raw Material (RM)"]?.[ci.itemGroup] ?? []) : [];
+                                    const filteredItems = items.filter(it =>
+                                      it.group === ci.itemGroup && it.active &&
+                                      (!ci.itemSubGroup || it.subGroup === ci.itemSubGroup)
+                                    );
                                     return (
-                                      <div key={pc.id} className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-[10px] font-bold text-gray-700 uppercase tracking-widest">{pc.fieldDisplayName}</span>
-                                          <span className="text-[9px] px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded font-semibold border border-teal-200">{pc.itemGroup}</span>
+                                      <div key={ci.consumableId} className="bg-teal-50/40 border border-teal-100 rounded-xl p-3">
+                                        <div className="flex items-center justify-between mb-2">
+                                          <span className="text-[10px] font-bold text-teal-700 uppercase">Consumable {ciIdx + 1}</span>
+                                          <button onClick={() => removePlyConsumable(index, ciIdx)}
+                                            className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition">
+                                            <X size={12} />
+                                          </button>
                                         </div>
-                                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                                          <div>
+                                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item Group</label>
+                                            <select
+                                              className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                              value={ci.itemGroup}
+                                              onChange={e => updatePlyConsumable(index, ciIdx, { itemGroup: e.target.value, itemSubGroup: "", itemId: "", itemName: "" })}>
+                                              <option value="">-- Group --</option>
+                                              {CONSUMABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+                                            </select>
+                                          </div>
                                           <div>
                                             <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Sub Group</label>
-                                            <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
-                                              value={ci.itemSubGroup} onChange={e => updatePlyConsumable(index, ciIdx, { itemSubGroup: e.target.value, itemId: "", itemName: "" })}>
+                                            <select
+                                              className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                              value={ci.itemSubGroup}
+                                              onChange={e => updatePlyConsumable(index, ciIdx, { itemSubGroup: e.target.value, itemId: "", itemName: "" })}
+                                              disabled={!ci.itemGroup}>
                                               <option value="">-- Sub Group --</option>
                                               {subGroups.map(sg => <option key={sg} value={sg}>{sg}</option>)}
                                             </select>
                                           </div>
                                           <div>
-                                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item</label>
-                                            <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item (Master)</label>
+                                            <select
+                                              className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
                                               value={ci.itemId}
                                               onChange={e => {
                                                 const it = filteredItems.find(x => x.id === e.target.value);
                                                 updatePlyConsumable(index, ciIdx, { itemId: it?.id ?? "", itemName: it?.name ?? "", rate: parseFloat(it?.estimationRate ?? "0") || 0 });
-                                              }}>
+                                              }}
+                                              disabled={!ci.itemGroup}>
                                               <option value="">-- Select Item --</option>
-                                              {filteredItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+                                              {filteredItems.map(it => (
+                                                <option key={it.id} value={it.id}>{it.name}{it.estimationRate ? ` — ₹${it.estimationRate}/Kg` : ""}</option>
+                                              ))}
                                             </select>
                                           </div>
                                           <div>
                                             <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">GSM / Wet Wt.</label>
-                                            <input type="number" className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
-                                              value={ci.gsm} step={0.1}
+                                            <input type="number" step={0.1} min={0}
+                                              className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                              value={ci.gsm || ""}
                                               onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
                                           </div>
                                           <div>
@@ -1103,12 +1285,17 @@ export default function ProductCatalogPage() {
                                             <input type="number" step={0.01} min={0}
                                               className="w-full text-xs border border-orange-200 bg-orange-50 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 font-mono"
                                               value={ci.rate || ""}
-                                              onChange={e => updatePlyConsumable(index, ciIdx, { rate: Number(e.target.value) })} placeholder="₹/Kg" />
+                                              onChange={e => updatePlyConsumable(index, ciIdx, { rate: Number(e.target.value) })}
+                                              placeholder="₹/Kg" />
                                           </div>
                                         </div>
                                       </div>
                                     );
                                   })}
+
+                                  {l.consumableItems.length === 0 && (
+                                    <p className="text-[10px] text-gray-400 italic text-center py-2">Click "+ Add Consumable" to add ink, solvent, adhesive, etc.</p>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1174,6 +1361,8 @@ export default function ProductCatalogPage() {
                                   { key: "totalWaste",       label: "Total Waste (mm)" },
                                   { key: "cylinderCode",     label: "Cylinder" },
                                   { key: "cylinderWidthVal", label: "Cyl W (mm)" },
+                                  { key: "cylCirc",          label: "Cyl. Circ (mm)" },
+                                  { key: "repeatUPS",        label: "Repeat UPS" },
                                   { key: "totalUPS",         label: "Total UPS" },
                                   { key: "totalRMT",         label: "Total RMT" },
                                 ].map(col => (
@@ -1207,6 +1396,8 @@ export default function ProductCatalogPage() {
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.isBest ? "text-green-700" : p.totalWaste > 300 ? "text-red-600" : "text-amber-600"}`}>{p.totalWaste}</td>
                                     <td className="p-2 border border-gray-100"><span className={`font-semibold ${p.isSpecial ? "text-amber-600" : "text-violet-600"}`}>{p.cylinderCode}</span><br/><span className={`text-[9px] ${p.isSpecial ? "text-amber-500" : "text-gray-400"}`}>{p.cylinderName}</span></td>
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.isSpecial ? "text-amber-600" : "text-violet-700"}`}>{p.cylinderWidthVal}</td>
+                                    <td className="p-2 border border-gray-100 text-center font-bold text-emerald-700">{p.cylCirc}</td>
+                                    <td className="p-2 border border-gray-100 text-center font-bold text-teal-700">{p.repeatUPS}</td>
                                     <td className="p-2 border border-gray-100 text-center font-bold">{plan.totalUPS}</td>
                                     <td className="p-2 border border-gray-100 text-center text-blue-600 font-semibold">{plan.totalRMT}</td>
                                   </tr>
@@ -1504,13 +1695,37 @@ export default function ProductCatalogPage() {
                     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
                       <table className="min-w-full text-[11px] border-collapse">
                         <thead className="bg-purple-700 text-white uppercase tracking-wider">
-                          <tr>{["#", "Ink Item (Master)", "Color Name", "Type", "Pantone Ref", "L*", "a*", "b*", "ΔE Tol.", "Shade Card Ref", "Status", "Remarks"].map(h => (
-                            <th key={h} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
-                          ))}</tr>
+                          <tr>
+                            {["#", "Ink Item (Master)", "Color Name", "Type", "Pantone Ref"].map(h => (
+                              <th key={h} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
+                            ))}
+                            <th colSpan={3} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold bg-indigo-700">Standard L* A* B*</th>
+                            <th colSpan={3} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold bg-teal-700">Actual L* A* B*</th>
+                            {["ΔE Tol.", "ΔE Calc.", "Result", "Shade Card Ref", "Status", "Remarks"].map(h => (
+                              <th key={h} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
+                            ))}
+                          </tr>
+                          <tr className="bg-purple-800 text-purple-200 text-[9px]">
+                            {["", "", "", "", ""].map((_, i) => <th key={i} className="border border-purple-700/30" />)}
+                            {["L*", "A*", "B*"].map(h => <th key={`s-${h}`} className="px-2 py-1 border border-purple-700/30 text-center bg-indigo-800/60">{h}</th>)}
+                            {["L*", "A*", "B*"].map(h => <th key={`a-${h}`} className="px-2 py-1 border border-purple-700/30 text-center bg-teal-800/60">{h}</th>)}
+                            {["", "", "", "", "", ""].map((_, i) => <th key={`e-${i}`} className="border border-purple-700/30" />)}
+                          </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {catalogColorShades.map((cs, i) => (
-                            <tr key={i} className="hover:bg-purple-50/20">
+                          {catalogColorShades.map((cs, i) => {
+                            // ── ΔE CIE76 calculation ──
+                            const sL = parseFloat(cs.labL); const sA = parseFloat(cs.labA); const sB = parseFloat(cs.labB);
+                            const aL = parseFloat(cs.actualL); const aA = parseFloat(cs.actualA); const aB = parseFloat(cs.actualB);
+                            const hasStd    = !isNaN(sL) && !isNaN(sA) && !isNaN(sB);
+                            const hasActual = !isNaN(aL) && !isNaN(aA) && !isNaN(aB);
+                            const calcDE    = hasStd && hasActual
+                              ? parseFloat(Math.sqrt((sL - aL) ** 2 + (sA - aA) ** 2 + (sB - aB) ** 2).toFixed(2))
+                              : null;
+                            const tol    = parseFloat(cs.deltaE) || 1.0;
+                            const pass   = calcDE !== null ? calcDE <= tol : null;
+                            return (
+                            <tr key={i} className={`hover:bg-purple-50/20 ${pass === false ? "bg-red-50/30" : pass === true ? "bg-green-50/20" : ""}`}>
                               <td className="px-2 py-1.5 text-center font-black text-purple-700">{cs.colorNo}</td>
                               <td className="px-2 py-1.5 min-w-[160px]">
                                 <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400"
@@ -1531,16 +1746,35 @@ export default function ProductCatalogPage() {
                               <td className="px-2 py-1.5"><input className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.colorName} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, colorName: e.target.value } : c))} /></td>
                               <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400" value={cs.inkType} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, inkType: e.target.value as ColorShade["inkType"] } : c))}><option value="Spot">Spot</option><option value="Process">Process</option><option value="Special">Special</option></select></td>
                               <td className="px-2 py-1.5"><input placeholder="PMS 485 C" className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.pantoneRef} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, pantoneRef: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5"><input type="number" step={0.01} className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.labL} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labL: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5"><input type="number" step={0.01} className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.labA} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labA: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5"><input type="number" step={0.01} className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.labB} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labB: e.target.value } : c))} /></td>
+                              {/* Standard LAB */}
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="L*" className="w-14 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labL} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labL: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="a*" className="w-14 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labA} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labA: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="b*" className="w-14 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labB} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labB: e.target.value } : c))} /></td>
+                              {/* Actual LAB */}
+                              <td className="px-2 py-1.5 bg-teal-50/40"><input type="number" step={0.01} placeholder="L*" className="w-14 text-xs border border-teal-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-teal-400 bg-white" value={cs.actualL} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, actualL: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-teal-50/40"><input type="number" step={0.01} placeholder="a*" className="w-14 text-xs border border-teal-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-teal-400 bg-white" value={cs.actualA} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, actualA: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-teal-50/40"><input type="number" step={0.01} placeholder="b*" className="w-14 text-xs border border-teal-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-teal-400 bg-white" value={cs.actualB} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, actualB: e.target.value } : c))} /></td>
+                              {/* ΔE Tol */}
                               <td className="px-2 py-1.5"><input type="number" step={0.1} placeholder="1.0" className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.deltaE} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, deltaE: e.target.value } : c))} /></td>
+                              {/* ΔE Calculated */}
+                              <td className="px-2 py-1.5 text-center">
+                                {calcDE !== null
+                                  ? <span className={`font-bold font-mono text-xs ${pass ? "text-green-700" : "text-red-600"}`}>{calcDE}</span>
+                                  : <span className="text-gray-300 text-xs">—</span>}
+                              </td>
+                              {/* Result Pass/Fail */}
+                              <td className="px-2 py-1.5 text-center">
+                                {pass === true && <span className="px-2 py-0.5 bg-green-100 text-green-700 border border-green-300 rounded-full text-[10px] font-bold">PASS</span>}
+                                {pass === false && <span className="px-2 py-0.5 bg-red-100 text-red-700 border border-red-300 rounded-full text-[10px] font-bold">FAIL</span>}
+                                {pass === null && <span className="text-gray-300 text-xs">—</span>}
+                              </td>
                               <td className="px-2 py-1.5"><input placeholder="SC-001" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.shadeCardRef} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, shadeCardRef: e.target.value } : c))} /></td>
                               <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400" value={cs.status} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as ColorShade["status"] } : c))}><option value="Pending">Pending</option><option value="Standard Received">Std. Received</option><option value="Approved">Approved</option><option value="Rejected">Rejected</option></select></td>
                               <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.remarks} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
                             </tr>
-                          ))}
-                          {catalogColorShades.length === 0 && <tr><td colSpan={11} className="p-6 text-center text-gray-400 text-xs">No colors. Set No. of Colors in Basic Info tab first.</td></tr>}
+                            );
+                          })}
+                          {catalogColorShades.length === 0 && <tr><td colSpan={17} className="p-6 text-center text-gray-400 text-xs">No colors. Set No. of Colors in Basic Info tab first.</td></tr>}
                         </tbody>
                       </table>
                     </div>

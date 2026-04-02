@@ -2186,6 +2186,7 @@ export type GravureProductCatalog = {
   sourceOrderId: string; sourceOrderNo: string;   // order → catalog link
   sourceWorkOrderId: string; sourceWorkOrderNo: string; // WO → catalog link
   trimmingSize?: number;
+  widthShrinkage?: number;
   frontColors?: number; backColors?: number;
   status: "Active" | "Inactive";
   remarks: string;

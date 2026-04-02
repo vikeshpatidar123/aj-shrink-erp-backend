@@ -43,7 +43,7 @@ const navItems: NavItem[] = [
   { label: "Dispatch",      href: "/dispatch",           icon: Truck,          badge: null },
   {
     label: "Masters", icon: Settings2, children: [
-      { label: "Category Master",    href: "/masters/categories",   icon: Boxes },
+      { label: "Product Category Master",    href: "/masters/categories",   icon: Boxes },
       { label: "Item Master",        href: "/masters/items",        icon: FlaskConical },
       { label: "Ledger Master",      href: "/masters/employees",    icon: UserCheck },
       { label: "Tool Master",        href: "/masters/tools",        icon: Wrench },
