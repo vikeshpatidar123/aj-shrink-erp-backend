@@ -40,6 +40,9 @@ export type PlyConsumableItem = {
   gsm: number;
   rate: number;
   coveragePct?: number;      // ink coverage % (0–100), only for Ink items
+  solidPct?: number;         // ink solid content % (default 40), used to calc liquid GSM
+  ohPct?: number;            // OH% for Adhesive items
+  ncoPct?: number;           // NCO% for Hardener items (Hardener GSM = Adhesive_GSM × OH% / NCO%)
 };
 
 export type CategoryMaster = {
@@ -2210,6 +2213,7 @@ export type GravureProductCatalog = {
   bottleType?: string;
   addressType?: "Single" | "Multi";
   specialSpecs?: string;
+  artworkName?: string;
   status: "Active" | "Inactive";
   remarks: string;
 };

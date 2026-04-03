@@ -14,10 +14,10 @@ export type ContentTypeDef = {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 export const CONTENT_TYPE_CONFIG: Record<string, ContentTypeDef> = {
-  "Pouch — 3 Side Seal":  { fields: ["width", "height"],           labels: { width: "Pouch Width (mm)", height: "Pouch Height (mm)" },                                       diagramType: "threeside"    },
-  "Pouch — Center Seal":  { fields: ["width", "height"],           labels: { width: "Film Width (mm)",  height: "Pouch Height (mm)" },                                       diagramType: "centerseal"   },
-  "Standup Pouch":        { fields: ["width", "height", "gusset"], labels: { width: "Pouch Width (mm)", height: "Pouch Height (mm)", gusset: "Bottom Gusset (mm)" },         diagramType: "standup"      },
-  "Zipper Pouch":         { fields: ["width", "height", "gusset"], labels: { width: "Pouch Width (mm)", height: "Pouch Height (mm)", gusset: "Bottom Gusset (mm)" },         diagramType: "standup"      },
+  "Pouch — 3 Side Seal":  { fields: ["width", "height"],           labels: { width: "Pouch Width (mm)", height: "Repeat Length (mm)" },                                       diagramType: "threeside"    },
+  "Pouch — Center Seal":  { fields: ["width", "height"],           labels: { width: "Film Width (mm)",  height: "Repeat Length (mm)" },                                       diagramType: "centerseal"   },
+  "Standup Pouch":        { fields: ["width", "height", "gusset"], labels: { width: "Pouch Width (mm)", height: "Repeat Length (mm)", gusset: "Bottom Gusset (mm)" },         diagramType: "standup"      },
+  "Zipper Pouch":         { fields: ["width", "height", "gusset"], labels: { width: "Pouch Width (mm)", height: "Repeat Length (mm)", gusset: "Bottom Gusset (mm)" },         diagramType: "standup"      },
   "Roll Form — Milk":     { fields: ["width", "height", "sealWidth"], labels: { width: "Film Width (mm)", height: "Repeat Length (mm)", sealWidth: "Seal Width (mm)" },      diagramType: "rollform"     },
   "Roll Form — Oil":      { fields: ["width", "height", "sealWidth"], labels: { width: "Film Width (mm)", height: "Repeat Length (mm)", sealWidth: "Seal Width (mm)" },      diagramType: "rollform"     },
   "Roll Form — Snacks":   { fields: ["width", "height", "sealWidth"], labels: { width: "Film Width (mm)", height: "Repeat Length (mm)", sealWidth: "Seal Width (mm)" },      diagramType: "rollform"     },
@@ -27,14 +27,14 @@ export const CONTENT_TYPE_CONFIG: Record<string, ContentTypeDef> = {
   "BOPP + BOPP":          { fields: ["width", "height"],           labels: { width: "Film Width (mm)",  height: "Repeat Length (mm)" },                                       diagramType: "rollform"     },
   "PET + AL Foil + PE":   { fields: ["width", "height"],           labels: { width: "Film Width (mm)",  height: "Repeat Length (mm)" },                                       diagramType: "rollform"     },
   "BOPP + MET BOPP":      { fields: ["width", "height"],           labels: { width: "Film Width (mm)",  height: "Repeat Length (mm)" },                                       diagramType: "rollform"     },
-  "Shrink Labels":        { fields: ["layflatWidth", "cutHeight"], labels: { layflatWidth: "Layflat Width (mm)", cutHeight: "Cut Height (mm)" },                              diagramType: "shrinksleeve" },
-  "Wrap Around Labels":   { fields: ["width", "height"],           labels: { width: "Label Width (mm)", height: "Label Height (mm)" },                                        diagramType: "label"        },
-  "Cut & Stack Labels":   { fields: ["width", "height"],           labels: { width: "Label Width (mm)", height: "Label Height (mm)" },                                        diagramType: "label"        },
-  "In-Mould Labels":      { fields: ["width", "height"],           labels: { width: "Label Width (mm)", height: "Label Height (mm)" },                                        diagramType: "label"        },
-  "Fertilizer Bags":      { fields: ["width", "height", "gusset"], labels: { width: "Bag Width (mm)",   height: "Bag Height (mm)", gusset: "Gusset (mm)" },                  diagramType: "threeside"    },
+  "Shrink Labels":        { fields: ["layflatWidth", "cutHeight"], labels: { layflatWidth: "Layflat Width (mm)", cutHeight: "Cut Repeat Length (mm)" },                        diagramType: "shrinksleeve" },
+  "Wrap Around Labels":   { fields: ["width", "height"],           labels: { width: "Label Width (mm)", height: "Repeat Length (mm)" },                                      diagramType: "label"        },
+  "Cut & Stack Labels":   { fields: ["width", "height"],           labels: { width: "Label Width (mm)", height: "Repeat Length (mm)" },                                      diagramType: "label"        },
+  "In-Mould Labels":      { fields: ["width", "height"],           labels: { width: "Label Width (mm)", height: "Repeat Length (mm)" },                                      diagramType: "label"        },
+  "Fertilizer Bags":      { fields: ["width", "height", "gusset"], labels: { width: "Bag Width (mm)",   height: "Bag Repeat Length (mm)", gusset: "Gusset (mm)" },                  diagramType: "threeside"    },
   "Cement Liner":         { fields: ["width", "height"],           labels: { width: "Film Width (mm)",  height: "Repeat Length (mm)" },                                       diagramType: "rollform"     },
-  "Chemical Packaging":   { fields: ["width", "height", "gusset"], labels: { width: "Bag Width (mm)",   height: "Bag Height (mm)", gusset: "Gusset (mm)" },                  diagramType: "threeside"    },
-  "FIBC / Jumbo Bags":    { fields: ["width", "height"],           labels: { width: "Bag Width (mm)",   height: "Bag Height (mm)" },                                          diagramType: "threeside"    },
+  "Chemical Packaging":   { fields: ["width", "height", "gusset"], labels: { width: "Bag Width (mm)",   height: "Bag Repeat Length (mm)", gusset: "Gusset (mm)" },                  diagramType: "threeside"    },
+  "FIBC / Jumbo Bags":    { fields: ["width", "height"],           labels: { width: "Bag Width (mm)",   height: "Bag Repeat Length (mm)" },                                          diagramType: "threeside"    },
   "Woven Sack Liner":     { fields: ["width", "height"],           labels: { width: "Film Width (mm)",  height: "Repeat Length (mm)" },                                       diagramType: "rollform"     },
 };
 

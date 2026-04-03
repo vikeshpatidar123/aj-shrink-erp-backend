@@ -4,7 +4,7 @@ import {
   BookMarked, Eye, Trash2, Clock, CheckCircle2,
   ShoppingCart, CheckCircle, AlertCircle, Lock, ArrowRight,
   RefreshCw, Save, Plus, X, Calculator, Layers, Check, Pencil,
-  ChevronRight, Eye as EyeIcon, Factory, Send, Package, Palette, Wrench, Archive, Copy,
+  ChevronRight, Eye as EyeIcon, Factory, Send, Package, Palette, Wrench, Archive, Copy, Search, Printer,
 } from "lucide-react";
 import {
   gravureOrders, gravureWorkOrders as initWOs,
@@ -90,7 +90,7 @@ export default function ProductCatalogPage() {
   const [catalogColorShades,setCatalogColorShades] = useState<ColorShade[]>([]);
   const [catalogMatAllocs,  setCatalogMatAllocs]   = useState<MaterialAlloc[]>([]);
   const [catalogCylAllocs,  setCatalogCylAllocs]   = useState<CylinderAlloc[]>([]);
-  const [catalogPrepTab,    setCatalogPrepTab]     = useState<"film" | "shade" | "material" | "tool">("film");
+  const [catalogPrepTab,    setCatalogPrepTab]     = useState<"shade" | "tool">("shade");
   const [replanShowPlan,      setReplanShowPlan]      = useState(false);
   const [replanIsPlanApplied, setReplanIsPlanApplied] = useState(false);
   const [replanPlanSearch,    setReplanPlanSearch]    = useState("");
@@ -98,6 +98,63 @@ export default function ProductCatalogPage() {
   const [replanSelPlanId,     setReplanSelPlanId]     = useState("");
   const [upsPreviewPlan,      setUpsPreviewPlan]      = useState<any>(null);
   const [cylGuideOpen,        setCylGuideOpen]        = useState(false);
+  const [previewAttachment,   setPreviewAttachment]   = useState<{ name: string; url: string; mimeType: string } | null>(null);
+  const [printRow,            setPrintRow]            = useState<GravureProductCatalog | null>(null);
+
+  // ── Plan grid column filters (Excel-style) ────────────────
+  const [planColFilters,   setPlanColFilters]   = useState<Record<string, Set<string>>>({});
+  const [planFilterOpen,   setPlanFilterOpen]   = useState<string | null>(null);
+  const [planFilterSearch, setPlanFilterSearch] = useState<Record<string, string>>({});
+  const [planFilterDraft,  setPlanFilterDraft]  = useState<Record<string, Set<string>>>({});
+
+  const openPlanFilter = (key: string) => {
+    setPlanFilterDraft(d => ({ ...d, [key]: new Set(planColFilters[key] ?? []) }));
+    setPlanFilterSearch(s => ({ ...s, [key]: "" }));
+    setPlanFilterOpen(key);
+  };
+  const applyPlanFilter = (key: string) => {
+    const draft = planFilterDraft[key];
+    if (!draft || draft.size === 0) {
+      setPlanColFilters(p => { const n = { ...p }; delete n[key]; return n; });
+    } else {
+      setPlanColFilters(p => ({ ...p, [key]: draft }));
+    }
+    setPlanFilterOpen(null);
+  };
+  const clearPlanFilter = (key: string) => {
+    setPlanColFilters(p => { const n = { ...p }; delete n[key]; return n; });
+    setPlanFilterOpen(null);
+  };
+  const togglePlanFilterVal = (key: string, val: string) => {
+    setPlanFilterDraft(d => {
+      const s = new Set(d[key] ?? []);
+      s.has(val) ? s.delete(val) : s.add(val);
+      return { ...d, [key]: s };
+    });
+  };
+  const togglePlanFilterAll = (key: string, allVals: string[]) => {
+    setPlanFilterDraft(d => {
+      const s = d[key] ?? new Set<string>();
+      const newS = s.size === allVals.length ? new Set<string>() : new Set(allVals);
+      return { ...d, [key]: newS };
+    });
+  };
+
+  type CatalogAttachment = { id: string; name: string; size: number; mimeType: string; url: string };
+  const [replanAttachments, setReplanAttachments] = useState<CatalogAttachment[]>([]);
+
+  const addAttachments = (files: FileList | null) => {
+    if (!files) return;
+    const newItems: CatalogAttachment[] = Array.from(files).map(f => ({
+      id: Math.random().toString(36).slice(2),
+      name: f.name, size: f.size, mimeType: f.type,
+      url: URL.createObjectURL(f),
+    }));
+    setReplanAttachments(p => [...p, ...newItems]);
+  };
+  const removeAttachment = (id: string) => {
+    setReplanAttachments(p => { const item = p.find(x => x.id === id); if (item) URL.revokeObjectURL(item.url); return p.filter(x => x.id !== id); });
+  };
 
   const rf = <K extends keyof GravureProductCatalog>(k: K, v: GravureProductCatalog[K]) => {
     setReplanForm(p => {
@@ -255,12 +312,13 @@ export default function ProductCatalogPage() {
     const machineMinFilm = parseFloat((machine as any).minWebWidth) || 0;
     const shrink    = replanForm.widthShrinkage || 0;
     const jobH      = replanForm.jobHeight || 0;
-    const laneWidth = planWidth + shrink; // trim is only on outer film edges, not per lane
+    const effectiveRepeat = jobH + shrink; // shrinkage adds to repeat length, not width
+    const laneWidth = planWidth; // width is not affected by shrinkage
     const trim      = replanForm.trimmingSize || 0;
 
-    // per-cylinder: UPS around = floor(cylinder.repeatLength / jobHeight)
+    // per-cylinder: UPS around = floor(cylinder.repeatLength / (jobHeight + shrinkage))
     const calcRepeatUPS = (cylRepeatLength: number) =>
-      jobH > 0 ? Math.max(1, Math.floor(cylRepeatLength / jobH)) : 1;
+      effectiveRepeat > 0 ? Math.max(1, Math.floor(cylRepeatLength / effectiveRepeat)) : 1;
 
     // ── LOOP A: Sleeve in stock → cylinder (or SPECIAL CYL) ──
     const loopA = SLEEVE_TOOLS.flatMap(sleeve => {
@@ -279,7 +337,7 @@ export default function ProductCatalogPage() {
         const validCylinders = CYLINDER_TOOLS.filter(t => parseFloat(t.printWidth) >= minCyl);
         const cylList = validCylinders.length > 0
           ? validCylinders.map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, repeatLength: c.repeatLength || "450", isSpecial: false, isSpecialSleeve: false }))
-          : [{ id: "SPECIAL-CYL", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: jobH > 0 ? String(Math.ceil(jobH / 12) * 12) : "450", isSpecial: true, isSpecialSleeve: false }];
+          : [{ id: "SPECIAL-CYL", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: effectiveRepeat > 0 ? String(Math.ceil(effectiveRepeat / 12) * 12) : "450", isSpecial: true, isSpecialSleeve: false }];
         const sideWaste  = parseFloat((2 * trim).toFixed(1));
         const deadMargin = parseFloat((sleeveWidthVal - filmWidth).toFixed(1));
         const totalWaste = parseFloat((sideWaste + deadMargin).toFixed(1));
@@ -364,6 +422,11 @@ export default function ProductCatalogPage() {
     let rows = replanAllPlans;
     const q = replanPlanSearch.trim().toLowerCase();
     if (q) rows = rows.filter(r => r.machineName.toLowerCase().includes(q) || String(r.cylCirc).includes(q) || String(r.totalUPS).includes(q));
+    // per-column filters
+    Object.entries(planColFilters).forEach(([key, vals]) => {
+      if (!vals || vals.size === 0) return;
+      rows = rows.filter(r => vals.has(String((r as any)[key] ?? "")));
+    });
     if (replanPlanSort.key) {
       rows = [...rows].sort((a, b) => {
         const av = (a as any)[replanPlanSort.key] ?? 0; const bv = (b as any)[replanPlanSort.key] ?? 0;
@@ -372,7 +435,7 @@ export default function ProductCatalogPage() {
       });
     }
     return rows;
-  }, [replanAllPlans, replanPlanSearch, replanPlanSort]);
+  }, [replanAllPlans, replanPlanSearch, replanPlanSort, planColFilters]);
 
   const replanTogglePlanSort = (key: string) =>
     setReplanPlanSort(s => s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" });
@@ -432,8 +495,8 @@ export default function ProductCatalogPage() {
     setIsNewCatalog(false);
     setReplanForm({ ...row });
     setReplanTab("info");
-    setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("film");
-    setReplanSelPlanId(""); setReplanShowPlan(false); setReplanIsPlanApplied(false); setReplanPlanSearch(""); setReplanPlanSort({ key: "", dir: "asc" });
+    setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("shade");
+    setReplanSelPlanId(""); setReplanShowPlan(false); setReplanIsPlanApplied(false); setReplanPlanSearch(""); setReplanPlanSort({ key: "", dir: "asc" }); setReplanAttachments([]);
     setReplanOpen(true);
   };
 
@@ -512,8 +575,8 @@ export default function ProductCatalogPage() {
     setIsNewCatalog(true);
     setReplanForm(draft);
     setReplanTab("info");
-    setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("film");
-    setReplanSelPlanId(""); setReplanShowPlan(false); setReplanIsPlanApplied(false); setReplanPlanSearch(""); setReplanPlanSort({ key: "", dir: "asc" });
+    setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("shade");
+    setReplanSelPlanId(""); setReplanShowPlan(false); setReplanIsPlanApplied(false); setReplanPlanSearch(""); setReplanPlanSort({ key: "", dir: "asc" }); setReplanAttachments([]);
     setReplanOpen(true);
   };
 
@@ -548,8 +611,8 @@ export default function ProductCatalogPage() {
     setIsNewCatalog(true);
     setReplanForm(draft);
     setReplanTab("info");
-    setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("film");
-    setReplanSelPlanId(""); setReplanShowPlan(false); setReplanIsPlanApplied(false); setReplanPlanSearch(""); setReplanPlanSort({ key: "", dir: "asc" });
+    setCatalogFilmReqs([]); setCatalogColorShades([]); setCatalogMatAllocs([]); setCatalogCylAllocs([]); setCatalogPrepTab("shade");
+    setReplanSelPlanId(""); setReplanShowPlan(false); setReplanIsPlanApplied(false); setReplanPlanSearch(""); setReplanPlanSort({ key: "", dir: "asc" }); setReplanAttachments([]);
     setReplanOpen(true);
   };
 
@@ -613,8 +676,6 @@ export default function ProductCatalogPage() {
         : <span className="text-xs text-gray-400">—</span> },
     { key: "noOfColors", header: "Colors",
       render: r => <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-xs font-semibold">{r.noOfColors}C</span> },
-    { key: "perMeterRate", header: "Rate/Unit",
-      render: r => <span className="font-semibold">₹{r.perMeterRate.toFixed(2)}</span> },
     { key: "status", header: "Status", render: r => statusBadge(r.status), sortable: true },
   ];
 
@@ -641,6 +702,33 @@ export default function ProductCatalogPage() {
           </Button>
         </div>
       </div>
+
+      {/* ── Catalog Numbers Strip ── */}
+      {processedCatalog.length > 0 && (
+        <div className="rounded-xl border border-purple-100 bg-purple-50/60 px-4 py-3">
+          <div className="flex items-center gap-2 mb-2">
+            <BookMarked size={12} className="text-purple-500" />
+            <span className="text-[10px] font-bold text-purple-600 uppercase tracking-widest">
+              Catalog Numbers ({processedCatalog.length})
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {processedCatalog.map(c => (
+              <button
+                key={c.id}
+                onClick={() => { setViewPlanRow(c); }}
+                title={`${c.productName} — ${c.customerName}`}
+                className="group flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all
+                  bg-white border-purple-200 text-purple-700 hover:bg-purple-600 hover:text-white hover:border-purple-600 hover:shadow-md">
+                <span className="font-mono">{c.catalogNo}</span>
+                <span className="text-[9px] font-medium opacity-60 group-hover:opacity-90 max-w-[80px] truncate hidden sm:block">
+                  {c.productName}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Stats ── */}
       <div className="grid grid-cols-2 gap-3">
@@ -729,9 +817,6 @@ export default function ProductCatalogPage() {
                       <div className="flex-shrink-0 text-right">
                         <p className="text-[10px] text-gray-400">Order Total</p>
                         <p className="font-bold text-gray-800 text-sm">₹{order.totalAmount.toLocaleString()}</p>
-                        {(line?.rate || order.perMeterRate) > 0 && (
-                          <p className="text-xs text-green-600">₹{(line?.rate || order.perMeterRate).toFixed(2)}/{order.unit || "Unit"}</p>
-                        )}
                       </div>
                     )}
                     <div className="flex-shrink-0">
@@ -765,6 +850,11 @@ export default function ProductCatalogPage() {
                 <div className="flex items-center gap-1.5 justify-end flex-wrap">
                   <Button variant="ghost" size="sm" icon={<Eye size={13} />}
                     onClick={() => setViewPlanRow(row)}>View</Button>
+                  <Button variant="ghost" size="sm" icon={<Printer size={13} />}
+                    onClick={() => setPrintRow(row)}
+                    className="text-gray-700 hover:text-gray-900 hover:bg-gray-100">
+                    Print
+                  </Button>
                   <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />}
                     onClick={() => openReplan(row)}
                     className="text-indigo-700 hover:text-indigo-800 hover:bg-indigo-50">
@@ -815,7 +905,6 @@ export default function ProductCatalogPage() {
               <div className="sm:col-span-2">
                 <Input label="Product Name *" value={editName} onChange={e => setEditName(e.target.value)} placeholder="e.g. Parle-G Biscuit 100g Wrap" />
               </div>
-              <Input label="₹ / Meter Rate" type="number" value={editRate || ""} onChange={e => setEditRate(Number(e.target.value))} placeholder="e.g. 1.36" step={0.01} />
             </div>
             <Textarea label="Remarks / Notes" value={editRemark} onChange={e => setEditRemark(e.target.value)} placeholder="Special notes for this catalog template…" />
 
@@ -1046,24 +1135,106 @@ export default function ProductCatalogPage() {
                         </select>
                       </div>
                       <div className="sm:col-span-2">
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Artwork Name</label>
+                        <input placeholder="e.g. Parle-G 100g Front Artwork v3" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                          value={(replanForm as any).artworkName ?? ""}
+                          onChange={e => rf("artworkName" as any, e.target.value)} />
+                      </div>
+                      <div className="sm:col-span-2">
                         <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Special Specifications</label>
                         <input placeholder="e.g. @20 Rs, Free, Promo, Export" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
                           value={(replanForm as any).specialSpecs ?? ""}
                           onChange={e => rf("specialSpecs" as any, e.target.value)} />
                       </div>
                     </div>
+
+                    {/* ── Attachments ── */}
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-bold text-orange-600 uppercase tracking-widest">
+                          Attachments {replanAttachments.length > 0 && `(${replanAttachments.length})`}
+                        </span>
+                        <label className="flex items-center gap-1.5 text-[11px] font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2.5 py-1 rounded-lg cursor-pointer transition">
+                          <Plus size={11} /> Add Files
+                          <input type="file" multiple accept="*" className="hidden"
+                            onChange={e => addAttachments(e.target.files)} />
+                        </label>
+                      </div>
+
+                      {/* Drop zone (shown only when no files yet) */}
+                      {replanAttachments.length === 0 && (
+                        <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-orange-200 rounded-xl py-6 cursor-pointer bg-orange-50/40 hover:bg-orange-50 transition"
+                          onDragOver={e => e.preventDefault()}
+                          onDrop={e => { e.preventDefault(); addAttachments(e.dataTransfer.files); }}>
+                          <Archive size={22} className="text-orange-300" />
+                          <span className="text-xs text-orange-400 font-medium">Drag & drop any file — JPG, PDF, AI, PSD, PNG, etc.</span>
+                          <span className="text-[10px] text-orange-300">or click <strong>Add Files</strong> above</span>
+                          <input type="file" multiple accept="*" className="hidden"
+                            onChange={e => addAttachments(e.target.files)} />
+                        </label>
+                      )}
+
+                      {/* File list */}
+                      {replanAttachments.length > 0 && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2"
+                          onDragOver={e => e.preventDefault()}
+                          onDrop={e => { e.preventDefault(); addAttachments(e.dataTransfer.files); }}>
+                          {replanAttachments.map((att, attIdx) => {
+                            const isImg = att.mimeType.startsWith("image/");
+                            const ext   = att.name.split(".").pop()?.toUpperCase() ?? "FILE";
+                            const sizeKb = (att.size / 1024).toFixed(0);
+                            return (
+                              <div key={att.id} className={`relative group rounded-xl overflow-hidden bg-white shadow-sm ${attIdx === 0 ? "border-2 border-amber-400 ring-1 ring-amber-300" : "border border-gray-200"}`}>
+                                {/* Master File badge on first attachment */}
+                                {attIdx === 0 && (
+                                  <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide bg-amber-400 text-white shadow">
+                                    ★ Master File
+                                  </div>
+                                )}
+                                {/* Thumbnail or icon */}
+                                {isImg ? (
+                                  <img src={att.url} alt={att.name} className="w-full h-20 object-cover" />
+                                ) : (
+                                  <div className="w-full h-20 flex flex-col items-center justify-center bg-gray-50 gap-1">
+                                    <span className="text-2xl font-black text-gray-300">{ext}</span>
+                                  </div>
+                                )}
+                                {/* File info */}
+                                <div className="px-2 py-1.5 border-t border-gray-100">
+                                  <p className="text-[10px] font-semibold text-gray-700 truncate" title={att.name}>{att.name}</p>
+                                  <p className="text-[9px] text-gray-400">{sizeKb} KB</p>
+                                </div>
+                                {/* Actions (visible on hover) */}
+                                <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button onClick={() => setPreviewAttachment({ name: att.name, url: att.url, mimeType: att.mimeType })}
+                                    className="p-1 rounded-md bg-white/90 text-indigo-600 hover:bg-indigo-50 shadow" title="Preview">
+                                    <EyeIcon size={11} />
+                                  </button>
+                                  <a href={att.url} download={att.name} target="_blank" rel="noreferrer"
+                                    className="p-1 rounded-md bg-white/90 text-blue-600 hover:bg-blue-50 shadow text-[10px]" title="Download">↓</a>
+                                  <button onClick={() => removeAttachment(att.id)}
+                                    className="p-1 rounded-md bg-white/90 text-red-500 hover:bg-red-50 shadow" title="Remove">
+                                    <X size={10} />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {/* Add more tile */}
+                          <label className="flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-200 rounded-xl h-full min-h-[80px] cursor-pointer hover:border-orange-300 hover:bg-orange-50/30 transition">
+                            <Plus size={16} className="text-gray-300" />
+                            <span className="text-[10px] text-gray-300">Add more</span>
+                            <input type="file" multiple accept="*" className="hidden"
+                              onChange={e => addAttachments(e.target.files)} />
+                          </label>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <Select label="Print Type" value={replanForm.printType}
                     onChange={e => rf("printType", e.target.value as GravureProductCatalog["printType"])}
                     options={[{ value: "Surface Print", label: "Surface Print" }, { value: "Reverse Print", label: "Reverse Print" }, { value: "Combination", label: "Combination" }]} />
-                  <Input label="Standard Qty" type="number" value={replanForm.standardQty || ""}
-                    onChange={e => rf("standardQty", Number(e.target.value))} />
-                  <Select label="Unit" value={replanForm.standardUnit}
-                    onChange={e => rf("standardUnit", e.target.value)}
-                    options={[{ value: "Meter", label: "Meter" }, { value: "Pcs", label: "Pcs" }, { value: "Kg", label: "Kg" }]} />
-                  <Input label={`Rate / ${replanForm.standardUnit || "Unit"} (₹)`} type="number" value={replanForm.perMeterRate || ""}
-                    onChange={e => rf("perMeterRate", Number(e.target.value))} step={0.001} />
                 </div>
 
                 {/* ── Dimension Input + Live Diagram — appears only after Content Type is selected ── */}
@@ -1195,7 +1366,7 @@ export default function ProductCatalogPage() {
                       <table className="min-w-full text-xs">
                         <thead className="bg-gray-50 border-b border-gray-200">
                           <tr>
-                            {["Process (Master)", "Charge Unit", "Rate (₹)", "Qty", "Setup (₹)", "Amount (₹)", ""].map(h => (
+                            {["Process (Master)", "Charge Unit", ""].map(h => (
                               <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                             ))}
                           </tr>
@@ -1210,21 +1381,10 @@ export default function ProductCatalogPage() {
                                 </select>
                               </td>
                               <td className="px-3 py-2"><span className="px-2 py-1 bg-gray-100 rounded-lg text-gray-600 font-mono text-[10px]">{pr.chargeUnit || "—"}</span></td>
-                              <td className="px-3 py-2 w-24"><input type="number" value={pr.rate} onChange={e => updateReplanProcess(i, { rate: Number(e.target.value) })} className={`${cellInput} text-right`} step={0.01} /></td>
-                              <td className="px-3 py-2 w-24"><input type="number" value={pr.qty} onChange={e => updateReplanProcess(i, { qty: Number(e.target.value) })} className={`${cellInput} text-right`} /></td>
-                              <td className="px-3 py-2 w-28"><input type="number" value={pr.setupCharge} onChange={e => updateReplanProcess(i, { setupCharge: Number(e.target.value) })} className={`${cellInput} text-right`} /></td>
-                              <td className="px-3 py-2 w-32 text-right font-semibold text-gray-800">₹{pr.amount.toLocaleString()}</td>
                               <td className="px-3 py-2 w-8 text-center"><button onClick={() => removeReplanProcess(i)} className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50"><X size={13} /></button></td>
                             </tr>
                           ))}
                         </tbody>
-                        <tfoot className="bg-purple-50 border-t border-purple-200">
-                          <tr>
-                            <td colSpan={5} className="px-3 py-2.5 text-xs font-bold text-purple-700 uppercase">Process Cost</td>
-                            <td className="px-3 py-2.5 text-sm font-bold text-purple-800 text-right">₹{replanForm.processes.reduce((s, p) => s + (p.amount || 0), 0).toLocaleString()}</td>
-                            <td />
-                          </tr>
-                        </tfoot>
                       </table>
                     </div>
                   ) : (
@@ -1309,20 +1469,6 @@ export default function ProductCatalogPage() {
                                       </select>
                                     </div>
                                     <Input label="Film GSM" type="number" value={l.gsm || ""} readOnly className="font-bold bg-purple-50 text-purple-800 border-purple-200 text-xs" />
-                                    <div>
-                                      <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Film Rate (₹/Kg)</label>
-                                      <input
-                                        type="number" step={0.01} min={0}
-                                        className="w-full text-xs border border-orange-200 bg-orange-50 rounded-xl px-2 py-2 font-mono outline-none focus:ring-2 focus:ring-orange-400"
-                                        value={l.filmRate !== undefined ? l.filmRate : (parseFloat(FILM_ITEMS.find(fi => fi.subGroup === l.itemSubGroup)?.estimationRate || "0") || "")}
-                                        onChange={e => {
-                                          const layers = [...replanForm.secondaryLayers];
-                                          layers[index] = { ...l, filmRate: Number(e.target.value) };
-                                          rf("secondaryLayers", layers);
-                                        }}
-                                        placeholder="₹/Kg"
-                                      />
-                                    </div>
                                   </div>
                                 </div>
                               )}
@@ -1347,7 +1493,7 @@ export default function ProductCatalogPage() {
                                     return (
                                       <div key={ci.consumableId} className="bg-teal-50/40 border border-teal-100 rounded-xl p-3">
                                         <div className="flex items-center justify-between mb-2">
-                                          <span className="text-[10px] font-bold text-teal-700 uppercase">Consumable {ciIdx + 1}</span>
+                                          <span className="text-[10px] font-bold text-teal-700 uppercase">Consumable 1</span>
                                           <div className="flex items-center gap-1">
                                             <button
                                               onClick={() => clonePlyConsumable(index, ciIdx)}
@@ -1361,60 +1507,151 @@ export default function ProductCatalogPage() {
                                             </button>
                                           </div>
                                         </div>
-                                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                                          <div>
-                                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item Group</label>
-                                            <select
-                                              className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
-                                              value={ci.itemGroup}
-                                              onChange={e => updatePlyConsumable(index, ciIdx, { itemGroup: e.target.value, itemSubGroup: "", itemId: "", itemName: "" })}>
-                                              <option value="">-- Group --</option>
-                                              {CONSUMABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
-                                            </select>
+                                        {(() => {
+                                          // find adhesive in same ply for hardener calc
+                                          const adhesiveCI = l.consumableItems.find(x => x.itemGroup === "Adhesive");
+                                          const adhesiveGSM = adhesiveCI?.gsm ?? 0;
+                                          const adhesiveOH  = adhesiveCI?.ohPct ?? 0;
+                                          const hardenerGSM = ci.itemGroup === "Hardner" && (ci.ncoPct ?? 0) > 0
+                                            ? parseFloat(((adhesiveGSM * adhesiveOH) / (ci.ncoPct!)).toFixed(3))
+                                            : null;
+
+                                          const colCount =
+                                            ci.itemGroup === "Ink"     ? 6 :
+                                            ci.itemGroup === "Adhesive"? 5 :
+                                            ci.itemGroup === "Hardner" ? 5 : 4;
+
+                                          return (
+                                          <div className={`grid grid-cols-2 gap-2 sm:grid-cols-${colCount}`}>
+                                            {/* Item Group */}
+                                            <div>
+                                              <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item Group</label>
+                                              <select
+                                                className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                                value={ci.itemGroup}
+                                                onChange={e => updatePlyConsumable(index, ciIdx, { itemGroup: e.target.value, itemSubGroup: "", itemId: "", itemName: "", gsm: 0, ohPct: undefined, ncoPct: undefined })}>
+                                                <option value="">-- Group --</option>
+                                                {CONSUMABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+                                              </select>
+                                            </div>
+                                            {/* Sub Group */}
+                                            <div>
+                                              <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Sub Group</label>
+                                              <select
+                                                className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                                value={ci.itemSubGroup}
+                                                onChange={e => updatePlyConsumable(index, ciIdx, { itemSubGroup: e.target.value, itemId: "", itemName: "" })}
+                                                disabled={!ci.itemGroup}>
+                                                <option value="">-- Sub Group --</option>
+                                                {subGroups.map(sg => <option key={sg} value={sg}>{sg}</option>)}
+                                              </select>
+                                            </div>
+                                            {/* Item Master */}
+                                            <div>
+                                              <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item (Master)</label>
+                                              <select
+                                                className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                                value={ci.itemId}
+                                                onChange={e => {
+                                                  const it = filteredItems.find(x => x.id === e.target.value);
+                                                  updatePlyConsumable(index, ciIdx, { itemId: it?.id ?? "", itemName: it?.name ?? "" });
+                                                }}
+                                                disabled={!ci.itemGroup}>
+                                                <option value="">-- Select Item --</option>
+                                                {filteredItems.map(it => (
+                                                  <option key={it.id} value={it.id}>{it.name}</option>
+                                                ))}
+                                              </select>
+                                            </div>
+
+                                            {/* ── INK ── */}
+                                            {ci.itemGroup === "Ink" && (<>
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Dry Ink GSM</label>
+                                                <input type="number" step={0.1} min={0}
+                                                  className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                                  value={ci.gsm || ""}
+                                                  onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
+                                              </div>
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">% Solid</label>
+                                                <input type="number" step={1} min={1} max={100}
+                                                  className="w-full text-xs border border-indigo-200 rounded-lg px-2 py-1.5 bg-indigo-50 outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+                                                  value={ci.solidPct ?? 40}
+                                                  onChange={e => updatePlyConsumable(index, ciIdx, { solidPct: Number(e.target.value) || 40 })}
+                                                  placeholder="40" />
+                                              </div>
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-purple-600 uppercase block mb-1">Liquid GSM</label>
+                                                <div className="w-full text-xs border border-purple-200 rounded-lg px-2 py-1.5 bg-purple-50 font-mono font-bold text-purple-700 min-h-[30px]">
+                                                  {ci.gsm > 0 ? (ci.gsm / ((ci.solidPct ?? 40) / 100)).toFixed(2) : "—"}
+                                                </div>
+                                              </div>
+                                            </>)}
+
+                                            {/* ── SOLVENT ── */}
+                                            {ci.itemGroup === "Solvent" && (
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Ratio (%)</label>
+                                                <input type="number" step={0.1} min={0} max={100}
+                                                  className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                                  value={ci.gsm || ""}
+                                                  onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })}
+                                                  placeholder="e.g. 30" />
+                                              </div>
+                                            )}
+
+                                            {/* ── ADHESIVE ── */}
+                                            {ci.itemGroup === "Adhesive" && (<>
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Adhesive GSM</label>
+                                                <input type="number" step={0.1} min={0}
+                                                  className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                                  value={ci.gsm || ""}
+                                                  onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })}
+                                                  placeholder="e.g. 4.5" />
+                                              </div>
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-orange-600 uppercase block mb-1">OH %</label>
+                                                <input type="number" step={0.1} min={0}
+                                                  className="w-full text-xs border border-orange-200 rounded-lg px-2 py-1.5 bg-orange-50 outline-none focus:ring-2 focus:ring-orange-400 font-mono"
+                                                  value={ci.ohPct ?? ""}
+                                                  onChange={e => updatePlyConsumable(index, ciIdx, { ohPct: Number(e.target.value) })}
+                                                  placeholder="e.g. 2.5" />
+                                              </div>
+                                            </>)}
+
+                                            {/* ── HARDNER ── */}
+                                            {ci.itemGroup === "Hardner" && (<>
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-rose-600 uppercase block mb-1">NCO %</label>
+                                                <input type="number" step={0.1} min={0}
+                                                  className="w-full text-xs border border-rose-200 rounded-lg px-2 py-1.5 bg-rose-50 outline-none focus:ring-2 focus:ring-rose-400 font-mono"
+                                                  value={ci.ncoPct ?? ""}
+                                                  onChange={e => updatePlyConsumable(index, ciIdx, { ncoPct: Number(e.target.value) })}
+                                                  placeholder="e.g. 12.5" />
+                                              </div>
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-teal-600 uppercase block mb-1">Hardener GSM (Auto)</label>
+                                                <div className="w-full text-xs border border-teal-200 rounded-lg px-2 py-1.5 bg-teal-50 font-mono font-bold text-teal-700 min-h-[30px]">
+                                                  {hardenerGSM !== null ? hardenerGSM : <span className="text-gray-400 font-normal">Set Adhesive GSM + OH% + NCO%</span>}
+                                                </div>
+                                              </div>
+                                            </>)}
+
+                                            {/* ── OTHER (no group or unrecognised) ── */}
+                                            {!["Ink","Solvent","Adhesive","Hardner"].includes(ci.itemGroup) && (
+                                              <div>
+                                                <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">GSM</label>
+                                                <input type="number" step={0.1} min={0}
+                                                  className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                                  value={ci.gsm || ""}
+                                                  onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
+                                              </div>
+                                            )}
                                           </div>
-                                          <div>
-                                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Sub Group</label>
-                                            <select
-                                              className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
-                                              value={ci.itemSubGroup}
-                                              onChange={e => updatePlyConsumable(index, ciIdx, { itemSubGroup: e.target.value, itemId: "", itemName: "" })}
-                                              disabled={!ci.itemGroup}>
-                                              <option value="">-- Sub Group --</option>
-                                              {subGroups.map(sg => <option key={sg} value={sg}>{sg}</option>)}
-                                            </select>
-                                          </div>
-                                          <div>
-                                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item (Master)</label>
-                                            <select
-                                              className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
-                                              value={ci.itemId}
-                                              onChange={e => {
-                                                const it = filteredItems.find(x => x.id === e.target.value);
-                                                updatePlyConsumable(index, ciIdx, { itemId: it?.id ?? "", itemName: it?.name ?? "", rate: parseFloat(it?.estimationRate ?? "0") || 0 });
-                                              }}
-                                              disabled={!ci.itemGroup}>
-                                              <option value="">-- Select Item --</option>
-                                              {filteredItems.map(it => (
-                                                <option key={it.id} value={it.id}>{it.name}{it.estimationRate ? ` — ₹${it.estimationRate}/Kg` : ""}</option>
-                                              ))}
-                                            </select>
-                                          </div>
-                                          <div>
-                                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">GSM / Wet Wt.</label>
-                                            <input type="number" step={0.1} min={0}
-                                              className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
-                                              value={ci.gsm || ""}
-                                              onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
-                                          </div>
-                                          <div>
-                                            <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Rate (₹/Kg)</label>
-                                            <input type="number" step={0.01} min={0}
-                                              className="w-full text-xs border border-orange-200 bg-orange-50 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 font-mono"
-                                              value={ci.rate || ""}
-                                              onChange={e => updatePlyConsumable(index, ciIdx, { rate: Number(e.target.value) })}
-                                              placeholder="₹/Kg" />
-                                          </div>
-                                        </div>
+                                          );
+                                        })()}
                                       </div>
                                     );
                                   })}
@@ -1468,7 +1705,15 @@ export default function ProductCatalogPage() {
                         <div className="bg-gradient-to-r from-indigo-800 to-purple-800 p-3 flex items-center justify-between gap-3">
                           <div>
                             <p className="text-white font-bold text-xs uppercase tracking-wide">Select Production Plan</p>
-                            <p className="text-indigo-200 text-[10px] mt-0.5">{replanForm.machineName} · {replanVisiblePlans.length}/{replanAllPlans.length} plans</p>
+                            <p className="text-indigo-200 text-[10px] mt-0.5">
+                            {replanForm.machineName} · {replanVisiblePlans.length}/{replanAllPlans.length} plans
+                            {Object.keys(planColFilters).length > 0 && (
+                              <button onClick={() => setPlanColFilters({})}
+                                className="ml-2 px-1.5 py-0.5 bg-yellow-400 text-yellow-900 text-[9px] font-bold rounded-full hover:bg-yellow-300">
+                                ✕ {Object.keys(planColFilters).length} filter{Object.keys(planColFilters).length > 1 ? "s" : ""} active
+                              </button>
+                            )}
+                          </p>
                           </div>
                           <input value={replanPlanSearch} onChange={e => setReplanPlanSearch(e.target.value)} placeholder="Search plans..."
                             className="bg-indigo-700 text-white placeholder-indigo-300 text-xs rounded-lg px-3 py-1.5 border border-indigo-500 outline-none focus:ring-2 focus:ring-indigo-400 w-36" />
@@ -1476,7 +1721,7 @@ export default function ProductCatalogPage() {
                             <button onClick={() => { setReplanIsPlanApplied(true); setReplanShowPlan(false); }} className="bg-green-500 hover:bg-green-600 text-white text-xs font-bold px-4 py-1.5 rounded-lg flex-shrink-0">Apply Plan</button>
                           )}
                         </div>
-                        <div className="overflow-x-auto">
+                        <div className="overflow-x-auto" onClick={() => planFilterOpen && setPlanFilterOpen(null)}>
                           <table className="min-w-full text-[10px] whitespace-nowrap border-collapse">
                             <thead className="bg-slate-800 text-slate-300">
                               <tr>
@@ -1498,12 +1743,72 @@ export default function ProductCatalogPage() {
                                   { key: "repeatUPS",        label: "Repeat UPS" },
                                   { key: "totalUPS",         label: "Total UPS" },
                                   { key: "totalRMT",         label: "Total RMT" },
-                                ].map(col => (
-                                  <th key={col.key} className="p-2 border border-slate-700 text-center cursor-pointer select-none hover:bg-slate-700"
-                                    onClick={() => replanTogglePlanSort(col.key)}>
-                                    {col.label}{replanPlanSort.key === col.key ? (replanPlanSort.dir === "asc" ? " ▲" : " ▼") : " ⇅"}
-                                  </th>
-                                ))}
+                                ].map(col => {
+                                  const isFiltered = !!(planColFilters[col.key]?.size);
+                                  const isOpen     = planFilterOpen === col.key;
+                                  const uniqueVals = Array.from(new Set(replanAllPlans.map(r => String((r as any)[col.key] ?? "")))).sort((a, b) => isNaN(+a) ? a.localeCompare(b) : +a - +b);
+                                  const fSearch    = planFilterSearch[col.key] ?? "";
+                                  const visVals    = fSearch ? uniqueVals.filter(v => v.toLowerCase().includes(fSearch.toLowerCase())) : uniqueVals;
+                                  const draft      = planFilterDraft[col.key] ?? new Set<string>();
+                                  return (
+                                    <th key={col.key} className="p-0 border border-slate-700 text-center relative">
+                                      {/* Header row: sort + filter icon */}
+                                      <div className="flex items-center justify-between px-2 py-2 gap-1 cursor-pointer hover:bg-slate-700 select-none"
+                                        onClick={() => replanTogglePlanSort(col.key)}>
+                                        <span className="text-[10px]">{col.label}{replanPlanSort.key === col.key ? (replanPlanSort.dir === "asc" ? " ▲" : " ▼") : ""}</span>
+                                        <button
+                                          onClick={e => { e.stopPropagation(); isOpen ? setPlanFilterOpen(null) : openPlanFilter(col.key); }}
+                                          className={`flex-shrink-0 p-0.5 rounded transition-colors ${isFiltered ? "text-yellow-300" : "text-slate-400 hover:text-white"}`}
+                                          title="Filter">
+                                          ▼
+                                        </button>
+                                      </div>
+                                      {/* Filter dropdown */}
+                                      {isOpen && (
+                                        <div className="absolute top-full left-0 z-50 bg-white border border-gray-300 rounded-xl shadow-2xl min-w-[200px] text-gray-800"
+                                          onClick={e => e.stopPropagation()}>
+                                          {/* Search */}
+                                          <div className="p-2 border-b border-gray-100">
+                                            <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
+                                              <Search size={11} className="text-gray-400 flex-shrink-0" />
+                                              <input autoFocus value={fSearch}
+                                                onChange={e => setPlanFilterSearch(s => ({ ...s, [col.key]: e.target.value }))}
+                                                placeholder="Search…"
+                                                className="text-xs bg-transparent outline-none w-full text-gray-700" />
+                                              {fSearch && <button onClick={() => setPlanFilterSearch(s => ({ ...s, [col.key]: "" }))} className="text-gray-400"><X size={10} /></button>}
+                                            </div>
+                                          </div>
+                                          {/* Select All */}
+                                          <div className="px-3 py-1.5 border-b border-gray-100 hover:bg-gray-50 cursor-pointer flex items-center gap-2"
+                                            onClick={() => togglePlanFilterAll(col.key, visVals)}>
+                                            <input type="checkbox" readOnly
+                                              checked={draft.size === visVals.length && visVals.length > 0}
+                                              className="accent-indigo-600 cursor-pointer" />
+                                            <span className="text-xs font-semibold text-gray-600">Select All</span>
+                                          </div>
+                                          {/* Values list */}
+                                          <div className="max-h-48 overflow-y-auto">
+                                            {visVals.map(v => (
+                                              <div key={v} className="px-3 py-1.5 hover:bg-indigo-50 cursor-pointer flex items-center gap-2"
+                                                onClick={() => togglePlanFilterVal(col.key, v)}>
+                                                <input type="checkbox" readOnly checked={draft.has(v)} className="accent-indigo-600 cursor-pointer" />
+                                                <span className="text-xs text-gray-700">{v || "(blank)"}</span>
+                                              </div>
+                                            ))}
+                                            {visVals.length === 0 && <div className="px-3 py-2 text-xs text-gray-400">No matches</div>}
+                                          </div>
+                                          {/* OK / Cancel */}
+                                          <div className="flex gap-2 p-2 border-t border-gray-100">
+                                            <button onClick={() => applyPlanFilter(col.key)}
+                                              className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-1.5 rounded-lg">OK</button>
+                                            <button onClick={() => clearPlanFilter(col.key)}
+                                              className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium py-1.5 rounded-lg">Clear</button>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </th>
+                                  );
+                                })}
                               </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-100">
@@ -1535,27 +1840,16 @@ export default function ProductCatalogPage() {
                                     <td className="p-2 border border-gray-100 text-center">
                                       <div className="font-bold text-indigo-700 text-xs">{plan.filmSize}</div>
                                       {(() => {
-                                        const jobW   = replanForm?.actualWidth || replanForm?.jobWidth || 0;
-                                        const shrink = replanForm?.widthShrinkage || 0;
-                                        const trim   = replanForm?.trimmingSize   || 0;
-                                        const hasShrink = shrink > 0;
-                                        const hasTrim   = trim   > 0;
-                                        if (!hasShrink && !hasTrim) return null;
+                                        const jobW = replanForm?.actualWidth || replanForm?.jobWidth || 0;
+                                        const trim = replanForm?.trimmingSize || 0;
+                                        if (!trim) return null;
                                         return (
                                           <div className="flex items-center justify-center flex-wrap gap-0.5 mt-1">
                                             <span className="text-[8px] text-indigo-500 font-semibold leading-none">{plan.acUps}×{jobW}</span>
-                                            {hasShrink && (
-                                              <span className="text-[8px] font-bold leading-none px-1 py-0.5 rounded"
-                                                style={{ background: "#fdf4ff", color: "#a21caf" }}>
-                                                +{plan.acUps * shrink}S
-                                              </span>
-                                            )}
-                                            {hasTrim && (
-                                              <span className="text-[8px] font-bold leading-none px-1 py-0.5 rounded"
-                                                style={{ background: "#fff7ed", color: "#c2410c" }}>
-                                                +{2 * trim}T
-                                              </span>
-                                            )}
+                                            <span className="text-[8px] font-bold leading-none px-1 py-0.5 rounded"
+                                              style={{ background: "#fff7ed", color: "#c2410c" }}>
+                                              +{2 * trim}T
+                                            </span>
                                           </div>
                                         );
                                       })()}
@@ -1656,7 +1950,7 @@ export default function ProductCatalogPage() {
 
                 <div className="flex justify-between">
                   <Button variant="secondary" onClick={() => setReplanTab("info")}>← Back</Button>
-                  <Button onClick={() => { if (catalogColorShades.length === 0 && replanForm) initCatalogPrepData(replanForm); setCatalogPrepTab("film"); setReplanTab("material"); }}>Next: Production Prep <ChevronRight size={14} className="ml-1" /></Button>
+                  <Button onClick={() => { if (catalogColorShades.length === 0 && replanForm) initCatalogPrepData(replanForm); setCatalogPrepTab("shade"); setReplanTab("material"); }}>Next: Production Prep <ChevronRight size={14} className="ml-1" /></Button>
                 </div>
               </div>
             )}
@@ -1667,9 +1961,7 @@ export default function ProductCatalogPage() {
                 {/* Sub-tab bar */}
                 <div className="flex overflow-x-auto bg-gray-100 p-1 rounded-xl gap-1">
                   {([
-                    { key: "film",     label: "Film Requisition"    },
                     { key: "shade",    label: "Color Shade & LAB"   },
-                    { key: "material", label: "Material Allocation" },
                     { key: "tool",     label: "Tool / Cylinder"     },
                   ] as const).map(t => (
                     <button key={t.key} onClick={() => setCatalogPrepTab(t.key)}
@@ -1678,177 +1970,6 @@ export default function ProductCatalogPage() {
                     </button>
                   ))}
                 </div>
-
-                {/* ─── Film Requisition ─── */}
-                {catalogPrepTab === "film" && (
-                <div className="space-y-3">
-                <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-2">
-                  <Package size={14} className="text-blue-600 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-xs font-bold text-blue-800">Film & Material Requisition</p>
-                    <p className="text-xs text-blue-700 mt-0.5">Select source for each ply — request from Extrusion Unit (internal) or raise a Purchase Request (external vendor).</p>
-                  </div>
-                </div>
-
-                {replanForm.secondaryLayers.length === 0 ? (
-                  <div className="flex flex-col items-center py-12 text-gray-400">
-                    <Package size={36} className="mb-3 opacity-30" />
-                    <p className="text-sm font-medium text-gray-500">No plys configured</p>
-                    <p className="text-xs mt-1">Go to Planning tab to add ply layers first.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {replanForm.secondaryLayers.map((l, idx) => {
-                      const req: FilmRequisition = catalogFilmReqs[idx] ?? { source: "", status: "Pending" };
-                      const reqSQM = (replanForm.standardQty || 0) * ((replanForm.jobWidth || 0) / 1000);
-                      const reqWt  = l.gsm > 0 ? parseFloat(((l.gsm / 1000) * reqSQM * 1.03).toFixed(3)) : 0;
-                      const setReq = (patch: Partial<FilmRequisition>) =>
-                        setCatalogFilmReqs(prev => {
-                          const next = [...prev];
-                          next[idx]  = { ...(next[idx] ?? { source: "", status: "Pending" }), ...patch };
-                          return next;
-                        });
-                      const plyColor =
-                        l.plyType === "Film"       ? { hdr: "bg-blue-50 border-blue-100",    badge: "bg-blue-100 text-blue-700 border-blue-200"    } :
-                        l.plyType === "Printing"   ? { hdr: "bg-indigo-50 border-indigo-100", badge: "bg-indigo-100 text-indigo-700 border-indigo-200" } :
-                        l.plyType === "Lamination" ? { hdr: "bg-orange-50 border-orange-100", badge: "bg-orange-100 text-orange-700 border-orange-200" } :
-                                                     { hdr: "bg-green-50 border-green-100",   badge: "bg-green-100 text-green-700 border-green-200"   };
-                      return (
-                        <div key={l.id} className="bg-white border-2 border-gray-100 rounded-2xl shadow-sm overflow-hidden">
-                          <div className={`flex items-center justify-between px-4 py-2.5 border-b ${plyColor.hdr}`}>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-gray-800">Ply {idx + 1} — {l.itemSubGroup || "No film selected"}</span>
-                            </div>
-                            <div className="flex items-center gap-3 text-xs text-gray-600">
-                              <span>GSM: <strong>{l.gsm || "—"}</strong></span>
-                              <span>Thick: <strong>{l.thickness || "—"}μ</strong></span>
-                              {reqWt > 0 && <span className="font-bold text-blue-700">~{reqWt} Kg</span>}
-                              {req.source && (
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                                  req.status === "Available" ? "bg-green-50 text-green-700 border-green-200" :
-                                  req.status === "Requested" ? "bg-blue-50 text-blue-700 border-blue-200" :
-                                  "bg-gray-50 text-gray-500 border-gray-200"
-                                }`}>● {req.status}</span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="p-4 space-y-3">
-                            <div>
-                              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Select Source *</p>
-                              <div className="grid grid-cols-2 gap-2">
-                                <button onClick={() => setReq({ source: "Extrusion", status: "Pending" })}
-                                  className={`py-3 px-4 rounded-xl border-2 text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                                    req.source === "Extrusion" ? "bg-teal-600 text-white border-teal-600 shadow-md" : "bg-white text-teal-700 border-teal-200 hover:border-teal-400"
-                                  }`}>
-                                  <Factory size={14} /> Extrusion Unit
-                                  <span className={`text-[10px] ${req.source === "Extrusion" ? "text-teal-100" : "text-gray-400"}`}>(Internal)</span>
-                                </button>
-                                <button onClick={() => setReq({ source: "Purchase", status: "Pending" })}
-                                  className={`py-3 px-4 rounded-xl border-2 text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                                    req.source === "Purchase" ? "bg-blue-600 text-white border-blue-600 shadow-md" : "bg-white text-blue-700 border-blue-200 hover:border-blue-400"
-                                  }`}>
-                                  <ShoppingCart size={14} /> Purchase Request
-                                  <span className={`text-[10px] ${req.source === "Purchase" ? "text-blue-100" : "text-gray-400"}`}>(External)</span>
-                                </button>
-                              </div>
-                            </div>
-
-                            {req.source && (
-                              <>
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                  <div>
-                                    <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Required Qty</p>
-                                    <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-xl text-sm font-bold text-blue-700">{reqWt > 0 ? `${reqWt} Kg` : "—"}</div>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1">Film Type</p>
-                                    <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-medium">{l.itemSubGroup || "—"}</div>
-                                  </div>
-                                  <Input label="Required By" type="date" value={req.requiredDate || ""}
-                                    onChange={e => setReq({ requiredDate: e.target.value })} />
-                                </div>
-
-                                {req.source === "Extrusion" && (
-                                  <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 space-y-2">
-                                    <p className="text-[10px] font-bold text-teal-800 uppercase tracking-widest">Extrusion Request Details</p>
-                                    <div className="grid grid-cols-2 gap-2">
-                                      <Input label="Film Specification" value={req.spec ?? `${l.itemSubGroup || ""}${l.thickness ? ` ${l.thickness}μ` : ""}`}
-                                        onChange={e => setReq({ spec: e.target.value })} />
-                                      <Select label="Priority" value={req.priority ?? "Normal"}
-                                        onChange={e => setReq({ priority: e.target.value })}
-                                        options={[{ value: "Normal", label: "Normal" }, { value: "Urgent", label: "Urgent" }, { value: "Critical", label: "Critical" }]} />
-                                    </div>
-                                  </div>
-                                )}
-
-                                {req.source === "Purchase" && (
-                                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 space-y-2">
-                                    <p className="text-[10px] font-bold text-blue-800 uppercase tracking-widest">Purchase Request Details</p>
-                                    <div className="grid grid-cols-2 gap-2">
-                                      <div>
-                                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Preferred Vendor</label>
-                                        <select className="w-full text-xs border border-gray-200 rounded-xl px-2 py-2 bg-white outline-none focus:ring-2 focus:ring-blue-400"
-                                          value={req.vendor ?? ""}
-                                          onChange={e => setReq({ vendor: e.target.value })}>
-                                          <option value="">-- Select Vendor --</option>
-                                          {VENDOR_LEDGERS.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
-                                        </select>
-                                      </div>
-                                      <Input label="Expected Rate (₹/Kg)" type="number" value={req.expectedRate ?? ""}
-                                        onChange={e => setReq({ expectedRate: Number(e.target.value) })} />
-                                    </div>
-                                  </div>
-                                )}
-
-                                <div className="flex items-end gap-2">
-                                  <div className="flex-1">
-                                    <Input label="Remarks" value={req.remarks ?? ""}
-                                      onChange={e => setReq({ remarks: e.target.value })} placeholder="Special instructions…" />
-                                  </div>
-                                  <button onClick={() => setReq({ status: req.status === "Requested" ? "Pending" : "Requested" })}
-                                    className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl border transition-all whitespace-nowrap ${
-                                      req.status === "Requested"
-                                        ? "bg-green-100 text-green-700 border-green-300"
-                                        : "bg-purple-700 text-white border-purple-700 hover:bg-purple-800"
-                                    }`}>
-                                    <Send size={11} />
-                                    {req.status === "Requested" ? "✓ Sent" : req.source === "Extrusion" ? "Send to Extrusion" : "Raise PR"}
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {replanForm.secondaryLayers.length > 0 && catalogFilmReqs.some(r => r?.source) && (
-                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-4 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold text-indigo-800 uppercase tracking-widest mb-1.5">Requisition Summary</p>
-                      <div className="flex gap-2 flex-wrap">
-                        <span className="px-2.5 py-1 bg-teal-100 text-teal-700 rounded-full border border-teal-200 text-xs font-semibold">
-                          {catalogFilmReqs.filter(r => r?.source === "Extrusion").length} → Extrusion
-                        </span>
-                        <span className="px-2.5 py-1 bg-blue-100 text-blue-700 rounded-full border border-blue-200 text-xs font-semibold">
-                          {catalogFilmReqs.filter(r => r?.source === "Purchase").length} → Purchase
-                        </span>
-                        <span className="px-2.5 py-1 bg-green-100 text-green-700 rounded-full border border-green-200 text-xs font-semibold">
-                          {catalogFilmReqs.filter(r => r?.status === "Requested").length}/{replanForm.secondaryLayers.length} Sent
-                        </span>
-                      </div>
-                    </div>
-                    <button onClick={() => setCatalogFilmReqs(prev => prev.map(r => r?.source ? { ...r, status: "Requested" } : r))}
-                      className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold bg-indigo-700 text-white rounded-xl hover:bg-indigo-800 transition-colors">
-                      <Send size={13} /> Send All Requests
-                    </button>
-                  </div>
-                )}
-
-                </div>
-                )}
 
                 {/* ─── Color Shade & LAB ─── */}
                 {catalogPrepTab === "shade" && (
@@ -1957,66 +2078,7 @@ export default function ProductCatalogPage() {
                   </div>
                 )}
 
-                {/* ─── Material Allocation ─── */}
-                {catalogPrepTab === "material" && (
-                  <div className="space-y-3">
-                    <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 flex items-start gap-2">
-                      <Archive size={14} className="text-teal-600 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-xs font-bold text-teal-800">Material Allocation</p>
-                        <p className="text-xs text-teal-700 mt-0.5">Allocate raw materials from stock — enter lot no., store location, and allocated qty for each item.</p>
-                      </div>
-                    </div>
-                    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-                      <table className="min-w-full text-[11px] border-collapse">
-                        <thead className="bg-teal-700 text-white uppercase tracking-wider">
-                          <tr>{["Ply", "Type", "Material", "Req. Qty", "Alloc. Qty", "Unit", "Lot / Batch No.", "Store Location", "Status", "Action"].map(h => (
-                            <th key={h} className="px-2 py-2 border border-teal-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
-                          ))}</tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {catalogMatAllocs.map((ma, i) => {
-                            const itemsForType = items.filter(x => x.group === ma.materialType && x.active);
-                            return (
-                            <tr key={ma.id} className={`hover:bg-teal-50/20 ${ma.materialType === "Film" ? "bg-blue-50/30 font-medium" : ""}`}>
-                              <td className="px-2 py-1.5 text-center font-bold text-teal-700">{ma.plyNo ?? "—"}</td>
-                              <td className="px-2 py-1.5 text-center"><span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${ma.materialType === "Film" ? "bg-blue-100 text-blue-700 border-blue-200" : ma.materialType === "Ink" ? "bg-violet-100 text-violet-700 border-violet-200" : ma.materialType === "Solvent" ? "bg-orange-100 text-orange-700 border-orange-200" : ma.materialType === "Adhesive" ? "bg-teal-100 text-teal-700 border-teal-200" : "bg-gray-100 text-gray-700 border-gray-200"}`}>{ma.materialType}</span></td>
-                              <td className="px-2 py-1.5 min-w-[150px]">
-                                <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-teal-400"
-                                  value={(ma as any).itemId ?? ""}
-                                  onChange={e => {
-                                    const it = itemsForType.find(x => x.id === e.target.value);
-                                    setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, itemId: it?.id ?? "", materialName: it?.name ?? m.materialName } as any : m));
-                                  }}>
-                                  <option value="">{ma.materialName || "-- Select Item --"}</option>
-                                  {itemsForType.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-                                </select>
-                              </td>
-                              <td className="px-2 py-1.5 text-center font-mono text-blue-700 font-bold">{ma.requiredQty > 0 ? ma.requiredQty : "—"}</td>
-                              <td className="px-2 py-1.5 text-center"><input type="number" step={0.001} className="w-16 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-teal-400 text-center" value={ma.allocatedQty || ""} onChange={e => setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, allocatedQty: Number(e.target.value) } : m))} /></td>
-                              <td className="px-2 py-1.5 text-center text-gray-500">{ma.unit}</td>
-                              <td className="px-2 py-1.5"><input placeholder="LOT-001" className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-teal-400" value={ma.lotNo} onChange={e => setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, lotNo: e.target.value } : m))} /></td>
-                              <td className="px-2 py-1.5"><input placeholder="Rack A-3" className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-teal-400" value={ma.location} onChange={e => setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, location: e.target.value } : m))} /></td>
-                              <td className="px-2 py-1.5 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${ma.status === "Allocated" ? "bg-green-50 text-green-700 border-green-200" : ma.status === "Partial" ? "bg-yellow-50 text-yellow-700 border-yellow-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>{ma.status}</span></td>
-                              <td className="px-2 py-1.5 text-center"><button onClick={() => setCatalogMatAllocs(p => p.map((m, mi) => mi === i ? { ...m, status: m.allocatedQty > 0 && m.allocatedQty >= m.requiredQty ? "Allocated" : m.allocatedQty > 0 ? "Partial" : "Pending" } : m))} className="px-2.5 py-1 text-[10px] font-bold bg-teal-600 text-white rounded-lg hover:bg-teal-700 whitespace-nowrap">Allocate</button></td>
-                            </tr>
-                          ); })}
-                          {catalogMatAllocs.length === 0 && <tr><td colSpan={10} className="p-6 text-center text-gray-400 text-xs">No materials. Configure plys in Planning tab first.</td></tr>}
-                        </tbody>
-                        {catalogMatAllocs.length > 0 && (
-                          <tfoot className="bg-teal-50 border-t-2 border-teal-200">
-                            <tr>
-                              <td colSpan={3} className="px-3 py-2 text-right text-teal-800 text-[10px] font-bold uppercase">Totals</td>
-                              <td className="px-2 py-2 text-center font-bold text-teal-900 font-mono">{catalogMatAllocs.reduce((s, m) => s + m.requiredQty, 0).toFixed(3)} Kg</td>
-                              <td className="px-2 py-2 text-center font-bold text-green-800 font-mono">{catalogMatAllocs.reduce((s, m) => s + m.allocatedQty, 0).toFixed(3)} Kg</td>
-                              <td colSpan={5} className="px-3 py-2 text-right"><button onClick={() => setCatalogMatAllocs(p => p.map(m => ({ ...m, allocatedQty: m.requiredQty, status: "Allocated" as const })))} className="px-3 py-1 text-xs font-bold bg-teal-700 text-white rounded-lg hover:bg-teal-800">Allocate All</button></td>
-                            </tr>
-                          </tfoot>
-                        )}
-                      </table>
-                    </div>
-                  </div>
-                )}
+
 
                 {/* ─── Tool / Cylinder Allocation ─── */}
                 {catalogPrepTab === "tool" && (
@@ -2085,6 +2147,259 @@ export default function ProductCatalogPage() {
                   <Button variant="secondary" onClick={() => setReplanTab("planning")}>← Back</Button>
                   <Button icon={<BookMarked size={14} />} onClick={saveReplan}>{isNewCatalog ? "Save to Catalog" : "Save Changes"}</Button>
                 </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ JOB SPEC SHEET PRINT MODAL ═══════════════════════════ */}
+      {printRow && (() => {
+        const r = printRow;
+        const machine = PRINT_MACHINES.find(m => m.id === r.machineId);
+        const trim    = r.trimmingSize || 0;
+        const cylMargin = machine ? parseFloat((machine as any).printingMargin || "15") : 15;
+        const cylLen    = machine ? parseFloat((machine as any).repeatLengthMax || "900") : 900;
+        const cylCirc   = r.jobHeight || 0;
+        const cylWidth  = r.actualWidth || r.jobWidth || 0;
+        const slittingTrim = trim * 2;
+        const printingWidth = cylWidth;
+        const today   = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+        const colorRows = r.secondaryLayers?.flatMap(l => l.consumableItems?.filter(ci => ci.itemGroup === "Ink").map(ci => ({ name: ci.itemName || ci.itemSubGroup || "", grade: "" })) ?? []) ?? [];
+
+        const handlePrint = () => {
+          const el = document.getElementById("job-spec-print-area");
+          if (!el) return;
+          const w = window.open("", "_blank", "width=900,height=700");
+          if (!w) return;
+          w.document.write(`<!DOCTYPE html><html><head><title>Job Spec — ${r.catalogNo}</title>
+            <style>
+              *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif;font-size:10px;}
+              body{padding:12px;color:#000;}
+              .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:6px;}
+              .title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:1px;margin:4px 0 8px;}
+              table{width:100%;border-collapse:collapse;margin-bottom:6px;}
+              td,th{border:1px solid #000;padding:3px 5px;vertical-align:top;}
+              th{background:#e8e8e8;font-weight:bold;text-align:left;}
+              .section-title{font-weight:bold;text-decoration:underline;margin:6px 0 3px;}
+              .two-col{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+              .swatch{width:60px;height:14px;display:inline-block;border:1px solid #999;}
+              .sign-row{display:flex;justify-content:space-between;margin-top:16px;border-top:1px solid #000;padding-top:8px;}
+              .no-border td{border:none;}
+              @media print{body{padding:6px;}}
+            </style></head><body>${el.innerHTML}</body></html>`);
+          w.document.close();
+          w.focus();
+          setTimeout(() => { w.print(); }, 400);
+        };
+
+        const swatchColors = ["#1565C0","#2E7D32","#C62828","#B71C1C","#4527A0","#F57F17","#212121","#6A1B9A","#00695C"];
+
+        return (
+          <Modal open onClose={() => setPrintRow(null)} title={`Job Specification Sheet — ${r.catalogNo}`} size="xl">
+            <div className="flex justify-end mb-3">
+              <button onClick={handlePrint}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-bold rounded-xl shadow transition">
+                <Printer size={15} /> Print / Save PDF
+              </button>
+            </div>
+
+            <div id="job-spec-print-area" className="bg-white text-black text-[11px] p-4 border border-gray-300 rounded-xl font-sans">
+              {/* Header */}
+              <div className="flex justify-between items-start border-b-2 border-black pb-2 mb-2">
+                <div>
+                  <div className="text-[18px] font-black tracking-widest text-blue-900">AJ SHRINK</div>
+                  <div className="text-[9px] text-gray-600 font-semibold">Flexible Packaging ERP</div>
+                </div>
+                <div className="text-right text-[9px] leading-tight">
+                  <div className="font-bold">AJSW/QC/CAT/R0</div>
+                  <div>D.O.E — {today}</div>
+                  <div className="mt-1"><strong>Job Code:</strong> {r.catalogNo}</div>
+                  <div><strong>Type:</strong> {r.substrate || r.content || "—"}</div>
+                </div>
+              </div>
+
+              <div className="text-center text-[15px] font-black tracking-widest uppercase border-b border-black pb-1 mb-3">Job Specification Sheet</div>
+
+              {/* Top info */}
+              <table className="mb-2">
+                <tbody>
+                  <tr>
+                    <th style={{ width: "20%" }}>Job Name</th>
+                    <td colSpan={3} className="font-bold">{r.productName}</td>
+                  </tr>
+                  <tr>
+                    <th>Customer</th>
+                    <td>{r.customerName}</td>
+                    <th style={{ width: "18%" }}>Order Ref</th>
+                    <td>{r.sourceOrderNo || "—"}</td>
+                  </tr>
+                  <tr>
+                    <th>Specification</th>
+                    <td>{cylWidth} mm × {r.jobHeight || "—"} mm{r.substrate ? `, ${r.substrate}` : ""}</td>
+                    <th>Print Type</th>
+                    <td>{r.printType}</td>
+                  </tr>
+                  <tr>
+                    <th>Artwork Name</th>
+                    <td>{(r as any).artworkName || "—"}</td>
+                    <th>Brand Name</th>
+                    <td>{(r as any).brandName || "—"}</td>
+                  </tr>
+                  {(r as any).specialSpecs && (
+                    <tr><th>Special Specs</th><td colSpan={3}>{(r as any).specialSpecs}</td></tr>
+                  )}
+                </tbody>
+              </table>
+
+              <div className="grid grid-cols-2 gap-3 mb-2">
+                {/* Cylinder Details */}
+                <div>
+                  <div className="font-bold underline mb-1">Cylinder Details</div>
+                  <table>
+                    <tbody>
+                      <tr><th>Repeat (Height)</th><td>{r.jobHeight || "—"} mm{(r.widthShrinkage || 0) > 0 ? ` + ${r.widthShrinkage}mm shrink` : ""}</td></tr>
+                      <tr><th>Width</th><td>{cylWidth} mm</td></tr>
+                      <tr><th>No. of Colours</th><td>{r.noOfColors} colours</td></tr>
+                      <tr><th>Cylinder Circ.</th><td>{r.jobHeight || "—"} mm</td></tr>
+                      <tr><th>Machine</th><td>{r.machineName || "—"}</td></tr>
+                    </tbody>
+                  </table>
+                  <div className="mt-2">
+                    <table>
+                      <thead><tr><th>Printing Width</th><th>Slitting Trim</th><th>Cylinder Margin</th></tr></thead>
+                      <tbody>
+                        <tr>
+                          <td className="text-center font-bold">{printingWidth} mm</td>
+                          <td className="text-center">{slittingTrim} mm</td>
+                          <td className="text-center">{cylMargin} mm</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Printing Details */}
+                <div>
+                  <div className="font-bold underline mb-1">Printing Details</div>
+                  <table>
+                    <tbody>
+                      <tr><th>Printing Type</th><td>{r.printType}</td></tr>
+                      <tr><th>No. of Colors</th><td>{r.noOfColors}</td></tr>
+                      <tr><th>Front Colors</th><td>{r.frontColors || "—"}</td></tr>
+                      <tr><th>Back Colors</th><td>{r.backColors || "—"}</td></tr>
+                      <tr><th>Standard Qty</th><td>{(r.standardQty || 0).toLocaleString()} {r.standardUnit}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Ink / Color table */}
+              <div className="font-bold underline mb-1">Ink Details</div>
+              <table className="mb-2">
+                <thead>
+                  <tr>
+                    <th style={{ width: "5%" }}>No.</th>
+                    <th style={{ width: "20%" }}>Ink Name</th>
+                    <th style={{ width: "35%" }}>Ink Code / Grade</th>
+                    <th style={{ width: "25%" }}>Ink Viscosity</th>
+                    <th style={{ width: "15%" }}>Drawdown Sample</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {colorRows.length > 0 ? colorRows.map((c, i) => (
+                    <tr key={i}>
+                      <td className="text-center">{i + 1}</td>
+                      <td>{c.name || "—"}</td>
+                      <td>{c.grade || "—"}</td>
+                      <td></td>
+                      <td><div style={{ width: 60, height: 14, background: swatchColors[i] ?? "#ccc", border: "1px solid #999" }} /></td>
+                    </tr>
+                  )) : Array.from({ length: r.noOfColors || 4 }, (_, i) => (
+                    <tr key={i}>
+                      <td className="text-center">{i + 1}</td>
+                      <td></td><td></td><td></td>
+                      <td><div style={{ width: 60, height: 14, background: swatchColors[i] ?? "#eee", border: "1px solid #999" }} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Slitting + Packing */}
+              <div className="grid grid-cols-2 gap-3 mb-2">
+                <div>
+                  <div className="font-bold underline mb-1">Slitting Details</div>
+                  <table>
+                    <tbody>
+                      <tr><th>Slitting Width</th><td>{cylWidth} mm</td></tr>
+                      <tr><th>Trimming / Bleed</th><td>{trim} mm</td></tr>
+                      <tr><th>Core Type</th><td>3" Paper Core</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div>
+                  <div className="font-bold underline mb-1">Packing Details</div>
+                  <table>
+                    <tbody>
+                      <tr><th>Pack Size</th><td>{(r as any).packSize || "—"}</td></tr>
+                      <tr><th>SKU Type</th><td>{(r as any).skuType || "—"}</td></tr>
+                      <tr><th>Address Type</th><td>{(r as any).addressType || "—"}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Remarks */}
+              {r.remarks && (
+                <table className="mb-2">
+                  <tbody><tr><th style={{ width: "15%" }}>Remarks</th><td>{r.remarks}</td></tr></tbody>
+                </table>
+              )}
+
+              {/* Signatures */}
+              <div className="flex justify-between mt-4 border-t border-black pt-3">
+                <div className="text-center" style={{ minWidth: 120 }}>
+                  <div className="border-b border-black mb-1" style={{ height: 28 }}></div>
+                  <div className="text-[9px] font-bold">Prepared by</div>
+                </div>
+                <div className="text-center" style={{ minWidth: 120 }}>
+                  <div className="border-b border-black mb-1" style={{ height: 28 }}></div>
+                  <div className="text-[9px] font-bold">Checked by</div>
+                </div>
+                <div className="text-center" style={{ minWidth: 120 }}>
+                  <div className="border-b border-black mb-1" style={{ height: 28 }}></div>
+                  <div className="text-[9px] font-bold">Approved by</div>
+                </div>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* ══ ATTACHMENT PREVIEW MODAL ═════════════════════════════ */}
+      {previewAttachment && (
+        <Modal open onClose={() => setPreviewAttachment(null)} title={previewAttachment.name} size="xl">
+          <div className="flex flex-col items-center justify-center min-h-[60vh]">
+            {previewAttachment.mimeType.startsWith("image/") ? (
+              <img src={previewAttachment.url} alt={previewAttachment.name}
+                className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-lg" />
+            ) : previewAttachment.mimeType === "application/pdf" ? (
+              <iframe src={previewAttachment.url} title={previewAttachment.name}
+                className="w-full rounded-xl border border-gray-200 shadow" style={{ height: "70vh" }} />
+            ) : (
+              <div className="flex flex-col items-center gap-4 py-16 text-center">
+                <div className="w-20 h-20 rounded-2xl bg-gray-100 flex items-center justify-center">
+                  <span className="text-2xl font-black text-gray-400">
+                    {previewAttachment.name.split(".").pop()?.toUpperCase() ?? "FILE"}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500 max-w-xs">
+                  Preview is not available for this file type.<br />Use the download button to open it.
+                </p>
+                <a href={previewAttachment.url} download={previewAttachment.name}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition">
+                  ↓ Download {previewAttachment.name}
+                </a>
               </div>
             )}
           </div>
@@ -2199,16 +2514,12 @@ export default function ProductCatalogPage() {
         const CANVAS = 640;
         const scale  = filmW > 0 ? CANVAS / filmW : 1;
         const toW    = (mm: number) => Math.max(mm * scale, mm > 0 ? 2 : 0);
-        // sections list for drawing
+        // sections list for drawing — shrinkage is on repeat length (height), not width
         const sections: { label: string; mm: number; color: string; text: string }[] = [];
-        // Left bleed only
         if (trim > 0) sections.push({ label: `${trim}mm`, mm: trim, color: "#fed7aa", text: "#c2410c" });
-        // Lanes: job + shrinkage only (no per-lane trim)
         for (let i = 0; i < acUps; i++) {
           sections.push({ label: `${jobW}mm`, mm: jobW, color: "#e0e7ff", text: "#4338ca" });
-          if (shrink > 0) sections.push({ label: `${shrink}mm`, mm: shrink, color: "#fae8ff", text: "#a21caf" });
         }
-        // Right bleed only
         if (trim > 0) sections.push({ label: `${trim}mm`, mm: trim, color: "#fed7aa", text: "#c2410c" });
         return (
           <Modal open onClose={() => setUpsPreviewPlan(null)} title="UPS Layout Design" size="xl">
@@ -2219,7 +2530,7 @@ export default function ProductCatalogPage() {
                   { l: "Film Width",  v: `${filmW} mm`,  cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
                   { l: "AC UPS",      v: String(acUps),   cls: "bg-purple-50 text-purple-700 border-purple-200" },
                   { l: "Job Width",   v: `${jobW} mm`,    cls: "bg-blue-50 text-blue-700 border-blue-200" },
-                  { l: "Shrinkage",   v: shrink > 0 ? `+${shrink} mm` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                  { l: "Repeat Shrink", v: shrink > 0 ? `+${shrink} mm (on height)` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
                   { l: "Trimming",    v: trim > 0 ? `${trim} mm` : "—",      cls: "bg-orange-50 text-orange-700 border-orange-200" },
                   { l: "Repeat UPS",  v: String(plan.repeatUPS), cls: "bg-teal-50 text-teal-700 border-teal-200" },
                   { l: "Total UPS",   v: String(plan.totalUPS),  cls: "bg-green-50 text-green-700 border-green-200" },
@@ -2260,7 +2571,7 @@ export default function ProductCatalogPage() {
                 <div className="flex flex-wrap gap-3 mt-3">
                   {[
                     { color: "#e0e7ff", border: "#6366f1", label: `Job Width (${jobW}mm × ${acUps} lanes)` },
-                    ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: `Shrinkage (+${shrink}mm × ${acUps} lanes = +${acUps * shrink}mm)` }] : []),
+                    ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: `Repeat Shrinkage (+${shrink}mm on repeat length — does not affect film width)` }] : []),
                     ...(trim > 0   ? [{ color: "#fed7aa", border: "#c2410c", label: `Trimming (left ${trim}mm + right ${trim}mm = ${2 * trim}mm total)` }] : []),
                   ].map(l => (
                     <div key={l.label} className="flex items-center gap-1.5">
@@ -2336,6 +2647,7 @@ export default function ProductCatalogPage() {
             {(viewPlanRow as any).skuType && <span className="px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full">{(viewPlanRow as any).skuType}</span>}
             {(viewPlanRow as any).bottleType && <span className="px-3 py-1 bg-sky-50 border border-sky-200 text-sky-700 rounded-full">{(viewPlanRow as any).bottleType}</span>}
             {(viewPlanRow as any).addressType && <span className="px-3 py-1 bg-sky-50 border border-sky-200 text-sky-700 rounded-full">{(viewPlanRow as any).addressType} Address</span>}
+            {(viewPlanRow as any).artworkName  && <span className="px-3 py-1 bg-violet-50 border border-violet-200 text-violet-700 rounded-full font-semibold">🎨 {(viewPlanRow as any).artworkName}</span>}
             {(viewPlanRow as any).specialSpecs && <span className="px-3 py-1 bg-rose-50 border border-rose-200 text-rose-700 rounded-full font-semibold">★ {(viewPlanRow as any).specialSpecs}</span>}
           </div>
 
