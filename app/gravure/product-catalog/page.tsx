@@ -140,15 +140,17 @@ export default function ProductCatalogPage() {
     });
   };
 
-  type CatalogAttachment = { id: string; name: string; size: number; mimeType: string; url: string };
+  type CatalogAttachment = { id: string; name: string; size: number; mimeType: string; url: string; label?: string };
   const [replanAttachments, setReplanAttachments] = useState<CatalogAttachment[]>([]);
+  const [editingAttachLabel, setEditingAttachLabel] = useState<string | null>(null); // att.id being edited
 
   const addAttachments = (files: FileList | null) => {
     if (!files) return;
-    const newItems: CatalogAttachment[] = Array.from(files).map(f => ({
+    const newItems: CatalogAttachment[] = Array.from(files).map((f, i) => ({
       id: Math.random().toString(36).slice(2),
       name: f.name, size: f.size, mimeType: f.type,
       url: URL.createObjectURL(f),
+      label: replanAttachments.length === 0 && i === 0 ? "Master File" : undefined,
     }));
     setReplanAttachments(p => [...p, ...newItems]);
   };
@@ -316,9 +318,19 @@ export default function ProductCatalogPage() {
     const laneWidth = planWidth; // width is not affected by shrinkage
     const trim      = replanForm.trimmingSize || 0;
 
-    // per-cylinder: UPS around = floor(cylinder.repeatLength / (jobHeight + shrinkage))
-    const calcRepeatUPS = (cylRepeatLength: number) =>
-      effectiveRepeat > 0 ? Math.max(1, Math.floor(cylRepeatLength / effectiveRepeat)) : 1;
+    // per-cylinder: UPS around = cylCirc / effectiveRepeat — must be an EXACT multiple (within 0.5mm tolerance)
+    const calcRepeatUPS = (cylRepeatLength: number) => {
+      if (effectiveRepeat <= 0) return 1;
+      const ups = cylRepeatLength / effectiveRepeat;
+      const rounded = Math.round(ups);
+      return rounded;
+    };
+    // returns true only if cylCirc is an exact multiple of effectiveRepeat (±0.5mm)
+    const isValidCircumference = (cylCirc: number) => {
+      if (effectiveRepeat <= 0) return true;
+      const remainder = cylCirc % effectiveRepeat;
+      return remainder < 0.5 || (effectiveRepeat - remainder) < 0.5;
+    };
 
     // ── LOOP A: Sleeve in stock → cylinder (or SPECIAL CYL) ──
     const loopA = SLEEVE_TOOLS.flatMap(sleeve => {
@@ -334,20 +346,38 @@ export default function ProductCatalogPage() {
         if (filmWidth < machineMinFilm) return [];
         const req    = filmWidth + 100;
         const minCyl = req < sleeveWidthVal ? req : sleeveWidthVal + 100;
-        const validCylinders = CYLINDER_TOOLS.filter(t => parseFloat(t.printWidth) >= minCyl);
+        // Only keep real cylinders whose circumference is an exact multiple of effectiveRepeat
+        const validCylinders = CYLINDER_TOOLS.filter(t => {
+          if (parseFloat(t.printWidth) < minCyl) return false;
+          const circ = parseFloat(t.repeatLength || "450") || 450;
+          return isValidCircumference(circ);
+        });
+        // If no real cylinder matches → generate Special Order entries for each valid multiple
+        // of effectiveRepeat (from smallest above 200mm up to 1100mm)
+        const specialCylinders = (() => {
+          if (effectiveRepeat <= 0) return [{ id: "SPECIAL-CYL-1", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: "450", isSpecial: true, isSpecialSleeve: false }];
+          const maxCirc = 1100;
+          const results = [];
+          for (let mult = 1; mult * effectiveRepeat <= maxCirc; mult++) {
+            const circ = mult * effectiveRepeat;
+            if (circ < 200) continue; // too small to be practical
+            results.push({ id: `SPECIAL-CYL-${mult}`, code: "SPL", name: `Special Order (${mult}×${effectiveRepeat}mm)`, printWidth: String(Math.ceil(minCyl)), repeatLength: String(circ), isSpecial: true, isSpecialSleeve: false });
+          }
+          return results.length > 0 ? results : [{ id: "SPECIAL-CYL-1", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: String(effectiveRepeat), isSpecial: true, isSpecialSleeve: false }];
+        })();
         const cylList = validCylinders.length > 0
           ? validCylinders.map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, repeatLength: c.repeatLength || "450", isSpecial: false, isSpecialSleeve: false }))
-          : [{ id: "SPECIAL-CYL", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: effectiveRepeat > 0 ? String(Math.ceil(effectiveRepeat / 12) * 12) : "450", isSpecial: true, isSpecialSleeve: false }];
+          : specialCylinders;
         const sideWaste  = parseFloat((2 * trim).toFixed(1));
         const deadMargin = parseFloat((sleeveWidthVal - filmWidth).toFixed(1));
         const totalWaste = parseFloat((sideWaste + deadMargin).toFixed(1));
-        return cylList.map(cylinder => {
+        return cylList.flatMap(cylinder => {
           const cylCirc   = parseFloat(cylinder.repeatLength) || 450;
           const repeatUPS = calcRepeatUPS(cylCirc);
           const totalUPS  = acUps * repeatUPS;
           const reqRMT    = replanForm.standardQty > 0 ? Math.ceil(replanForm.standardQty / totalUPS) : 1;
           const totalRMT  = Math.ceil(reqRMT * 1.01);
-          return {
+          return [{
             planId: `CP-${machine.id}-${sleeve.id}-UPS${acUps}-${cylinder.id}`,
             machineName: machine.name,
             filmSize: filmWidth, acUps, printingWidth,
@@ -358,8 +388,8 @@ export default function ProductCatalogPage() {
             cylCirc, repeatUPS, totalUPS,
             reqRMT, totalRMT, wastage: totalWaste,
             isSpecial: cylinder.isSpecial, isSpecialSleeve: false, isBest: false,
-          };
-        });
+          }];
+        }).flat();
       }).flat();
     });
 
@@ -387,6 +417,7 @@ export default function ProductCatalogPage() {
         const deadMargin = 0;
         const totalWaste = sideWaste;
         const cylCirc    = parseFloat(cylinder.repeatLength || "450") || 450;
+        if (!isValidCircumference(cylCirc)) return [];
         const repeatUPS  = calcRepeatUPS(cylCirc);
         const totalUPS   = acUps * repeatUPS;
         const reqRMT     = replanForm.standardQty > 0 ? Math.ceil(replanForm.standardQty / totalUPS) : 1;
@@ -1180,16 +1211,49 @@ export default function ProductCatalogPage() {
                           onDragOver={e => e.preventDefault()}
                           onDrop={e => { e.preventDefault(); addAttachments(e.dataTransfer.files); }}>
                           {replanAttachments.map((att, attIdx) => {
-                            const isImg = att.mimeType.startsWith("image/");
-                            const ext   = att.name.split(".").pop()?.toUpperCase() ?? "FILE";
+                            const isImg  = att.mimeType.startsWith("image/");
+                            const ext    = att.name.split(".").pop()?.toUpperCase() ?? "FILE";
                             const sizeKb = (att.size / 1024).toFixed(0);
+                            const isMaster = attIdx === 0;
+                            const label  = att.label ?? (isMaster ? "Master File" : "");
+                            const badgeColor = isMaster
+                              ? "bg-amber-400 text-white border-amber-500"
+                              : "bg-indigo-100 text-indigo-700 border-indigo-300";
+                            const isEditingLabel = editingAttachLabel === att.id;
                             return (
-                              <div key={att.id} className={`relative group rounded-xl overflow-hidden bg-white shadow-sm ${attIdx === 0 ? "border-2 border-amber-400 ring-1 ring-amber-300" : "border border-gray-200"}`}>
-                                {/* Master File badge on first attachment */}
-                                {attIdx === 0 && (
-                                  <div className="absolute top-1.5 left-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide bg-amber-400 text-white shadow">
-                                    ★ Master File
+                              <div key={att.id} className={`relative group rounded-xl overflow-hidden bg-white shadow-sm ${isMaster ? "border-2 border-amber-400 ring-1 ring-amber-300" : label ? "border-2 border-indigo-300" : "border border-gray-200"}`}>
+                                {/* Badge — click to edit */}
+                                {isEditingLabel ? (
+                                  <div className="absolute top-1.5 left-1.5 z-20 flex items-center gap-1">
+                                    <input
+                                      autoFocus
+                                      className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border border-indigo-400 bg-white text-indigo-700 outline-none w-28 shadow"
+                                      defaultValue={label}
+                                      onBlur={e => {
+                                        const v = e.target.value.trim();
+                                        setReplanAttachments(p => p.map(a => a.id === att.id ? { ...a, label: v || undefined } : a));
+                                        setEditingAttachLabel(null);
+                                      }}
+                                      onKeyDown={e => {
+                                        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                        if (e.key === "Escape") setEditingAttachLabel(null);
+                                      }}
+                                    />
                                   </div>
+                                ) : label ? (
+                                  <button
+                                    onClick={() => setEditingAttachLabel(att.id)}
+                                    title="Click to rename"
+                                    className={`absolute top-1.5 left-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide border shadow hover:opacity-80 transition ${badgeColor}`}>
+                                    {isMaster && "★ "}{label}
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => setEditingAttachLabel(att.id)}
+                                    title="Add label"
+                                    className="absolute top-1.5 left-1.5 z-10 opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold border border-dashed border-gray-400 text-gray-500 bg-white/90 shadow transition">
+                                    + Label
+                                  </button>
                                 )}
                                 {/* Thumbnail or icon */}
                                 {isImg ? (
@@ -1204,7 +1268,7 @@ export default function ProductCatalogPage() {
                                   <p className="text-[10px] font-semibold text-gray-700 truncate" title={att.name}>{att.name}</p>
                                   <p className="text-[9px] text-gray-400">{sizeKb} KB</p>
                                 </div>
-                                {/* Actions (visible on hover) */}
+                                {/* Actions */}
                                 <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                   <button onClick={() => setPreviewAttachment({ name: att.name, url: att.url, mimeType: att.mimeType })}
                                     className="p-1 rounded-md bg-white/90 text-indigo-600 hover:bg-indigo-50 shadow" title="Preview">
@@ -1263,7 +1327,7 @@ export default function ProductCatalogPage() {
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="text-[10px] font-semibold text-amber-500 uppercase block mb-1">Trimming / Bleed (mm)</label>
+                            <label className="text-[10px] font-semibold text-amber-500 uppercase block mb-1">Trimming Both Side (mm)</label>
                             <input
                               type="number" min={0} step={0.5} placeholder="e.g. 5"
                               value={dimValues.trimming ?? replanForm.trimmingSize ?? ""}
@@ -2332,7 +2396,7 @@ export default function ProductCatalogPage() {
                   <table>
                     <tbody>
                       <tr><th>Slitting Width</th><td>{cylWidth} mm</td></tr>
-                      <tr><th>Trimming / Bleed</th><td>{trim} mm</td></tr>
+                      <tr><th>Trimming Both Side</th><td>{trim} mm</td></tr>
                       <tr><th>Core Type</th><td>3" Paper Core</td></tr>
                     </tbody>
                   </table>

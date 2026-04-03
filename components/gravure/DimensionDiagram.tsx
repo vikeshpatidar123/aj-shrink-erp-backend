@@ -392,7 +392,7 @@ export function DimensionDiagram({ contentType, dims }: DimensionDiagramProps) {
           <div className="flex items-center gap-1.5">
             <div className="w-8 h-3 rounded border-2 border-dashed border-orange-500 bg-orange-100 flex-shrink-0" />
             <span className="text-[9px] text-orange-700 font-semibold uppercase tracking-wide">
-              Trimming / Bleed{hasTrim ? ` (+${dims.trimming}mm)` : ""}
+              Trimming Both Side{hasTrim ? ` (+${dims.trimming}mm)` : ""}
             </span>
           </div>
           {hasShrink && (
