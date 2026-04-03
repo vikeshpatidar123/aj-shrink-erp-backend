@@ -312,6 +312,8 @@ export default function ProductCatalogPage() {
 
     const machineMaxFilm = parseFloat((machine as any).maxWebWidth) || 1300;
     const machineMinFilm = parseFloat((machine as any).minWebWidth) || 0;
+    const machineMinCirc = parseFloat((machine as any).repeatLengthMin) || 0;
+    const machineMaxCirc = parseFloat((machine as any).repeatLengthMax) || 9999;
     const shrink    = replanForm.widthShrinkage || 0;
     const jobH      = replanForm.jobHeight || 0;
     const effectiveRepeat = jobH + shrink; // shrinkage adds to repeat length, not width
@@ -325,8 +327,9 @@ export default function ProductCatalogPage() {
       const rounded = Math.round(ups);
       return rounded;
     };
-    // returns true only if cylCirc is an exact multiple of effectiveRepeat (±0.5mm)
+    // returns true only if cylCirc is within machine circ range AND exact multiple of effectiveRepeat (±0.5mm)
     const isValidCircumference = (cylCirc: number) => {
+      if (cylCirc < machineMinCirc || cylCirc > machineMaxCirc) return false;
       if (effectiveRepeat <= 0) return true;
       const remainder = cylCirc % effectiveRepeat;
       return remainder < 0.5 || (effectiveRepeat - remainder) < 0.5;
@@ -356,14 +359,13 @@ export default function ProductCatalogPage() {
         // of effectiveRepeat (from smallest above 200mm up to 1100mm)
         const specialCylinders = (() => {
           if (effectiveRepeat <= 0) return [{ id: "SPECIAL-CYL-1", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: "450", isSpecial: true, isSpecialSleeve: false }];
-          const maxCirc = 1100;
           const results = [];
-          for (let mult = 1; mult * effectiveRepeat <= maxCirc; mult++) {
+          for (let mult = 1; mult * effectiveRepeat <= machineMaxCirc; mult++) {
             const circ = mult * effectiveRepeat;
-            if (circ < 200) continue; // too small to be practical
+            if (circ < machineMinCirc) continue; // below machine min circumference
             results.push({ id: `SPECIAL-CYL-${mult}`, code: "SPL", name: `Special Order (${mult}×${effectiveRepeat}mm)`, printWidth: String(Math.ceil(minCyl)), repeatLength: String(circ), isSpecial: true, isSpecialSleeve: false });
           }
-          return results.length > 0 ? results : [{ id: "SPECIAL-CYL-1", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: String(effectiveRepeat), isSpecial: true, isSpecialSleeve: false }];
+          return results.length > 0 ? results : [];
         })();
         const cylList = validCylinders.length > 0
           ? validCylinders.map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, repeatLength: c.repeatLength || "450", isSpecial: false, isSpecialSleeve: false }))
@@ -1400,15 +1402,19 @@ export default function ProductCatalogPage() {
                     const selMachine = replanForm.machineId ? PRINT_MACHINES.find(m => m.id === replanForm.machineId) : null;
                     if (!selMachine) return null;
                     const minW = parseFloat((selMachine as any).minWebWidth) || 0;
-                    const maxW = parseFloat((selMachine as any).maxWebWidth) || 0;
-                    const colors = (selMachine as any).noOfColors || "";
-                    const speed  = (selMachine as any).speedMax   || "";
+                    const maxW    = parseFloat((selMachine as any).maxWebWidth) || 0;
+                    const minCirc = parseFloat((selMachine as any).repeatLengthMin) || 0;
+                    const maxCirc = parseFloat((selMachine as any).repeatLengthMax) || 0;
+                    const colors  = (selMachine as any).noOfColors || "";
+                    const speed   = (selMachine as any).speedMax   || "";
                     return (
                       <div className="flex flex-wrap items-center gap-2 mt-2 p-2.5 rounded-xl border border-blue-200 bg-blue-50">
                         <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Machine Specs:</span>
-                        <span className="flex items-center gap-1 text-[11px] font-semibold text-blue-800">
+                        <span className="flex flex-wrap items-center gap-1 text-[11px] font-semibold text-blue-800">
                           <span className="px-2 py-0.5 rounded-full bg-blue-100 border border-blue-300">Min Film: <strong>{minW} mm</strong></span>
                           <span className="px-2 py-0.5 rounded-full bg-blue-100 border border-blue-300">Max Film: <strong>{maxW} mm</strong></span>
+                          {minCirc > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800">Min Circ: <strong>{minCirc} mm</strong></span>}
+                          {maxCirc > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800">Max Circ: <strong>{maxCirc} mm</strong></span>}
                           {colors && <span className="px-2 py-0.5 rounded-full bg-indigo-100 border border-indigo-300 text-indigo-700">Colors: <strong>{colors}</strong></span>}
                           {speed  && <span className="px-2 py-0.5 rounded-full bg-green-100 border border-green-300 text-green-700">Speed: <strong>{speed} m/min</strong></span>}
                         </span>
