@@ -1411,8 +1411,6 @@ export default function ProductCatalogPage() {
                       <div className="flex flex-wrap items-center gap-2 mt-2 p-2.5 rounded-xl border border-blue-200 bg-blue-50">
                         <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Machine Specs:</span>
                         <span className="flex flex-wrap items-center gap-1 text-[11px] font-semibold text-blue-800">
-                          <span className="px-2 py-0.5 rounded-full bg-blue-100 border border-blue-300">Min Film: <strong>{minW} mm</strong></span>
-                          <span className="px-2 py-0.5 rounded-full bg-blue-100 border border-blue-300">Max Film: <strong>{maxW} mm</strong></span>
                           {minCirc > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800">Min Circ: <strong>{minCirc} mm</strong></span>}
                           {maxCirc > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800">Max Circ: <strong>{maxCirc} mm</strong></span>}
                           {colors && <span className="px-2 py-0.5 rounded-full bg-indigo-100 border border-indigo-300 text-indigo-700">Colors: <strong>{colors}</strong></span>}
@@ -2652,9 +2650,9 @@ export default function ProductCatalogPage() {
                 </div>
               </div>
 
-              {/* Lane breakdown table */}
+              {/* Width (Film) Lane-by-Lane breakdown */}
               <div>
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Lane-by-Lane Breakdown</p>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Lane-by-Lane Breakdown — Width Direction</p>
                 <div className="overflow-x-auto rounded-xl border border-gray-200">
                   <table className="min-w-full text-xs">
                     <thead className="bg-gray-100">
@@ -2669,18 +2667,68 @@ export default function ProductCatalogPage() {
                         <tr><td className="px-3 py-1.5 text-gray-500">Left Bleed</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#fff7ed", color: "#c2410c" }}>Trim</span></td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">{trim}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#fed7aa", border: "1px solid #c2410c" }} /></td></tr>
                       )}
                       {Array.from({ length: acUps }, (_, i) => (
-                        <React.Fragment key={`lane-${i}`}>
-                          <tr><td className="px-3 py-1.5 text-gray-500">Lane {i + 1} — Job</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#e0e7ff", color: "#4338ca" }}>Job Width</span></td><td className="px-3 py-1.5 font-mono font-bold text-indigo-600">{jobW}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#e0e7ff", border: "1px solid #6366f1" }} /></td></tr>
-                          {shrink > 0 && <tr><td className="px-3 py-1.5 text-gray-500">Lane {i + 1} — Shrink</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#fae8ff", color: "#a21caf" }}>Shrinkage</span></td><td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">{shrink}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#fae8ff", border: "1px solid #a21caf" }} /></td></tr>}
-                        </React.Fragment>
+                        <tr key={`lane-${i}`}>
+                          <td className="px-3 py-1.5 text-gray-500">Lane {i + 1}</td>
+                          <td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#e0e7ff", color: "#4338ca" }}>Job Width</span></td>
+                          <td className="px-3 py-1.5 font-mono font-bold text-indigo-600">{jobW}</td>
+                          <td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#e0e7ff", border: "1px solid #6366f1" }} /></td>
+                        </tr>
                       ))}
                       {trim > 0 && (
                         <tr><td className="px-3 py-1.5 text-gray-500">Right Bleed</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#fff7ed", color: "#c2410c" }}>Trim</span></td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">{trim}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#fed7aa", border: "1px solid #c2410c" }} /></td></tr>
                       )}
-                      <tr className="bg-gray-50 font-bold">
-                        <td className="px-3 py-2 text-gray-700" colSpan={2}>Total Film Width</td>
-                        <td className="px-3 py-2 font-mono text-indigo-700">{filmW}</td>
+                      {plan.deadMargin > 0 && (
+                        <tr><td className="px-3 py-1.5 text-gray-400 italic">Dead Margin (Sleeve edge)</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-500">Waste</span></td><td className="px-3 py-1.5 font-mono text-gray-400">{plan.deadMargin}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded bg-gray-200 border border-gray-400" /></td></tr>
+                      )}
+                      <tr className="bg-indigo-50 font-bold border-t-2 border-indigo-200">
+                        <td className="px-3 py-2 text-indigo-800" colSpan={2}>Total Film Width</td>
+                        <td className="px-3 py-2 font-mono text-indigo-700">{filmW} mm</td>
                         <td />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Repeat (Height) direction breakdown */}
+              <div>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Repeat UPS Breakdown — Height Direction</p>
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        {["Component", "Value", "Note"].map(h => (
+                          <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      <tr>
+                        <td className="px-3 py-1.5 text-gray-600">Repeat Length</td>
+                        <td className="px-3 py-1.5 font-mono font-bold text-indigo-700">{replanForm.jobHeight || 0} mm</td>
+                        <td className="px-3 py-1.5 text-gray-400 text-[10px]">As entered in Basic Info</td>
+                      </tr>
+                      {shrink > 0 && (
+                        <tr>
+                          <td className="px-3 py-1.5 text-gray-600">+ Shrinkage (on height)</td>
+                          <td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">+{shrink} mm</td>
+                          <td className="px-3 py-1.5 text-gray-400 text-[10px]">Applied to repeat length only</td>
+                        </tr>
+                      )}
+                      <tr className="bg-teal-50">
+                        <td className="px-3 py-1.5 font-bold text-teal-800">= Effective Repeat</td>
+                        <td className="px-3 py-1.5 font-mono font-bold text-teal-700">{(replanForm.jobHeight || 0) + shrink} mm</td>
+                        <td className="px-3 py-1.5 text-teal-600 text-[10px]">Repeat Length + Shrinkage</td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-1.5 text-gray-600">Cylinder Circumference</td>
+                        <td className="px-3 py-1.5 font-mono font-bold text-emerald-700">{plan.cylCirc} mm</td>
+                        <td className="px-3 py-1.5 text-gray-400 text-[10px]">{plan.cylinderCode} — {plan.cylinderName}</td>
+                      </tr>
+                      <tr className="bg-green-50 border-t-2 border-green-200">
+                        <td className="px-3 py-2 font-bold text-green-800">÷ Repeat UPS</td>
+                        <td className="px-3 py-2 font-mono font-bold text-green-700 text-sm">{plan.repeatUPS}×</td>
+                        <td className="px-3 py-2 text-green-600 text-[10px]">{plan.cylCirc} ÷ {(replanForm.jobHeight || 0) + shrink} = {plan.repeatUPS} repeats per revolution</td>
                       </tr>
                     </tbody>
                   </table>
