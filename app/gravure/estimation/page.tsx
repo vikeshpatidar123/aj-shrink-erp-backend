@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import {
   ChevronRight, ChevronLeft, Plus, X, Save, FileText, Settings,
   Trash2, Edit, Search, Eye, Filter, Download, MoreHorizontal, Check,
-  Calculator, Pencil, ArrowRight
+  Calculator, Pencil, ArrowRight, RefreshCw, Wrench
 } from "lucide-react";
 import {
   gravureEstimations as initData, customers, items, machines, processMasters,
@@ -277,6 +277,22 @@ export default function GravureEstimationPage() {
   const [pendingCategoryId, setPendingCategoryId] = useState<string | null>(null);
   const [previewCode, setPreviewCode] = useState<string>("");
 
+  // ── Cylinder Alloc state ─────────────────────────────────
+  type EstCylAlloc = {
+    colorNo:      number;
+    colorName:    string;
+    cylinderNo:   string;
+    circumference:string;
+    printWidth:   string;
+    repeatUPS:    number;
+    cylinderType: "New" | "Existing" | "Rechromed" | "Repeat";
+    status:       "Pending" | "Available" | "In Use" | "Under Chrome" | "Ordered";
+    remarks:      string;
+    createdInMaster?: boolean;
+    repeatUse?:   boolean;
+  };
+  const [cylAllocs, setCylAllocs] = useState<EstCylAlloc[]>([]);
+
   // Tab navigation states
   const [activeTab, setActiveTab] = useState<number>(1);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
@@ -527,6 +543,8 @@ export default function GravureEstimationPage() {
     setForm({ ...blank });
     setActiveTab(1); setExtraQtys([]); setActiveQtyIdx(0);
     setLoadedFromCatalog("");
+    setCylAllocs([]);
+    setSelectedPlanId(null); setIsPlanApplied(false);
     setPreviewCode(generateCode(UNIT_CODE.Gravure, MODULE_CODE.Estimation, data.map(d => d.estimationNo)));
     setModal(true);
   };
@@ -536,6 +554,8 @@ export default function GravureEstimationPage() {
     setForm(rest);
     setActiveTab(1); setExtraQtys([]); setActiveQtyIdx(0);
     setLoadedFromCatalog("");
+    setCylAllocs([]);
+    setSelectedPlanId(null); setIsPlanApplied(false);
     setModal(true);
   };
 
@@ -606,6 +626,80 @@ export default function GravureEstimationPage() {
     setLoadedFromCatalog(cat.catalogNo);
     setCatalogPickerOpen(false);
     setCatalogSearch("");
+    // ── Load cylinder allocs from catalog if saved ──
+    const savedCylAllocs = (cat as any).savedCylAllocs as EstCylAlloc[] | undefined;
+    if (savedCylAllocs && savedCylAllocs.length > 0) {
+      setCylAllocs(savedCylAllocs.map(c => ({ ...c, createdInMaster: c.createdInMaster ?? false, repeatUse: c.repeatUse ?? false })));
+    } else {
+      // Build blank allocs from noOfColors
+      const n = cat.noOfColors || 0;
+      setCylAllocs(Array.from({ length: n }, (_, i) => ({
+        colorNo:      i + 1,
+        colorName:    `Color ${i + 1}`,
+        cylinderNo:   "",
+        circumference: String(cat.jobHeight || ""),
+        printWidth:   String(cat.actualWidth || cat.jobWidth || ""),
+        repeatUPS:    1,
+        cylinderType: "New" as const,
+        status:       "Pending" as const,
+        remarks:      "",
+        createdInMaster: false,
+        repeatUse:    false,
+      })));
+    }
+  };
+
+  // ── Open Cylinder Master from Estimation ─────────────────
+  const openEstCylinderMaster = (plan?: typeof selectedPlan) => {
+    const n = form.noOfColors || 0;
+    if (n === 0) { alert("Set No. of Colors in Basic Info first."); return; }
+    const _cn = loadedFromCatalog || "";
+    const _m  = _cn.match(/(\d+)$/);
+    const _pCode = _m ? `P${_m[1].padStart(4, "0")}` : `EST-${Date.now()}`;
+    const _sp = plan as any;
+    const nonRepeat = cylAllocs.filter(c => !c.repeatUse);
+    if (nonRepeat.length === 0) { alert("All colors are marked as Repeat Use — nothing to create."); return; }
+    const prefillData = {
+      productCode:   _pCode,
+      productName:   form.jobName || form.jobName || "—",
+      customerName:  form.customerName,
+      noOfColors:    nonRepeat.length,
+      circumference: _sp ? String(_sp.cylCirc ?? "") : String(form.jobHeight || ""),
+      printWidth:    _sp ? String(_sp.cylinderWidthVal ?? _sp.printingWidth ?? "") : String(form.actualWidth || form.jobWidth || ""),
+      repeatUPS:     _sp ? (_sp.repeatUPS as number) : 1,
+      totalUPS:      _sp?.totalUPS,
+      filmSize:      _sp ? String(_sp.filmSize ?? "") : undefined,
+      totalWaste:    _sp ? String(_sp.totalWaste ?? "") : undefined,
+      sleeveCode:    _sp ? String(_sp.sleeveCode ?? "") : undefined,
+      sleeveWidth:   _sp ? String(_sp.sleeveWidthVal ?? "") : undefined,
+      acUps:         _sp?.acUps,
+      printingWidth: _sp ? String(_sp.printingWidth ?? "") : undefined,
+      isSpecial:     _sp ? !!_sp.isSpecial : undefined,
+      categoryName:  form.categoryName || "",
+      jobWidth:      String(form.jobWidth || ""),
+      jobHeight:     String(form.jobHeight || ""),
+      colors:        nonRepeat.map((c, i) => c.colorName || `Color ${i + 1}`),
+    };
+    localStorage.setItem("ajsw_cylinder_prefill", JSON.stringify(prefillData));
+    window.open("/masters/tools/create-cylinders", "_blank");
+  };
+
+  // ── Refresh cylinder codes from master ───────────────────
+  const refreshEstFromCylinderMaster = () => {
+    const _cn = loadedFromCatalog || "";
+    const _m  = _cn.match(/(\d+)$/);
+    const productCode = _m ? `P${_m[1].padStart(4, "0")}` : "";
+    if (!productCode) return;
+    try {
+      const created: any[] = JSON.parse(localStorage.getItem("ajsw_cylinders_created") || "[]");
+      const matching = created.filter(c => c.productCode === productCode);
+      if (matching.length === 0) return;
+      setCylAllocs(p => p.map(alloc => {
+        const match = matching.find((m: any) => m.colorNo === alloc.colorNo);
+        if (!match) return alloc;
+        return { ...alloc, cylinderNo: match.cylinderCode || alloc.cylinderNo, createdInMaster: true, status: match.status || alloc.status };
+      }));
+    } catch { /* ignore */ }
   };
 
   // ── Material row handlers ─────────────────────────────────
@@ -2090,11 +2184,232 @@ export default function GravureEstimationPage() {
                 {selectedPlanId && (
                   <div className="border-t border-purple-200 bg-purple-50 px-4 py-2.5 flex items-center justify-between text-xs">
                     <span className="text-purple-700 font-medium flex items-center gap-1.5"><Check size={12} className="text-green-600" /> Plan selected — Grand Total: <strong className="text-purple-900">₹{selectedPlan?.grandTotal.toLocaleString()}</strong></span>
-                    <Button onClick={() => setIsPlanApplied(true)} icon={<Check size={13} />}>Apply Plan</Button>
+                    <Button onClick={() => {
+                      setIsPlanApplied(true);
+                      // auto-build cylAllocs from selected plan
+                      const sp = selectedPlan as any;
+                      const n  = form.noOfColors || 0;
+                      if (n > 0) {
+                        setCylAllocs(prev => {
+                          const base = prev.length === n ? prev : Array.from({ length: n }, (_, i) => ({
+                            colorNo: i + 1, colorName: prev[i]?.colorName || `Color ${i + 1}`,
+                            cylinderNo: "", circumference: "", printWidth: "",
+                            repeatUPS: 1, cylinderType: "New" as const, status: "Pending" as const,
+                            remarks: "", createdInMaster: false, repeatUse: false,
+                          }));
+                          return base.map(c => ({
+                            ...c,
+                            circumference: sp ? String(sp.cylCirc ?? "") : c.circumference,
+                            printWidth:    sp ? String(sp.cylinderWidthVal ?? sp.printingWidth ?? "") : c.printWidth,
+                            repeatUPS:     sp ? (sp.repeatUPS as number) : c.repeatUPS,
+                            cylinderType:  sp?.isSpecial ? "New" : c.cylinderType,
+                          }));
+                        });
+                      }
+                    }} icon={<Check size={13} />}>Apply Plan</Button>
                   </div>
                 )}
               </div>
             )}
+
+            {/* ── Cylinder Planning Section ─────────────────────────────── */}
+            {(() => {
+              const sp = selectedPlan as any;
+              const pCode = (() => {
+                const _m = loadedFromCatalog.match(/(\d+)$/);
+                return _m ? `P${_m[1].padStart(4, "0")}` : "";
+              })();
+              const statusCounts = cylAllocs.reduce((acc, c) => {
+                acc[c.status] = (acc[c.status] || 0) + 1;
+                return acc;
+              }, {} as Record<string, number>);
+              const createdCount = cylAllocs.filter(c => c.createdInMaster).length;
+              return (
+              <div className="mt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <SectionHeader label="Cylinder Planning" />
+                  {cylAllocs.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-300 text-[11px] font-bold rounded-lg transition"
+                        onClick={refreshEstFromCylinderMaster}>
+                        <RefreshCw size={11} /> Refresh from Master
+                      </button>
+                      <button
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition"
+                        onClick={() => openEstCylinderMaster(selectedPlan)}>
+                        <Wrench size={11} /> Create Cylinder in Master
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Init button if no allocs yet */}
+                {cylAllocs.length === 0 && form.noOfColors > 0 && (
+                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs">
+                    <span className="text-amber-700">
+                      {loadedFromCatalog
+                        ? "No cylinder data from catalog. Initialize to plan cylinders."
+                        : "Plan cylinders for this estimation (direct entry)."}
+                    </span>
+                    <button
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition"
+                      onClick={() => {
+                        const n = form.noOfColors || 0;
+                        setCylAllocs(Array.from({ length: n }, (_, i) => ({
+                          colorNo:       i + 1,
+                          colorName:     `Color ${i + 1}`,
+                          cylinderNo:    "",
+                          circumference: sp ? String(sp.cylCirc ?? form.jobHeight ?? "") : String(form.jobHeight || ""),
+                          printWidth:    sp ? String(sp.cylinderWidthVal ?? sp.printingWidth ?? "") : String(form.actualWidth || form.jobWidth || ""),
+                          repeatUPS:     sp ? (sp.repeatUPS as number) : 1,
+                          cylinderType:  "New" as const,
+                          status:        "Pending" as const,
+                          remarks:       "",
+                          createdInMaster: false,
+                          repeatUse:     false,
+                        })));
+                      }}>
+                      + Initialize {form.noOfColors} Color Cylinders
+                    </button>
+                  </div>
+                )}
+
+                {cylAllocs.length > 0 && (
+                  <>
+                    {/* Info banner */}
+                    <div className="mb-2 flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-[11px] text-blue-800">
+                      <Wrench size={12} className="text-blue-500 mt-0.5 flex-shrink-0" />
+                      <span>
+                        All colors share <strong>same cylinder</strong> — same Circ, Width & Repeat UPS.
+                        Check <strong>Repeat?</strong> for colors that reuse an existing cylinder — they won't be sent to master.
+                        {loadedFromCatalog && <> Loaded from catalog: <strong className="text-teal-700">{loadedFromCatalog}</strong>{pCode && <> · <span className="font-mono text-indigo-700">{pCode}</span></>}.</>}
+                      </span>
+                    </div>
+
+                    {/* Status summary */}
+                    <div className="flex items-center gap-2 mb-2 flex-wrap text-[11px]">
+                      <span className="font-semibold text-gray-500 uppercase text-[10px]">Status:</span>
+                      {Object.entries(statusCounts).map(([st, cnt]) => (
+                        <span key={st} className={`px-2 py-0.5 rounded-full border font-bold ${
+                          st === "Available" ? "bg-green-50 text-green-700 border-green-200"
+                          : st === "Ordered"  ? "bg-purple-50 text-purple-700 border-purple-200"
+                          : "bg-gray-100 text-gray-600 border-gray-200"}`}>
+                          {cnt} {st}
+                        </span>
+                      ))}
+                      {createdCount > 0 && (
+                        <span className="ml-auto text-green-600 font-bold text-[10px]">✓ {createdCount} cylinder{createdCount > 1 ? "s" : ""} created in master</span>
+                      )}
+                    </div>
+
+                    {/* Grid */}
+                    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+                      <table className="min-w-full text-[11px] border-collapse">
+                        <thead className="bg-amber-700 text-white uppercase tracking-wider">
+                          <tr>{["#", "Repeat?", "Product Code", "Color Name", "Cylinder Code", "Width (mm)", "Circ. (mm)", "Repeat UPS", "Type", "Status", "Remarks", "Action"].map(h => (
+                            <th key={h} className="px-2 py-2 border border-amber-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {cylAllocs.map((ca, i) => (
+                            <tr key={i} className={`hover:bg-amber-50/20 ${ca.repeatUse ? "bg-gray-50 opacity-60" : ca.createdInMaster ? "bg-green-50/30" : ""}`}>
+                              <td className="px-2 py-1.5 text-center font-black text-amber-700">{ca.colorNo}</td>
+                              {/* Repeat? */}
+                              <td className="px-2 py-1.5 text-center">
+                                <label className="flex flex-col items-center gap-0.5 cursor-pointer select-none">
+                                  <input type="checkbox" checked={!!ca.repeatUse}
+                                    onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, repeatUse: e.target.checked } : c))}
+                                    className="w-4 h-4 accent-orange-500 cursor-pointer" />
+                                  {ca.repeatUse && <span className="text-[9px] text-orange-600 font-bold leading-none">Skip</span>}
+                                </label>
+                              </td>
+                              {/* Product Code */}
+                              <td className="px-2 py-1.5 text-center">
+                                {pCode
+                                  ? <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold font-mono whitespace-nowrap">{pCode}</span>
+                                  : <span className="text-gray-400 text-[10px]">Direct</span>}
+                              </td>
+                              {/* Color Name */}
+                              <td className="px-2 py-1.5">
+                                <input className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400 bg-gray-50"
+                                  value={ca.colorName}
+                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, colorName: e.target.value } : c))} />
+                              </td>
+                              {/* Cylinder Code */}
+                              <td className="px-2 py-1.5">
+                                <input className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 bg-white"
+                                  placeholder="e.g. CUC-001"
+                                  value={ca.cylinderNo}
+                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderNo: e.target.value } : c))} />
+                              </td>
+                              {/* Width */}
+                              <td className="px-2 py-1.5">
+                                <input type="number" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 text-center"
+                                  value={ca.printWidth}
+                                  onChange={e => setCylAllocs(p => p.map(c => ({ ...c, printWidth: e.target.value })))} />
+                              </td>
+                              {/* Circumference */}
+                              <td className="px-2 py-1.5">
+                                <input type="number" className="w-20 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 text-center bg-indigo-50/40"
+                                  value={ca.circumference}
+                                  onChange={e => setCylAllocs(p => p.map(c => ({ ...c, circumference: e.target.value })))} />
+                              </td>
+                              {/* Repeat UPS */}
+                              <td className="px-2 py-1.5 text-center">
+                                <span className="px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-full text-[10px] font-bold">{ca.repeatUPS}×</span>
+                              </td>
+                              {/* Type */}
+                              <td className="px-2 py-1.5">
+                                <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400"
+                                  value={ca.cylinderType}
+                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderType: e.target.value as EstCylAlloc["cylinderType"] } : c))}>
+                                  <option value="New">New</option>
+                                  <option value="Existing">Existing</option>
+                                  <option value="Repeat">Repeat Cylinder</option>
+                                  <option value="Rechromed">Rechromed</option>
+                                </select>
+                              </td>
+                              {/* Status */}
+                              <td className="px-2 py-1.5">
+                                <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400"
+                                  value={ca.status}
+                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as EstCylAlloc["status"] } : c))}>
+                                  <option value="Pending">Pending</option>
+                                  <option value="Ordered">Ordered</option>
+                                  <option value="Available">Available</option>
+                                  <option value="In Use">In Use</option>
+                                  <option value="Under Chrome">Under Chrome</option>
+                                </select>
+                              </td>
+                              {/* Remarks */}
+                              <td className="px-2 py-1.5">
+                                <input placeholder="Notes…" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400"
+                                  value={ca.remarks}
+                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} />
+                              </td>
+                              {/* Action */}
+                              <td className="px-2 py-1.5 text-center">
+                                {ca.createdInMaster
+                                  ? <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 border border-green-300 rounded-full text-[10px] font-bold whitespace-nowrap"><Check size={10}/> Created</span>
+                                  : <button onClick={() => openEstCylinderMaster(selectedPlan)}
+                                      className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded-lg transition whitespace-nowrap">
+                                      + Create
+                                    </button>}
+                              </td>
+                            </tr>
+                          ))}
+                          {cylAllocs.length === 0 && (
+                            <tr><td colSpan={12} className="p-6 text-center text-gray-400 text-xs">No cylinders configured yet.</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+              );
+            })()}
 
           </div>
         )}
