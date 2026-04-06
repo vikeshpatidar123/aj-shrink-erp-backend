@@ -94,10 +94,10 @@ export default function OrdersPage() {
   const switchUnit = (u: "Extrusion" | "Gravure") =>
     setForm(u === "Extrusion" ? blankExt() : blankGrv());
 
-  const displayData = globalUnit === "Both" ? data : data.filter(o => o.businessUnit === globalUnit);
+  const displayData = data.filter(o => o.businessUnit === globalUnit);
 
   const openAdd = () => {
-    const u = globalUnit === "Both" ? "Extrusion" : globalUnit;
+    const u = globalUnit;
     setEditing(null);
     setForm(u === "Extrusion" ? blankExt() : blankGrv());
     setModalOpen(true);
@@ -197,24 +197,7 @@ export default function OrdersPage() {
       <Modal open={modalOpen} onClose={() => setModalOpen(false)}
         title={editing ? `Edit – ${editing.orderNo}` : "New Order"} size="xl">
 
-        {/* Unit Toggle — only when global unit is "Both" and adding new */}
-        {!editing && globalUnit === "Both" && (
-          <div className="flex gap-2 mb-5">
-            {(["Extrusion", "Gravure"] as const).map(u => (
-              <button key={u} onClick={() => switchUnit(u)}
-                className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-all
-                  ${form.businessUnit === u
-                    ? u === "Extrusion"
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-purple-600 text-white border-purple-600"
-                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
-                  }`}>
-                {u === "Extrusion" ? "Extrusion (EXT)" : "Gravure (GRV)"}
-              </button>
-            ))}
-          </div>
-        )}
-        {!editing && globalUnit !== "Both" && (
+        {!editing && (
           <div className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border font-semibold text-sm mb-5
             ${form.businessUnit === "Extrusion" ? "bg-blue-50 border-blue-300 text-blue-800" : "bg-purple-50 border-purple-300 text-purple-800"}`}>
             {form.businessUnit === "Extrusion" ? "⚙️" : "🖨️"} {form.businessUnit} Unit

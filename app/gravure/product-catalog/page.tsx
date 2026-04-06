@@ -34,7 +34,7 @@ const CYLINDER_TOOLS    = allTools.filter(t => t.toolType === "Cylinder" && AVAI
 const FILM_ITEMS        = items.filter(i => i.group === "Film" && i.active);
 const INK_ITEMS         = items.filter(i => i.group === "Ink" && i.active);
 const VENDOR_LEDGERS    = ledgers.filter(l => (l.ledgerType === "Supplier" || l.ledgerType === "Vendor") && l.status === "Active");
-const CYLINDER_TOOLS_ALL = allTools.filter(t => t.toolType === "Cylinder");
+const CYLINDER_TOOLS_ALL  = allTools.filter(t => t.toolType === "Cylinder");
 const FILM_SUBGROUPS = Array.from(
   new Map(FILM_ITEMS.filter(i => i.subGroup).map(i => [i.subGroup, { subGroup: i.subGroup, density: parseFloat(i.density) || 0, thicknesses: new Set<number>() }])).entries()
 ).map(([subGroup, data]) => {
@@ -85,7 +85,7 @@ export default function ProductCatalogPage() {
   type FilmRequisition = { source: "Extrusion" | "Purchase" | ""; status: "Pending" | "Requested" | "Available"; requiredDate?: string; spec?: string; priority?: string; vendor?: string; expectedRate?: number; remarks?: string; };
   type ColorShade      = { colorNo: number; colorName: string; inkType: "Spot" | "Process" | "Special"; pantoneRef: string; labL: string; labA: string; labB: string; actualL: string; actualA: string; actualB: string; deltaE: string; shadeCardRef: string; status: "Pending" | "Standard Received" | "Approved" | "Rejected"; remarks: string; };
   type MaterialAlloc   = { id: string; plyNo?: number; materialType: string; materialName: string; requiredQty: number; unit: string; allocatedQty: number; lotNo: string; location: string; status: "Pending" | "Partial" | "Allocated"; };
-  type CylinderAlloc   = { colorNo: number; colorName: string; cylinderNo: string; circumference: string; cylinderType: "New" | "Existing" | "Rechromed"; status: "Pending" | "Available" | "In Use" | "Under Chrome" | "Ordered"; remarks: string; };
+  type CylinderAlloc   = { colorNo: number; colorName: string; cylinderNo: string; circumference: string; printWidth: string; repeatUPS: number; cylinderType: "New" | "Existing" | "Rechromed" | "Repeat"; status: "Pending" | "Available" | "In Use" | "Under Chrome" | "Ordered"; remarks: string; createdInMaster?: boolean; repeatUse?: boolean; };
   const [catalogFilmReqs,   setCatalogFilmReqs]   = useState<FilmRequisition[]>([]);
   const [catalogColorShades,setCatalogColorShades] = useState<ColorShade[]>([]);
   const [catalogMatAllocs,  setCatalogMatAllocs]   = useState<MaterialAlloc[]>([]);
@@ -215,7 +215,7 @@ export default function ProductCatalogPage() {
     const layers = [...replanForm.secondaryLayers];
     const layer = { ...layers[layerIdx] };
     const source = layer.consumableItems[ciIdx];
-    const clone: PlyConsumableItem = { ...source, consumableId: Math.random().toString() };
+    const clone: PlyConsumableItem = { ...source, consumableId: Math.random().toString(), isClone: true };
     layer.consumableItems = [
       ...layer.consumableItems.slice(0, ciIdx + 1),
       clone,
@@ -374,6 +374,11 @@ export default function ProductCatalogPage() {
         const deadMargin = parseFloat((sleeveWidthVal - filmWidth).toFixed(1));
         const totalWaste = parseFloat((sideWaste + deadMargin).toFixed(1));
         return cylList.flatMap(cylinder => {
+          const cylWidthV = parseFloat(cylinder.printWidth);
+          // Cylinder must be at least sleeve + 100mm (50mm each side minimum)
+          if (cylWidthV < sleeveWidthVal + 100) return [];
+          // Cylinder width must be within machine width limits
+          if (cylWidthV < machineMinFilm || cylWidthV > machineMaxFilm) return [];
           const cylCirc   = parseFloat(cylinder.repeatLength) || 450;
           const repeatUPS = calcRepeatUPS(cylCirc);
           const totalUPS  = acUps * repeatUPS;
@@ -385,7 +390,7 @@ export default function ProductCatalogPage() {
             filmSize: filmWidth, acUps, printingWidth,
             sleeveCode: sleeve.code, sleeveName: sleeve.name, sleeveWidthVal,
             cylinderCode: cylinder.code, cylinderName: cylinder.name,
-            cylinderWidthVal: parseFloat(cylinder.printWidth),
+            cylinderWidthVal: cylWidthV,
             sideWaste, deadMargin, totalWaste,
             cylCirc, repeatUPS, totalUPS,
             reqRMT, totalRMT, wastage: totalWaste,
@@ -398,6 +403,8 @@ export default function ProductCatalogPage() {
     // ── LOOP B: Cylinder in stock → no sleeve available → SPECIAL SLEEVE ──
     const loopB = CYLINDER_TOOLS.flatMap(cylinder => {
       const cylWidthVal = parseFloat(cylinder.printWidth);
+      // Cylinder width must be within machine width limits
+      if (cylWidthVal < machineMinFilm || cylWidthVal > machineMaxFilm) return [];
       const maxAcUps    = Math.floor(cylWidthVal / laneWidth);
       if (maxAcUps === 0) return [];
       return Array.from({ length: maxAcUps }, (_, i) => {
@@ -500,11 +507,58 @@ export default function ProductCatalogPage() {
 
   const initCatalogPrepData = (rf: GravureProductCatalog) => {
     const n = rf.noOfColors || 0;
-    setCatalogColorShades(Array.from({ length: n }, (_, i) => ({
-      colorNo: i + 1, colorName: `Color ${i + 1}`, inkType: "Spot" as const,
-      pantoneRef: "", labL: "", labA: "", labB: "", actualL: "", actualA: "", actualB: "", deltaE: "1.0",
-      shadeCardRef: "", status: "Pending" as const, remarks: "",
-    })));
+
+    // Standard LAB lookup by colour name
+    const COLOR_LAB: Record<string, { l: string; a: string; b: string }> = {
+      "Red":     { l: "41.0",  a: "54.2",  b: "38.1"  },
+      "Yellow":  { l: "89.3",  a: "-6.1",  b: "80.4"  },
+      "Blue":    { l: "25.1",  a: "23.4",  b: "-52.8" },
+      "Black":   { l: "16.0",  a: "0.1",   b: "0.0"   },
+      "White":   { l: "95.2",  a: "-1.0",  b: "2.3"   },
+      "Green":   { l: "46.3",  a: "-50.2", b: "30.1"  },
+      "Cyan":    { l: "60.1",  a: "-38.2", b: "-31.4" },
+      "Magenta": { l: "48.2",  a: "72.1",  b: "-10.3" },
+      "Orange":  { l: "65.4",  a: "43.1",  b: "65.2"  },
+      "Violet":  { l: "30.2",  a: "40.1",  b: "-42.3" },
+    };
+
+    // Collect all ink consumable items from all plies (in order, deduplicated by itemId)
+    const seen = new Set<string>();
+    const plyInks: { itemId: string; itemName: string; colour: string; pantoneNo: string }[] = [];
+    (rf.secondaryLayers || []).forEach(l => {
+      l.consumableItems.filter(ci => ci.itemGroup === "Ink").forEach(ci => {
+        if (!seen.has(ci.itemId)) {
+          seen.add(ci.itemId);
+          const master = items.find(it => it.id === ci.itemId);
+          plyInks.push({
+            itemId:    ci.itemId,
+            itemName:  ci.itemName || master?.name || "",
+            colour:    master?.colour || "",
+            pantoneNo: master?.pantoneNo || "",
+          });
+        }
+      });
+    });
+
+    setCatalogColorShades(Array.from({ length: n }, (_, i) => {
+      const ink    = plyInks[i];
+      const lab    = ink ? (COLOR_LAB[ink.colour] ?? { l: "", a: "", b: "" }) : { l: "", a: "", b: "" };
+      const PROCESS_COLOURS = new Set(["Cyan","Magenta","Yellow","Black"]);
+      const autoType: "Spot" | "Process" | "Special" = ink?.colour && PROCESS_COLOURS.has(ink.colour) ? "Process" : "Spot";
+      return {
+        colorNo:      i + 1,
+        colorName:    ink ? (ink.colour || ink.itemName || `Color ${i + 1}`) : `Color ${i + 1}`,
+        inkType:      ink ? autoType : "Spot" as const,
+        pantoneRef:   ink?.pantoneNo ?? "",
+        labL: lab.l,  labA: lab.a,  labB: lab.b,
+        actualL: "", actualA: "", actualB: "",
+        deltaE: "1.0",
+        shadeCardRef: "",
+        status: "Pending" as const,
+        remarks: "",
+        ...(ink ? { inkItemId: ink.itemId } : {}),
+      } as any;
+    }));
     const reqSQM = (rf.standardQty || 0) * ((rf.jobWidth || 0) / 1000);
     const allocs: MaterialAlloc[] = [];
     rf.secondaryLayers.forEach((l, i) => {
@@ -518,9 +572,22 @@ export default function ProductCatalogPage() {
       });
     });
     setCatalogMatAllocs(allocs);
+    const planCirc      = replanSelectedPlan ? String(replanSelectedPlan.cylCirc)  : "";
+    const planRepeatUPS = replanSelectedPlan ? (replanSelectedPlan.repeatUPS as number) : 1;
+    const planCylCode   = replanSelectedPlan ? ((replanSelectedPlan as any).cylinderCode ?? "") : "";
+    const planCylWidth  = replanSelectedPlan ? String((replanSelectedPlan as any).cylinderWidthVal ?? "") : "";
+    const isSpecialPlan = replanSelectedPlan ? !!(replanSelectedPlan as any).isSpecial : false;
     setCatalogCylAllocs(Array.from({ length: n }, (_, i) => ({
-      colorNo: i + 1, colorName: `Color ${i + 1}`, cylinderNo: "",
-      circumference: "", cylinderType: "Existing" as const, status: "Pending" as const, remarks: "",
+      colorNo: i + 1,
+      colorName: `Color ${i + 1}`,
+      cylinderNo: isSpecialPlan ? `SPL-C${String(i + 1).padStart(2, "0")}` : planCylCode ? `${planCylCode}-C${String(i + 1).padStart(2, "0")}` : "",
+      circumference: planCirc,
+      printWidth: planCylWidth,
+      repeatUPS: planRepeatUPS,
+      cylinderType: (isSpecialPlan ? "New" : "Existing") as CylinderAlloc["cylinderType"],
+      status: "Pending" as const,
+      remarks: "",
+      createdInMaster: false,
     })));
   };
 
@@ -533,6 +600,74 @@ export default function ProductCatalogPage() {
     setReplanOpen(true);
   };
 
+  // ── Open Cylinder Master — passes data via localStorage then navigates ──
+  const openCylinderMaster = () => {
+    if (!replanForm) return;
+    const _cn = replanForm.catalogNo || replanForm.id || "";
+    const _m  = _cn.match(/(\d+)$/);
+    const _pCode = _m ? `P${_m[1].padStart(4, "0")}` : _cn;
+    const _sp = replanSelectedPlan as any;
+    const prefillData = {
+      productCode:    _pCode,
+      productName:    replanForm.productName,
+      customerName:   replanForm.customerName,
+      noOfColors:     replanForm.noOfColors,
+      circumference:  _sp ? String(_sp.cylCirc ?? "") : String(replanForm.jobHeight || ""),
+      printWidth:     _sp ? String(_sp.cylinderWidthVal ?? "") : String(replanForm.jobWidth || ""),
+      repeatUPS:      _sp ? (_sp.repeatUPS as number) : 1,
+      // full plan details
+      totalUPS:       _sp ? (_sp.totalUPS as number) : undefined,
+      filmSize:       _sp ? String(_sp.filmSize ?? "") : undefined,
+      totalWaste:     _sp ? String(_sp.totalWaste ?? "") : undefined,
+      sleeveCode:     _sp ? String(_sp.sleeveCode ?? "") : undefined,
+      sleeveWidth:    _sp ? String(_sp.sleeveWidthVal ?? "") : undefined,
+      acUps:          _sp ? (_sp.acUps as number) : undefined,
+      printingWidth:  _sp ? String(_sp.printingWidth ?? _sp.cylinderWidthVal ?? "") : undefined,
+      isSpecial:      _sp ? !!_sp.isSpecial : undefined,
+      categoryName:   replanForm.categoryName || "",
+      jobWidth:       String(replanForm.jobWidth || ""),
+      jobHeight:      String(replanForm.jobHeight || ""),
+      colors:        catalogCylAllocs
+                       .filter(c => !c.repeatUse)
+                       .map((c, i) => {
+                         const origIdx = catalogCylAllocs.indexOf(c);
+                         return catalogColorShades[origIdx]?.colorName || c.colorName || `Color ${origIdx + 1}`;
+                       }),
+    };
+    if (prefillData.colors.length === 0) {
+      alert("All colors are marked as Repeat Use — nothing to create in master.");
+      return;
+    }
+    prefillData.noOfColors = prefillData.colors.length;
+    localStorage.setItem("ajsw_cylinder_prefill", JSON.stringify(prefillData));
+    window.open("/masters/tools/create-cylinders", "_blank");
+  };
+
+  // ── Refresh cylinder codes/status from what was saved in Cylinder Master ──
+  const refreshFromCylinderMaster = () => {
+    if (!replanForm) return;
+    const _rcn = replanForm.catalogNo || replanForm.id || "";
+    const _rm  = _rcn.match(/(\d+)$/);
+    const productCode = _rm ? `P${_rm[1].padStart(4, "0")}` : _rcn;
+    try {
+      const created: any[] = JSON.parse(localStorage.getItem("ajsw_cylinders_created") || "[]");
+      const matching = created.filter(c => c.productCode === productCode);
+      if (matching.length === 0) return;
+      setCatalogCylAllocs(p => p.map((alloc) => {
+        const match = matching.find((m: any) => m.colorNo === alloc.colorNo);
+        if (!match) return alloc;
+        return {
+          ...alloc,
+          cylinderNo:    match.cylinderCode || alloc.cylinderNo,
+          status:        (match.status === "Available" ? "Available"
+                          : match.status === "Ordered" ? "Ordered"
+                          : alloc.status) as typeof alloc.status,
+          createdInMaster: true,
+        };
+      }));
+    } catch { /* ignore */ }
+  };
+
   const saveReplan = () => {
     if (!replanForm) return;
     const n = catalog.length + 1;
@@ -543,6 +678,9 @@ export default function ProductCatalogPage() {
         id:        `GPC${String(n).padStart(3, "0")}`,
         catalogNo: `GRV-CAT-${String(n).padStart(3, "0")}`,
       }),
+      ...(replanSelPlanId && { savedPlanId: replanSelPlanId }),
+      ...(catalogColorShades.length > 0 && { savedColorShades: catalogColorShades }),
+      ...(catalogCylAllocs.length > 0 && { savedCylAllocs: catalogCylAllocs }),
     };
     saveCatalogItem(updated);
     setReplanOpen(false);
@@ -736,44 +874,6 @@ export default function ProductCatalogPage() {
         </div>
       </div>
 
-      {/* ── Catalog Numbers Strip ── */}
-      {processedCatalog.length > 0 && (
-        <div className="rounded-xl border border-purple-100 bg-purple-50/60 px-4 py-3">
-          <div className="flex items-center gap-2 mb-2">
-            <BookMarked size={12} className="text-purple-500" />
-            <span className="text-[10px] font-bold text-purple-600 uppercase tracking-widest">
-              Catalog Numbers ({processedCatalog.length})
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {processedCatalog.map(c => (
-              <button
-                key={c.id}
-                onClick={() => { setViewPlanRow(c); }}
-                title={`${c.productName} — ${c.customerName}`}
-                className="group flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition-all
-                  bg-white border-purple-200 text-purple-700 hover:bg-purple-600 hover:text-white hover:border-purple-600 hover:shadow-md">
-                <span className="font-mono">{c.catalogNo}</span>
-                <span className="text-[9px] font-medium opacity-60 group-hover:opacity-90 max-w-[80px] truncate hidden sm:block">
-                  {c.productName}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Stats ── */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-xl border p-4 bg-amber-50 text-amber-700 border-amber-200">
-          <p className="text-xs font-medium">Pending (Orders)</p>
-          <p className="text-2xl font-bold mt-1">{stats.pending}</p>
-        </div>
-        <div className="rounded-xl border p-4 bg-green-50 text-green-700 border-green-200">
-          <p className="text-xs font-medium">Processed (Catalog)</p>
-          <p className="text-2xl font-bold mt-1">{stats.processed}</p>
-        </div>
-      </div>
 
       {/* ── Tabs ── */}
       <div className="flex bg-gray-100 p-1 rounded-xl gap-1 w-fit">
@@ -993,8 +1093,20 @@ export default function ProductCatalogPage() {
 
           {/* Header info */}
           <div className={`border rounded-xl p-3 mb-4 flex flex-wrap gap-4 text-xs ${isNewCatalog ? "bg-teal-50 border-teal-200" : "bg-purple-50 border-purple-200"}`}>
-            <div><p className={`text-[10px] uppercase font-semibold ${isNewCatalog ? "text-teal-500" : "text-purple-500"}`}>Product</p>
-              <p className={`font-bold ${isNewCatalog ? "text-teal-800" : "text-purple-800"}`}>{replanForm.productName || "—"}</p></div>
+            <div>
+              <p className={`text-[10px] uppercase font-semibold ${isNewCatalog ? "text-teal-500" : "text-purple-500"}`}>Product</p>
+              <p className={`font-bold ${isNewCatalog ? "text-teal-800" : "text-purple-800"}`}>{replanForm.productName || "—"}</p>
+              {(() => {
+                const _hcn = replanForm.catalogNo || "";
+                const _hm  = _hcn.match(/(\d+)$/);
+                const _hpc = _hm ? `P${_hm[1].padStart(4, "0")}` : "";
+                return _hpc ? (
+                  <span className="inline-block mt-0.5 px-2 py-0.5 bg-teal-600 text-white text-[10px] font-mono font-bold rounded-full tracking-wide">
+                    {_hpc}
+                  </span>
+                ) : null;
+              })()}
+            </div>
             <div><p className={`text-[10px] uppercase font-semibold ${isNewCatalog ? "text-teal-500" : "text-purple-500"}`}>Customer</p>
               <p className={`font-bold ${isNewCatalog ? "text-teal-800" : "text-purple-800"}`}>{replanForm.customerName}</p></div>
             <div><p className={`text-[10px] uppercase font-semibold ${isNewCatalog ? "text-teal-500" : "text-purple-500"}`}>{isNewCatalog ? (replanForm.sourceOrderNo ? "From Order" : "Direct Entry") : "Catalog No"}</p>
@@ -1119,15 +1231,31 @@ export default function ProductCatalogPage() {
                       })()}
                       <div>
                         <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Pack Size</label>
-                        <input placeholder="e.g. 250ml, 1L" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
                           value={(replanForm as any).packSize ?? ""}
-                          onChange={e => rf("packSize" as any, e.target.value)} />
+                          onChange={e => rf("packSize" as any, e.target.value)}>
+                          <option value="">-- Select --</option>
+                          {((customers.find(c => c.id === replanForm.customerId) as any)?.packSizes ?? []).map((ps: string) => (
+                            <option key={ps} value={ps}>{ps}</option>
+                          ))}
+                          {(replanForm as any).packSize && !((customers.find(c => c.id === replanForm.customerId) as any)?.packSizes ?? []).includes((replanForm as any).packSize) && (
+                            <option value={(replanForm as any).packSize}>{(replanForm as any).packSize}</option>
+                          )}
+                        </select>
                       </div>
                       <div>
                         <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Brand Name</label>
-                        <input placeholder="e.g. ThumsUp, Amul" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
                           value={(replanForm as any).brandName ?? ""}
-                          onChange={e => rf("brandName" as any, e.target.value)} />
+                          onChange={e => rf("brandName" as any, e.target.value)}>
+                          <option value="">-- Select --</option>
+                          {((customers.find(c => c.id === replanForm.customerId) as any)?.brandNames ?? []).map((bn: string) => (
+                            <option key={bn} value={bn}>{bn}</option>
+                          ))}
+                          {(replanForm as any).brandName && !((customers.find(c => c.id === replanForm.customerId) as any)?.brandNames ?? []).includes((replanForm as any).brandName) && (
+                            <option value={(replanForm as any).brandName}>{(replanForm as any).brandName}</option>
+                          )}
+                        </select>
                       </div>
                       <div>
                         <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Product Type</label>
@@ -1142,9 +1270,17 @@ export default function ProductCatalogPage() {
                       </div>
                       <div>
                         <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">SKU Type</label>
-                        <input placeholder="e.g. ThumsUp, Fanta" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
                           value={(replanForm as any).skuType ?? ""}
-                          onChange={e => rf("skuType" as any, e.target.value)} />
+                          onChange={e => rf("skuType" as any, e.target.value)}>
+                          <option value="">-- Select --</option>
+                          {((customers.find(c => c.id === replanForm.customerId) as any)?.skuTypes ?? []).map((sk: string) => (
+                            <option key={sk} value={sk}>{sk}</option>
+                          ))}
+                          {(replanForm as any).skuType && !((customers.find(c => c.id === replanForm.customerId) as any)?.skuTypes ?? []).includes((replanForm as any).skuType) && (
+                            <option value={(replanForm as any).skuType}>{(replanForm as any).skuType}</option>
+                          )}
+                        </select>
                       </div>
                       <div>
                         <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Bottle Type</label>
@@ -1165,6 +1301,7 @@ export default function ProductCatalogPage() {
                           <option value="">-- Select --</option>
                           <option value="Single">Single</option>
                           <option value="Multi">Multi</option>
+                          <option value="QR Code">QR Code</option>
                         </select>
                       </div>
                       <div className="sm:col-span-2">
@@ -1178,6 +1315,43 @@ export default function ProductCatalogPage() {
                         <input placeholder="e.g. @20 Rs, Free, Promo, Export" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-orange-400"
                           value={(replanForm as any).specialSpecs ?? ""}
                           onChange={e => rf("specialSpecs" as any, e.target.value)} />
+                      </div>
+
+                      {/* ── Final Roll OD ── */}
+                      <div>
+                        <label className="text-[10px] font-semibold text-teal-600 uppercase block mb-1">Final Roll OD (mm)</label>
+                        <input
+                          type="number" min={0} placeholder="e.g. 200"
+                          className="w-full text-sm border border-teal-200 rounded-xl px-3 py-2 bg-teal-50 focus:bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                          value={(replanForm as any).finalRollOD ?? ""}
+                          onChange={e => rf("finalRollOD" as any, Number(e.target.value) || undefined)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-teal-600 uppercase block mb-1">Roll Qty Unit</label>
+                        <div className="flex gap-2 mt-0.5">
+                          {(["Meter", "KG"] as const).map(u => (
+                            <button key={u} type="button"
+                              onClick={() => rf("rollUnit" as any, u)}
+                              className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${
+                                ((replanForm as any).rollUnit ?? "Meter") === u
+                                  ? "bg-teal-600 text-white border-teal-600 shadow-sm"
+                                  : "bg-white text-gray-600 border-gray-200 hover:border-teal-400 hover:text-teal-700"
+                              }`}>
+                              {u}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Print Type</label>
+                        <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                          value={replanForm.printType}
+                          onChange={e => rf("printType", e.target.value as GravureProductCatalog["printType"])}>
+                          <option value="Surface Print">Surface Print</option>
+                          <option value="Reverse Print">Reverse Print</option>
+                          <option value="Combination">Combination</option>
+                        </select>
                       </div>
                     </div>
 
@@ -1254,7 +1428,7 @@ export default function ProductCatalogPage() {
                                     onClick={() => setEditingAttachLabel(att.id)}
                                     title="Add label"
                                     className="absolute top-1.5 left-1.5 z-10 opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold border border-dashed border-gray-400 text-gray-500 bg-white/90 shadow transition">
-                                    + Label
+                                    + Name
                                   </button>
                                 )}
                                 {/* Thumbnail or icon */}
@@ -1298,9 +1472,6 @@ export default function ProductCatalogPage() {
                     </div>
                   </div>
 
-                  <Select label="Print Type" value={replanForm.printType}
-                    onChange={e => rf("printType", e.target.value as GravureProductCatalog["printType"])}
-                    options={[{ value: "Surface Print", label: "Surface Print" }, { value: "Reverse Print", label: "Reverse Print" }, { value: "Combination", label: "Combination" }]} />
                 </div>
 
                 {/* ── Dimension Input + Live Diagram — appears only after Content Type is selected ── */}
@@ -1327,27 +1498,16 @@ export default function ProductCatalogPage() {
                             }}
                           />
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[10px] font-semibold text-amber-500 uppercase block mb-1">Trimming Both Side (mm)</label>
-                            <input
-                              type="number" min={0} step={0.5} placeholder="e.g. 5"
-                              value={dimValues.trimming ?? replanForm.trimmingSize ?? ""}
-                              onChange={e => { const v = Number(e.target.value) || 0; patchDim({ trimming: v }); rf("trimmingSize", v); }}
-                              className="w-full text-sm border border-amber-200 rounded-xl px-3 py-2 bg-amber-50 focus:bg-white outline-none focus:ring-2 focus:ring-amber-400 font-mono"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-semibold text-rose-500 uppercase block mb-1">
-                              Width Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— optional</span>
-                            </label>
-                            <input
-                              type="number" min={0} max={20} step={0.5} placeholder="e.g. 2"
-                              value={dimValues.widthShrinkage ?? replanForm.widthShrinkage ?? ""}
-                              onChange={e => { const v = Number(e.target.value) || 0; patchDim({ widthShrinkage: v }); rf("widthShrinkage", v || undefined); }}
-                              className="w-full text-sm border border-rose-200 rounded-xl px-3 py-2 bg-rose-50 focus:bg-white outline-none focus:ring-2 focus:ring-rose-400 font-mono"
-                            />
-                          </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-rose-500 uppercase block mb-1">
+                            Repeat Length Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— optional</span>
+                          </label>
+                          <input
+                            type="number" min={0} max={1.5} step={0.1} placeholder="e.g. 1"
+                            value={dimValues.widthShrinkage ?? replanForm.widthShrinkage ?? ""}
+                            onChange={e => { const v = Math.min(1.5, Math.max(0, Number(e.target.value) || 0)); patchDim({ widthShrinkage: v }); rf("widthShrinkage", v || undefined); }}
+                            className="w-full text-sm border border-rose-200 rounded-xl px-3 py-2 bg-rose-50 focus:bg-white outline-none focus:ring-2 focus:ring-rose-400 font-mono"
+                          />
                         </div>
                         {/* ── Colors inside Dimension Setup ── */}
                         <div className="border-t border-indigo-100 pt-3">
@@ -1372,6 +1532,206 @@ export default function ProductCatalogPage() {
                               <div className="px-3 py-2 bg-purple-50 border border-purple-200 rounded-xl text-sm font-bold text-purple-700 text-center">{replanForm.noOfColors} Colors</div>
                             </div>
                           </div>
+                        </div>
+                        {/* ── Unwind Direction (Pifa) — AJSW Printing & Winding Design Chart ── */}
+                        <div className="border-t border-indigo-100 pt-3">
+                          <div className="flex items-center gap-2 mb-3">
+                            <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-widest">Unwind Direction (Pifa)</p>
+                            <span className="text-[9px] text-gray-400">As per AJSW Printing &amp; Winding Chart</span>
+                          </div>
+                          {/* ── All 8 directions in 4+4 grid ── */}
+                          <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1.5">Printed ACROSS the Roll</p>
+                          <div className="grid grid-cols-4 gap-2 mb-3">
+                            {([
+                              { n: 1, label: "Outside · Across\nTop off first",
+                                svg: (
+                                  <svg width="84" height="72" viewBox="0 0 84 72">
+                                    {/* paper label - flat, coming off roll on right */}
+                                    <path d="M4,10 Q10,8 16,10 Q22,12 28,10 Q34,8 40,10 L40,52 L4,52 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    {/* bottom line = underline */}
+                                    <line x1="4" y1="50" x2="40" y2="50" stroke="#444" strokeWidth="0.8"/>
+                                    {/* normal text */}
+                                    <text x="22" y="23" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111">PRINTING</text>
+                                    <text x="22" y="33" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222">READS</text>
+                                    <text x="22" y="42" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222">This Way</text>
+                                    {/* roll circle - side view, on right */}
+                                    <circle cx="64" cy="34" r="16" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="64" cy="34" r="5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    {/* paper tangent lines connecting to roll */}
+                                    <line x1="40" y1="10" x2="49" y2="19" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="40" y1="52" x2="49" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    {/* TOP off first — bold arrow UP-RIGHT */}
+                                    <line x1="22" y1="10" x2="32" y2="2" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="34,0 26,4 30,12" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 2, label: "Inside · Across\nTop off first",
+                                svg: (
+                                  <svg width="84" height="72" viewBox="0 0 84 72">
+                                    {/* Inside: roll on RIGHT, text UPSIDE DOWN */}
+                                    <path d="M4,10 Q10,8 16,10 Q22,12 28,10 Q34,8 40,10 L40,52 L4,52 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="4" y1="50" x2="40" y2="50" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="22" y="23" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(180,22,23)">PRINTING</text>
+                                    <text x="22" y="33" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222" transform="rotate(180,22,33)">READS</text>
+                                    <text x="22" y="42" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222" transform="rotate(180,22,42)">This Way</text>
+                                    {/* roll circle on right */}
+                                    <circle cx="64" cy="34" r="16" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="64" cy="34" r="5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="40" y1="10" x2="49" y2="19" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="40" y1="52" x2="49" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    {/* TOP off first — arrow UP-RIGHT */}
+                                    <line x1="22" y1="10" x2="32" y2="2" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="34,0 26,4 30,12" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 3, label: "Outside · Across\nBottom off first",
+                                svg: (
+                                  <svg width="84" height="72" viewBox="0 0 84 72">
+                                    {/* Outside, text normal, BOTTOM arrow, roll on right */}
+                                    <path d="M4,10 Q10,8 16,10 Q22,12 28,10 Q34,8 40,10 L40,52 L4,52 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="4" y1="50" x2="40" y2="50" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="22" y="23" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111">PRINTING</text>
+                                    <text x="22" y="33" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222">READS</text>
+                                    <text x="22" y="42" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222">This Way</text>
+                                    <circle cx="64" cy="34" r="16" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="64" cy="34" r="5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="40" y1="10" x2="49" y2="19" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="40" y1="52" x2="49" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    {/* BOTTOM off first — arrow DOWN-RIGHT */}
+                                    <line x1="22" y1="52" x2="32" y2="62" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="34,64 24,60 30,52" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 4, label: "Inside · Across\nBottom off first",
+                                svg: (
+                                  <svg width="84" height="72" viewBox="0 0 84 72">
+                                    {/* Inside, text UPSIDE DOWN, BOTTOM arrow, roll on right */}
+                                    <path d="M4,10 Q10,8 16,10 Q22,12 28,10 Q34,8 40,10 L40,52 L4,52 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="4" y1="50" x2="40" y2="50" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="22" y="23" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(180,22,23)">PRINTING</text>
+                                    <text x="22" y="33" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222" transform="rotate(180,22,33)">READS</text>
+                                    <text x="22" y="42" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222" transform="rotate(180,22,42)">This Way</text>
+                                    <circle cx="64" cy="34" r="16" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="64" cy="34" r="5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="40" y1="10" x2="49" y2="19" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="40" y1="52" x2="49" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    {/* BOTTOM off first — arrow DOWN-RIGHT */}
+                                    <line x1="22" y1="52" x2="32" y2="62" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="34,64 24,60 30,52" fill="#111"/>
+                                  </svg>
+                                )},
+                            ] as { n: number; label: string; svg: React.ReactNode }[]).map(({ n, label, svg }) => {
+                              const sel = ((replanForm as any).unwindDirection ?? 0) === n;
+                              return (
+                                <button key={n} onClick={() => rf("unwindDirection" as any, n)}
+                                  title={label.replace("\n", " ")}
+                                  className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border-2 transition-all ${sel ? "border-orange-500 bg-orange-50 shadow-sm" : "border-gray-200 bg-white hover:border-orange-300 hover:bg-orange-50/40"}`}>
+                                  {svg}
+                                  <span className={`text-[11px] font-black leading-none ${sel ? "text-orange-600" : "text-gray-700"}`}>#{n}</span>
+                                  <span className={`text-[7.5px] font-medium text-center leading-tight whitespace-pre-line ${sel ? "text-orange-500" : "text-gray-400"}`}>{label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1.5 mt-1">Printed WITH the Roll</p>
+                          <div className="grid grid-cols-4 gap-2">
+                            {([
+                              { n: 5, label: "Outside · With Roll\nRight off first",
+                                svg: (
+                                  <svg width="84" height="80" viewBox="0 0 84 80">
+                                    {/* Vertical paper coming off roll at bottom-right. Outside: text -90° (reads bottom→top, right side off first) */}
+                                    <path d="M10,4 L52,4 L52,56 Q50,62 48,56 Q46,50 44,56 Q42,62 40,56 L10,56 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="10" y1="4" x2="10" y2="56" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="31" y="30" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(-90,31,30)">PRINTING</text>
+                                    <text x="31" y="41" textAnchor="middle" fontFamily="serif" fontSize="6" fontStyle="italic" fill="#222" transform="rotate(-90,31,41)">READS This Way</text>
+                                    {/* roll circle at bottom-right */}
+                                    <circle cx="67" cy="63" r="14" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="67" cy="63" r="4.5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="52" y1="56" x2="54" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="4" x2="53" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    {/* RIGHT off first — bold arrow pointing RIGHT */}
+                                    <line x1="52" y1="30" x2="64" y2="22" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="66,20 56,20 60,28" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 6, label: "Inside · With Roll\nRight off first",
+                                svg: (
+                                  <svg width="84" height="80" viewBox="0 0 84 80">
+                                    {/* Inside: text +90° (upside-down, reads top→bottom), right side off first */}
+                                    <path d="M10,4 L52,4 L52,56 Q50,62 48,56 Q46,50 44,56 Q42,62 40,56 L10,56 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="10" y1="4" x2="10" y2="56" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="31" y="30" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(90,31,30)">PRINTING</text>
+                                    <text x="31" y="41" textAnchor="middle" fontFamily="serif" fontSize="6" fontStyle="italic" fill="#222" transform="rotate(90,31,41)">READS This Way</text>
+                                    <circle cx="67" cy="63" r="14" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="67" cy="63" r="4.5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="52" y1="56" x2="54" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="4" x2="53" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    {/* RIGHT off first arrow */}
+                                    <line x1="52" y1="30" x2="64" y2="22" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="66,20 56,20 60,28" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 7, label: "Outside · With Roll\nLeft off first",
+                                svg: (
+                                  <svg width="84" height="80" viewBox="0 0 84 80">
+                                    {/* Outside: text +90°, LEFT side off first, roll at bottom-right */}
+                                    <path d="M10,4 L52,4 L52,56 Q50,62 48,56 Q46,50 44,56 Q42,62 40,56 L10,56 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="10" y1="4" x2="10" y2="56" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="31" y="30" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(90,31,30)">PRINTING</text>
+                                    <text x="31" y="41" textAnchor="middle" fontFamily="serif" fontSize="6" fontStyle="italic" fill="#222" transform="rotate(90,31,41)">READS This Way</text>
+                                    <circle cx="67" cy="63" r="14" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="67" cy="63" r="4.5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="52" y1="56" x2="54" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="4" x2="53" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    {/* LEFT off first — arrow pointing LEFT */}
+                                    <line x1="10" y1="30" x2="0" y2="22" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="0,20 10,18 8,28" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 8, label: "Inside · With Roll\nLeft off first",
+                                svg: (
+                                  <svg width="84" height="80" viewBox="0 0 84 80">
+                                    {/* Inside: text -90° (upside-down), LEFT side off first */}
+                                    <path d="M10,4 L52,4 L52,56 Q50,62 48,56 Q46,50 44,56 Q42,62 40,56 L10,56 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="10" y1="4" x2="10" y2="56" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="31" y="30" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(-90,31,30)">PRINTING</text>
+                                    <text x="31" y="41" textAnchor="middle" fontFamily="serif" fontSize="6" fontStyle="italic" fill="#222" transform="rotate(-90,31,41)">READS This Way</text>
+                                    <circle cx="67" cy="63" r="14" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="67" cy="63" r="4.5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="52" y1="56" x2="54" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="4" x2="53" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    {/* LEFT off first — arrow pointing LEFT */}
+                                    <line x1="10" y1="30" x2="0" y2="22" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="0,20 10,18 8,28" fill="#111"/>
+                                  </svg>
+                                )},
+                            ] as { n: number; label: string; svg: React.ReactNode }[]).map(({ n, label, svg }) => {
+                              const sel = ((replanForm as any).unwindDirection ?? 0) === n;
+                              return (
+                                <button key={n} onClick={() => rf("unwindDirection" as any, n)}
+                                  title={label.replace("\n", " ")}
+                                  className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border-2 transition-all ${sel ? "border-orange-500 bg-orange-50 shadow-sm" : "border-gray-200 bg-white hover:border-orange-300 hover:bg-orange-50/40"}`}>
+                                  {svg}
+                                  <span className={`text-[11px] font-black leading-none ${sel ? "text-orange-600" : "text-gray-700"}`}>#{n}</span>
+                                  <span className={`text-[7.5px] font-medium text-center leading-tight whitespace-pre-line ${sel ? "text-orange-500" : "text-gray-400"}`}>{label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {(replanForm as any).unwindDirection > 0 && (
+                            <p className="mt-1.5 text-[10px] text-orange-600 font-semibold flex items-center gap-1">
+                              <Check size={10}/> Direction #{(replanForm as any).unwindDirection} selected — {[
+                                "#1 Outside · Across · Top off first",
+                                "#2 Inside · Across · Top off first",
+                                "#3 Outside · Across · Bottom off first",
+                                "#4 Inside · Across · Bottom off first",
+                                "#5 Outside · With Roll · Right off first",
+                                "#6 Inside · With Roll · Right off first",
+                                "#7 Outside · With Roll · Left off first",
+                                "#8 Inside · With Roll · Left off first",
+                              ][((replanForm as any).unwindDirection ?? 1) - 1]}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <DimensionDiagram contentType={replanForm.content} dims={dimValues} />
@@ -1413,6 +1773,8 @@ export default function ProductCatalogPage() {
                         <span className="flex flex-wrap items-center gap-1 text-[11px] font-semibold text-blue-800">
                           {minCirc > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800">Min Circ: <strong>{minCirc} mm</strong></span>}
                           {maxCirc > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800">Max Circ: <strong>{maxCirc} mm</strong></span>}
+                          {minW > 0 && <span className="px-2 py-0.5 rounded-full bg-orange-100 border border-orange-300 text-orange-800">Min Width: <strong>{minW} mm</strong></span>}
+                          {maxW > 0 && <span className="px-2 py-0.5 rounded-full bg-orange-100 border border-orange-300 text-orange-800">Max Width: <strong>{maxW} mm</strong></span>}
                           {colors && <span className="px-2 py-0.5 rounded-full bg-indigo-100 border border-indigo-300 text-indigo-700">Colors: <strong>{colors}</strong></span>}
                           {speed  && <span className="px-2 py-0.5 rounded-full bg-green-100 border border-green-300 text-green-700">Speed: <strong>{speed} m/min</strong></span>}
                         </span>
@@ -1420,6 +1782,7 @@ export default function ProductCatalogPage() {
                     );
                   })()}
                 </div>
+
 
                 {/* Process Planning */}
                 <div>
@@ -1434,7 +1797,7 @@ export default function ProductCatalogPage() {
                       <table className="min-w-full text-xs">
                         <thead className="bg-gray-50 border-b border-gray-200">
                           <tr>
-                            {["Process (Master)", "Charge Unit", ""].map(h => (
+                            {["#", "Process (Master)", ""].map(h => (
                               <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                             ))}
                           </tr>
@@ -1442,13 +1805,15 @@ export default function ProductCatalogPage() {
                         <tbody className="divide-y divide-gray-100">
                           {replanForm.processes.map((pr, i) => (
                             <tr key={i} className="hover:bg-gray-50">
+                              <td className="px-3 py-2 w-8 text-center">
+                                <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[10px] font-bold">{i + 1}</span>
+                              </td>
                               <td className="px-3 py-2 min-w-[200px]">
                                 <select value={pr.processId} onChange={e => selectReplanProcess(i, e.target.value)} className={cellInput}>
                                   <option value="">-- Select Process --</option>
                                   {ROTO_PROCESSES.map(pm => <option key={pm.id} value={pm.id}>{pm.name} ({pm.department})</option>)}
                                 </select>
                               </td>
-                              <td className="px-3 py-2"><span className="px-2 py-1 bg-gray-100 rounded-lg text-gray-600 font-mono text-[10px]">{pr.chargeUnit || "—"}</span></td>
                               <td className="px-3 py-2 w-8 text-center"><button onClick={() => removeReplanProcess(i)} className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50"><X size={13} /></button></td>
                             </tr>
                           ))}
@@ -1466,13 +1831,45 @@ export default function ProductCatalogPage() {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <SH label={`Ply Configuration (${replanForm.secondaryLayers.length} plys)`} />
-                    <button onClick={() => {
-                      const layers = [...replanForm.secondaryLayers];
-                      layers.push({ id: Math.random().toString(), layerNo: layers.length + 1, plyType: "", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [] });
-                      rf("secondaryLayers", layers);
-                    }} className="flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 px-3 py-1.5 rounded-lg border border-purple-200">
-                      <Plus size={12} /> Add Ply
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {/* Bulk add input */}
+                      {(() => {
+                        const bulkRef = { val: 1 };
+                        const addBulk = (inputEl: HTMLInputElement | null) => {
+                          const n = Math.min(10, Math.max(1, parseInt(inputEl?.value ?? "1") || 1));
+                          const layers = [...replanForm.secondaryLayers];
+                          for (let k = 0; k < n; k++) {
+                            layers.push({ id: Math.random().toString(), layerNo: layers.length + 1, plyType: "", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [] });
+                          }
+                          rf("secondaryLayers", layers);
+                          if (inputEl) inputEl.value = "";
+                        };
+                        let inputRef: HTMLInputElement | null = null;
+                        return (
+                          <div className="flex items-center gap-0 border border-purple-300 rounded-lg overflow-hidden bg-white">
+                            <span className="text-[10px] font-semibold text-purple-600 px-2 bg-purple-50 whitespace-nowrap border-r border-purple-200 h-full flex items-center py-1.5">Add</span>
+                            <input
+                              type="number" min={1} max={10} placeholder="1"
+                              ref={el => { inputRef = el; }}
+                              className="w-12 text-xs font-mono text-center border-none outline-none px-1 py-1.5 bg-white focus:ring-0"
+                              onKeyDown={e => { if (e.key === "Enter") addBulk(e.target as HTMLInputElement); }}
+                            />
+                            <button
+                              onClick={() => addBulk(inputRef)}
+                              className="text-[10px] font-bold text-white bg-purple-600 hover:bg-purple-700 px-2 py-1.5 whitespace-nowrap transition">
+                              + Plys
+                            </button>
+                          </div>
+                        );
+                      })()}
+                      <button onClick={() => {
+                        const layers = [...replanForm.secondaryLayers];
+                        layers.push({ id: Math.random().toString(), layerNo: layers.length + 1, plyType: "", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [] });
+                        rf("secondaryLayers", layers);
+                      }} className="flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 px-3 py-1.5 rounded-lg border border-purple-200">
+                        <Plus size={12} /> Add Ply
+                      </button>
+                    </div>
                   </div>
 
                   {replanForm.secondaryLayers.length > 0 && (
@@ -1551,17 +1948,30 @@ export default function ProductCatalogPage() {
                                     </button>
                                   </div>
 
-                                  {l.consumableItems.map((ci, ciIdx) => {
+                                  {(() => {
+                                    // Pre-compute per-group serial numbers (all items, including clones)
+                                    const groupSerials: number[] = [];
+                                    const groupCounter: Record<string, number> = {};
+                                    l.consumableItems.forEach(ci => {
+                                      const g = ci.itemGroup || "Consumable";
+                                      groupCounter[g] = (groupCounter[g] || 0) + 1;
+                                      groupSerials.push(groupCounter[g]);
+                                    });
+                                    return l.consumableItems.map((ci, ciIdx) => {
                                     const CONSUMABLE_GROUPS = ["Ink", "Solvent", "Adhesive", "Hardner"];
                                     const subGroups = ci.itemGroup ? (CATEGORY_GROUP_SUBGROUP["Raw Material (RM)"]?.[ci.itemGroup] ?? []) : [];
                                     const filteredItems = items.filter(it =>
                                       it.group === ci.itemGroup && it.active &&
                                       (!ci.itemSubGroup || it.subGroup === ci.itemSubGroup)
                                     );
+                                    const ciLabel = ci.itemGroup || "Consumable";
+                                    const ciSerial = groupSerials[ciIdx] ?? 1;
                                     return (
                                       <div key={ci.consumableId} className="bg-teal-50/40 border border-teal-100 rounded-xl p-3">
                                         <div className="flex items-center justify-between mb-2">
-                                          <span className="text-[10px] font-bold text-teal-700 uppercase">Consumable 1</span>
+                                          <span className="text-[10px] font-bold text-teal-700 uppercase">
+                                            {`${ciLabel} ${ciSerial}`}
+                                          </span>
                                           <div className="flex items-center gap-1">
                                             <button
                                               onClick={() => clonePlyConsumable(index, ciIdx)}
@@ -1722,19 +2132,86 @@ export default function ProductCatalogPage() {
                                         })()}
                                       </div>
                                     );
-                                  })}
+                                  });
+                                  })()}
 
                                   {l.consumableItems.length === 0 && (
                                     <p className="text-[10px] text-gray-400 italic text-center py-2">Click "+ Add Consumable" to add ink, solvent, adhesive, etc.</p>
                                   )}
                                 </div>
                               )}
+
+                              {/* ── Ply Summary Strip ── */}
+                              {l.consumableItems.length > 0 && (() => {
+                                const groupCount: Record<string, number> = {};
+                                l.consumableItems.forEach(ci => {
+                                  const g = ci.itemGroup || "Other";
+                                  groupCount[g] = (groupCount[g] || 0) + 1;
+                                });
+                                const inks = l.consumableItems.filter(ci => ci.itemGroup === "Ink");
+                                const totalDryGSM = inks.reduce((sum, ci) => sum + (parseFloat(String(ci.gsm)) || 0), 0);
+                                const avgSolid = inks.length > 0
+                                  ? inks.reduce((sum, ci) => {
+                                      const itm = items.find(x => x.id === ci.itemId);
+                                      return sum + ((itm as any)?.solidPct ?? 35);
+                                    }, 0) / inks.length
+                                  : 0;
+                                const GROUP_COLOR: Record<string, string> = {
+                                  Ink:      "bg-blue-100 text-blue-700 border-blue-200",
+                                  Solvent:  "bg-teal-100 text-teal-700 border-teal-200",
+                                  Adhesive: "bg-violet-100 text-violet-700 border-violet-200",
+                                  Hardener: "bg-orange-100 text-orange-700 border-orange-200",
+                                  Other:    "bg-gray-100 text-gray-600 border-gray-200",
+                                };
+                                return (
+                                  <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-slate-50 border-t border-slate-100 rounded-b-2xl">
+                                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Ply Summary:</span>
+                                    {Object.entries(groupCount).map(([g, cnt]) => (
+                                      <span key={g} className={`flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${GROUP_COLOR[g] ?? GROUP_COLOR.Other}`}>
+                                        {g}: <strong>{cnt}</strong>
+                                      </span>
+                                    ))}
+                                    {inks.length > 0 && (
+                                      <>
+                                        <span className="w-px h-3 bg-slate-300 mx-1" />
+                                        <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                                          Total Dry GSM: <strong>{totalDryGSM.toFixed(1)}</strong>
+                                        </span>
+                                        <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                                          Avg Solid: <strong>{avgSolid.toFixed(1)}%</strong>
+                                        </span>
+                                      </>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </div>
                         );
                       })}
                     </div>
                   )}
+                </div>
+
+                {/* Trimming — placed here so plan can use it */}
+                <div className="border border-amber-200 rounded-2xl p-4 bg-amber-50/40">
+                  <p className="text-[10px] font-semibold text-amber-600 uppercase tracking-widest mb-2">Trimming</p>
+                  <div className="flex items-center gap-4">
+                    <div style={{ maxWidth: 220 }}>
+                      <label className="text-[10px] font-semibold text-amber-500 uppercase block mb-1">Trimming Both Side (mm)</label>
+                      <input
+                        type="number" min={0} step={0.5} placeholder="e.g. 5"
+                        value={dimValues.trimming ?? replanForm.trimmingSize ?? ""}
+                        onChange={e => { const v = Number(e.target.value) || 0; patchDim({ trimming: v }); rf("trimmingSize", v); }}
+                        className="w-full text-sm border border-amber-300 rounded-xl px-3 py-2 bg-white focus:bg-white outline-none focus:ring-2 focus:ring-amber-400 font-mono"
+                      />
+                    </div>
+                    {(replanForm.trimmingSize || 0) > 0 && (
+                      <div className="text-xs text-amber-700 bg-amber-100 border border-amber-200 rounded-xl px-3 py-2 font-semibold">
+                        Both sides: {replanForm.trimmingSize}+{replanForm.trimmingSize} mm &nbsp;·&nbsp; Total trim: {(replanForm.trimmingSize || 0) * 2} mm
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Production Plan Selection */}
@@ -1764,7 +2241,7 @@ export default function ProductCatalogPage() {
                     {replanIsPlanApplied && replanSelectedPlan && !replanShowPlan && (
                       <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-2.5 flex items-center gap-2 text-xs text-green-700">
                         <CheckCircle2 size={14} className="text-green-600" />
-                        Plan applied — UPS: <strong>{replanSelectedPlan.totalUPS}</strong> · Sleeve: {(replanSelectedPlan as any).sleeveCode} {(replanSelectedPlan as any).sleeveWidthVal}mm · Cylinder: {(replanSelectedPlan as any).cylinderCode} · Film: {replanSelectedPlan.filmSize}mm · Total Waste: {replanSelectedPlan.totalWaste}mm · RMT: {replanSelectedPlan.totalRMT}
+                        Plan applied — UPS: <strong>{replanSelectedPlan.totalUPS}</strong> · Sleeve: {(replanSelectedPlan as any).sleeveCode} {(replanSelectedPlan as any).sleeveWidthVal}mm · Cylinder: {(replanSelectedPlan as any).cylinderCode} · Film: {replanSelectedPlan.filmSize}mm · Total Waste: {replanSelectedPlan.totalWaste}mm
                       </div>
                     )}
 
@@ -1807,10 +2284,10 @@ export default function ProductCatalogPage() {
                                   { key: "totalWaste",       label: "Total Waste (mm)" },
                                   { key: "cylinderCode",     label: "Cylinder" },
                                   { key: "cylinderWidthVal", label: "Cyl W (mm)" },
+                                  { key: "cylExtra",         label: "Cyl Extra (mm)" },
                                   { key: "cylCirc",          label: "Cyl. Circ (mm)" },
                                   { key: "repeatUPS",        label: "Repeat UPS" },
-                                  { key: "totalUPS",         label: "Total UPS" },
-                                  { key: "totalRMT",         label: "Total RMT" },
+                                  { key: "totalUPS",         label: "Total Pieces" },
                                 ].map(col => {
                                   const isFiltered = !!(planColFilters[col.key]?.size);
                                   const isOpen     = planFilterOpen === col.key;
@@ -1885,7 +2362,7 @@ export default function ProductCatalogPage() {
                                 const p = plan as any;
                                 return (
                                   <tr key={plan.planId} onClick={() => setReplanSelPlanId(plan.planId)}
-                                    className={`cursor-pointer transition-colors ${p.isSpecialSleeve ? "bg-rose-50 hover:bg-rose-100" : p.isSpecial ? "bg-amber-50 hover:bg-amber-100" : p.isBest ? "ring-2 ring-inset ring-green-400 bg-green-50" : isSelected ? "bg-indigo-50" : "hover:bg-gray-50"}`}>
+                                    className={`cursor-pointer transition-colors ${p.isDoctorBlade ? "bg-teal-50 hover:bg-teal-100 ring-1 ring-inset ring-teal-300" : p.isSpecialSleeve ? "bg-rose-50 hover:bg-rose-100" : p.isSpecial ? "bg-amber-50 hover:bg-amber-100" : p.isBest ? "ring-2 ring-inset ring-green-400 bg-green-50" : isSelected ? "bg-indigo-50" : "hover:bg-gray-50"}`}>
                                     <td className="p-2 border border-gray-100 text-center">
                                       <div className={`w-4 h-4 rounded-full border-2 mx-auto flex items-center justify-center ${isSelected ? "border-indigo-600 bg-indigo-600" : "border-gray-300 bg-white"}`}>
                                         {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
@@ -1899,10 +2376,20 @@ export default function ProductCatalogPage() {
                                         <EyeIcon size={13} />
                                       </button>
                                     </td>
-                                    <td className="p-2 border border-gray-100 font-medium text-gray-700">{plan.machineName}{p.isBest && <span className="ml-1.5 px-1.5 py-0.5 bg-green-500 text-white text-[9px] font-bold rounded-full">BEST</span>}{p.isSpecial && !p.isSpecialSleeve && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded-full">SPECIAL CYL</span>}{p.isSpecialSleeve && <span className="ml-1.5 px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-bold rounded-full">SPECIAL SLV</span>}</td>
+                                    <td className="p-2 border border-gray-100 font-medium text-gray-700">
+                                      {plan.machineName}
+                                      {p.isBest && <span className="ml-1.5 px-1.5 py-0.5 bg-green-500 text-white text-[9px] font-bold rounded-full">BEST</span>}
+                                      {p.isDoctorBlade && <span className="ml-1.5 px-1.5 py-0.5 bg-teal-600 text-white text-[9px] font-bold rounded-full">🔧 DB: {p.doctorBladeWidth}mm</span>}
+                                      {p.isSpecial && !p.isSpecialSleeve && !p.isDoctorBlade && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded-full">SPECIAL CYL</span>}
+                                      {p.isSpecialSleeve && <span className="ml-1.5 px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-bold rounded-full">SPECIAL SLV</span>}
+                                    </td>
                                     <td className="p-2 border border-gray-100 text-center font-bold text-indigo-700">{plan.acUps}</td>
                                     <td className="p-2 border border-gray-100 text-center font-mono">{p.printingWidth}</td>
-                                    <td className="p-2 border border-gray-100"><span className={`font-semibold ${p.isSpecialSleeve ? "text-rose-600" : "text-blue-600"}`}>{p.sleeveCode}</span><br/><span className={`text-[9px] ${p.isSpecialSleeve ? "text-rose-500" : "text-gray-400"}`}>{p.sleeveName}</span></td>
+                                    <td className="p-2 border border-gray-100">
+                                      <span className={`font-semibold ${p.isSpecialSleeve ? "text-rose-600" : "text-blue-600"}`}>{p.sleeveCode}</span>
+                                      <br/>
+                                      <span className={`text-[9px] ${p.isSpecialSleeve ? "text-rose-500" : "text-gray-400"}`}>{p.sleeveName}</span>
+                                    </td>
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.isSpecialSleeve ? "text-rose-600" : "text-blue-700"}`}>{p.sleeveWidthVal}</td>
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.sideWaste > 100 ? "text-red-600" : "text-amber-600"}`}>{p.sideWaste}</td>
                                     <td className="p-2 border border-gray-100 text-center">
@@ -1926,10 +2413,17 @@ export default function ProductCatalogPage() {
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.isBest ? "text-green-700" : p.totalWaste > 300 ? "text-red-600" : "text-amber-600"}`}>{p.totalWaste}</td>
                                     <td className="p-2 border border-gray-100"><span className={`font-semibold ${p.isSpecial ? "text-amber-600" : "text-violet-600"}`}>{p.cylinderCode}</span><br/><span className={`text-[9px] ${p.isSpecial ? "text-amber-500" : "text-gray-400"}`}>{p.cylinderName}</span></td>
                                     <td className={`p-2 border border-gray-100 text-center font-bold ${p.isSpecial ? "text-amber-600" : "text-violet-700"}`}>{p.cylinderWidthVal}</td>
+                                    <td className="p-2 border border-gray-100 text-center font-bold">
+                                      {(() => {
+                                        const extra = Math.round((p.cylinderWidthVal || 0) - (p.sleeveWidthVal || 0) - 100);
+                                        return extra > 0
+                                          ? <span className="text-orange-600">+{extra}</span>
+                                          : <span className="text-gray-400">0</span>;
+                                      })()}
+                                    </td>
                                     <td className="p-2 border border-gray-100 text-center font-bold text-emerald-700">{p.cylCirc}</td>
                                     <td className="p-2 border border-gray-100 text-center font-bold text-teal-700">{p.repeatUPS}</td>
                                     <td className="p-2 border border-gray-100 text-center font-bold">{plan.totalUPS}</td>
-                                    <td className="p-2 border border-gray-100 text-center text-blue-600 font-semibold">{plan.totalRMT}</td>
                                   </tr>
                                 );
                               })}
@@ -1950,66 +2444,204 @@ export default function ProductCatalogPage() {
 
                     {replanIsPlanApplied && replanSelectedPlan && replanForm.secondaryLayers.length > 0 && (
                       <div className="space-y-3">
-                        <p className="text-xs font-bold text-indigo-900">Ply / Layer Calculation — UPS: {replanSelectedPlan.totalUPS} · Film: {replanSelectedPlan.filmSize}mm · Wastage: {replanSelectedPlan.wastage}mm · RMT: {replanSelectedPlan.totalRMT}</p>
+                        {(() => {
+                          // per-piece area (m²) = jobW(m) × jobH(m)
+                          const pieceArea = (replanForm.jobWidth / 1000) * ((replanForm.jobHeight || 0) / 1000);
+                          const fmt = (v: number) => v > 0 ? v.toFixed(4) : "—";
+                          return (
+                          <>
+                        <p className="text-xs font-bold text-indigo-900">
+                          Ply / Layer Calculation &nbsp;·&nbsp; Job: {replanForm.jobWidth}mm × {replanForm.jobHeight || 0}mm &nbsp;·&nbsp; Area/Piece: {pieceArea.toFixed(4)} m²
+                        </p>
                         <div className="border-2 border-indigo-50 rounded-2xl overflow-hidden shadow-lg">
                           <div className="overflow-x-auto">
                             <table className="min-w-full text-[10px] border-collapse">
                               <thead className="bg-indigo-700 text-white uppercase tracking-wider font-bold">
                                 <tr>
-                                  {["Layer","Type","Film / Material","Thick (μ)","Density","GSM","Width (mm)","Req.Mtr","Req.SQM","Req.Wt (Kg)","Waste Mtr","Waste Wt","Total Mtr","Total Wt (Kg)"].map(h => (
+                                  {["Ply","Type","Item / Material","GSM / Ratio","Info","Coverage %","Dry Wt/Piece (g)","Liq Wt/Piece (g)","Total Wt/Piece (g)"].map(h => (
                                     <th key={h} className="p-2 border border-indigo-600/30 text-center whitespace-nowrap">{h}</th>
                                   ))}
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100">
-                                {replanForm.secondaryLayers.map((l, idx) => {
-                                  const WASTE_PCT = 0.03;
-                                  const rmt = replanSelectedPlan.totalRMT;
-                                  const widthM = replanForm.jobWidth / 1000;
-                                  const reqSQM = parseFloat((rmt * widthM).toFixed(3));
-                                  const reqWt  = l.gsm > 0 ? parseFloat((l.gsm * reqSQM / 1000).toFixed(4)) : 0;
-                                  const wasteMtr = parseFloat((rmt * WASTE_PCT).toFixed(2));
-                                  const wasteWt  = parseFloat((reqWt * WASTE_PCT).toFixed(4));
-                                  const totalMtr = parseFloat((rmt + wasteMtr).toFixed(2));
-                                  const totalWt  = parseFloat((reqWt + wasteWt).toFixed(4));
-                                  return (
-                                    <tr key={l.id} className="hover:bg-indigo-50/30">
-                                      <td className="p-2 border border-gray-100 text-center font-black text-indigo-900 bg-indigo-50/20">{idx + 1}</td>
-                                      <td className="p-2 border border-gray-100 text-center">
-                                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${l.plyType === "Printing" ? "bg-indigo-50 text-indigo-700 border-indigo-200" : l.plyType === "Lamination" ? "bg-teal-50 text-teal-700 border-teal-200" : l.plyType === "Coating" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-blue-50 text-blue-700 border-blue-200"}`}>{l.plyType || "Film"}</span>
+                                {replanForm.secondaryLayers.flatMap((l, idx) => {
+                                  // film weight per piece (g)
+                                  const filmDryG  = l.gsm > 0 ? parseFloat((l.gsm * pieceArea).toFixed(4)) : 0;
+
+                                  // total liquid ink weight per piece (g) in this ply — for solvent ratio
+                                  const totalLiqInkG = l.consumableItems
+                                    .filter(ci => ci.itemGroup === "Ink")
+                                    .reduce((s, ci) => {
+                                      const solid  = ci.solidPct ?? 40;
+                                      const dryG   = (ci.gsm || 0) * pieceArea;
+                                      return s + (solid > 0 ? dryG / (solid / 100) : 0);
+                                    }, 0);
+
+                                  const adhItem = l.consumableItems.find(ci => ci.itemGroup === "Adhesive");
+
+                                  const plyBadgeCls = l.plyType === "Printing"
+                                    ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                                    : l.plyType === "Lamination"
+                                    ? "bg-teal-50 text-teal-700 border-teal-200"
+                                    : l.plyType === "Coating"
+                                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                                    : "bg-blue-50 text-blue-700 border-blue-200";
+
+                                  const groupBadgeCls: Record<string,string> = {
+                                    "Ink":      "bg-rose-50 text-rose-700 border-rose-200",
+                                    "Solvent":  "bg-cyan-50 text-cyan-700 border-cyan-200",
+                                    "Adhesive": "bg-amber-50 text-amber-700 border-amber-200",
+                                    "Hardner":  "bg-purple-50 text-purple-700 border-purple-200",
+                                  };
+
+                                  // ── Film row ──
+                                  const filmRow = (
+                                    <tr key={`film-${l.id}`} className="hover:bg-indigo-50/30">
+                                      <td className="p-2 border border-gray-200 text-center font-black text-indigo-900 bg-indigo-50/50 align-middle"
+                                        rowSpan={1 + l.consumableItems.length}>
+                                        {idx + 1}
                                       </td>
-                                      <td className="p-2 border border-gray-100 font-medium text-gray-700 min-w-[140px] whitespace-normal">{l.itemSubGroup || "—"}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-mono">{l.thickness || "—"}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-mono">{l.density || "—"}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-bold text-indigo-700">{l.gsm || "—"}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-mono">{replanForm.jobWidth}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-mono">{rmt}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-mono">{reqSQM}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-bold text-blue-600">{reqWt}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-mono text-orange-600">{wasteMtr}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-mono text-orange-600">{wasteWt}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-mono text-gray-700">{totalMtr}</td>
-                                      <td className="p-2 border border-gray-100 text-center font-black text-gray-900 bg-gray-50">{totalWt}</td>
+                                      <td className="p-2 border border-gray-100 text-center">
+                                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${plyBadgeCls}`}>{l.plyType || "Film"}</span>
+                                      </td>
+                                      <td className="p-2 border border-gray-100 font-semibold text-gray-700 min-w-[130px]">{l.itemSubGroup || "—"}</td>
+                                      <td className="p-2 border border-gray-100 text-center font-bold text-indigo-700">{l.gsm > 0 ? `${l.gsm} GSM` : "—"}</td>
+                                      <td className="p-2 border border-gray-100 text-center text-gray-500">{l.thickness ? `${l.thickness} μ` : "—"}</td>
+                                      <td className="p-2 border border-gray-100 text-center text-gray-300">—</td>
+                                      <td className="p-2 border border-gray-100 text-center font-bold text-blue-600">{fmt(filmDryG)}</td>
+                                      <td className="p-2 border border-gray-100 text-center text-gray-300">—</td>
+                                      <td className="p-2 border border-gray-100 text-center font-black text-gray-900 bg-gray-50">{fmt(filmDryG)}</td>
                                     </tr>
                                   );
+
+                                  // ── Consumable sub-rows ──
+                                  const ciRows = l.consumableItems.map((ci, ciIdx) => {
+                                    let gsmRatio = "—", infoCell = "—";
+                                    let dryG = 0, liqG: number | null = null;
+
+                                    if (ci.itemGroup === "Ink") {
+                                      const dryGSM = ci.gsm || 0;
+                                      const solid  = ci.solidPct ?? 40;
+                                      const liqGSM = solid > 0 ? dryGSM / (solid / 100) : 0;
+                                      const covFactor = (ci.coveragePct ?? 100) / 100;
+                                      gsmRatio = `${dryGSM} GSM`;
+                                      infoCell = `${solid}% Solid`;
+                                      dryG = parseFloat((dryGSM * pieceArea * covFactor).toFixed(4));
+                                      liqG = parseFloat((liqGSM * pieceArea * covFactor).toFixed(4));
+                                    } else if (ci.itemGroup === "Solvent") {
+                                      const ratio = ci.gsm || 0;
+                                      gsmRatio = `${ratio} %`;
+                                      infoCell = "of Liq. Ink";
+                                      dryG = parseFloat((totalLiqInkG * ratio / 100).toFixed(4));
+                                    } else if (ci.itemGroup === "Adhesive") {
+                                      gsmRatio = `${ci.gsm || 0} GSM`;
+                                      infoCell = `OH ${ci.ohPct ?? 0}%`;
+                                      dryG = parseFloat(((ci.gsm || 0) * pieceArea).toFixed(4));
+                                    } else if (ci.itemGroup === "Hardner") {
+                                      const adhGSM = adhItem?.gsm ?? 0;
+                                      const ohPct  = adhItem?.ohPct ?? 0;
+                                      const ncoPct = ci.ncoPct ?? 0;
+                                      const autoGSM = ncoPct > 0 ? parseFloat(((adhGSM * ohPct) / ncoPct).toFixed(3)) : 0;
+                                      gsmRatio = `${autoGSM} GSM`;
+                                      infoCell = `NCO ${ncoPct}%`;
+                                      dryG = parseFloat((autoGSM * pieceArea).toFixed(4));
+                                    }
+
+                                    return (
+                                      <tr key={`ci-${l.id}-${ciIdx}`} className="bg-slate-50/60 hover:bg-slate-100/60">
+                                        <td className="p-2 border border-gray-100 text-center">
+                                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${groupBadgeCls[ci.itemGroup] || "bg-gray-100 text-gray-600 border-gray-300"}`}>{ci.itemGroup}</span>
+                                        </td>
+                                        <td className="p-2 border border-gray-100 text-gray-500 italic pl-4">{ci.itemName || ci.itemSubGroup || ci.fieldDisplayName || "—"}</td>
+                                        <td className="p-2 border border-gray-100 text-center font-bold text-indigo-600">{gsmRatio}</td>
+                                        <td className="p-2 border border-gray-100 text-center text-[9px] text-gray-500">{infoCell}</td>
+                                        <td className="p-2 border border-gray-100 text-center font-mono text-violet-600">
+                                          {ci.itemGroup === "Ink" ? `${ci.coveragePct ?? 100}%` : "—"}
+                                        </td>
+                                        <td className="p-2 border border-gray-100 text-center font-bold text-blue-600">{fmt(dryG)}</td>
+                                        <td className="p-2 border border-gray-100 text-center font-mono text-teal-600">{liqG != null ? fmt(liqG) : "—"}</td>
+                                        <td className="p-2 border border-gray-100 text-center font-black text-gray-800 bg-gray-50">{fmt(dryG)}</td>
+                                      </tr>
+                                    );
+                                  });
+
+                                  return [filmRow, ...ciRows];
                                 })}
                               </tbody>
                               <tfoot className="bg-slate-50 border-t-2 border-indigo-200">
-                                <tr className="font-bold">
-                                  <td colSpan={13} className="p-3 text-right text-indigo-900 uppercase text-[10px]">Total Weight (Kg)</td>
-                                  <td className="p-3 text-center bg-indigo-100 text-indigo-900 text-xs">
-                                    {replanForm.secondaryLayers.reduce((sum, l) => {
-                                      const rmt = replanSelectedPlan.totalRMT;
-                                      const reqSQM = rmt * replanForm.jobWidth / 1000;
-                                      const reqWt = l.gsm > 0 ? l.gsm * reqSQM / 1000 : 0;
-                                      return sum + parseFloat((reqWt * 1.03).toFixed(4));
-                                    }, 0).toFixed(3)}
+                                {/* Row 1 — Total Ink GSM (All Plies) — unchanged */}
+                                <tr className="bg-rose-50/60">
+                                  <td colSpan={8} className="p-2 text-right text-rose-700 uppercase text-[10px] font-bold tracking-wider">Total Ink GSM (all plies)</td>
+                                  <td className="p-2 text-center bg-rose-100 text-rose-800 text-xs font-black">
+                                    {replanForm.secondaryLayers.reduce((sum, l) =>
+                                      sum + l.consumableItems.filter(ci2 => ci2.itemGroup === "Ink").reduce((s, ci2) => s + (ci2.gsm || 0), 0)
+                                    , 0).toFixed(2)} GSM
                                   </td>
                                 </tr>
+                                {/* Row 2 — Total Consumables GSM (Ink + Adhesive + Solvent + Hardner etc.) */}
+                                {(() => {
+                                  const adhMap: Record<string, { gsm: number; ohPct: number }> = {};
+                                  replanForm.secondaryLayers.forEach(l => {
+                                    const adh = l.consumableItems.find(ci2 => ci2.itemGroup === "Adhesive");
+                                    if (adh) adhMap[l.id] = { gsm: adh.gsm || 0, ohPct: adh.ohPct ?? 0 };
+                                  });
+                                  const totalLiqInkByLayer: Record<string, number> = {};
+                                  replanForm.secondaryLayers.forEach(l => {
+                                    totalLiqInkByLayer[l.id] = l.consumableItems
+                                      .filter(ci2 => ci2.itemGroup === "Ink")
+                                      .reduce((s, ci2) => {
+                                        const solid = ci2.solidPct ?? 40;
+                                        const dryGSM = (ci2.gsm || 0) * ((ci2.coveragePct ?? 100) / 100);
+                                        return s + (solid > 0 ? dryGSM / (solid / 100) : 0);
+                                      }, 0);
+                                  });
+                                  const totalConsumablesGSM = replanForm.secondaryLayers.reduce((sum, l) =>
+                                    sum + l.consumableItems.reduce((s, ci2) => {
+                                      if (ci2.itemGroup === "Ink")      return s + (ci2.gsm || 0) * ((ci2.coveragePct ?? 100) / 100);
+                                      if (ci2.itemGroup === "Solvent")  return s + totalLiqInkByLayer[l.id] * (ci2.gsm || 0) / 100;
+                                      if (ci2.itemGroup === "Adhesive") return s + (ci2.gsm || 0);
+                                      if (ci2.itemGroup === "Hardner") {
+                                        const aGSM = adhMap[l.id]?.gsm ?? 0;
+                                        const ohP  = adhMap[l.id]?.ohPct ?? 0;
+                                        const nco  = ci2.ncoPct ?? 0;
+                                        return s + (nco > 0 ? (aGSM * ohP) / nco : 0);
+                                      }
+                                      return s + (ci2.gsm || 0);
+                                    }, 0)
+                                  , 0);
+                                  const totalFilmGSM = replanForm.secondaryLayers.reduce((sum, l) => sum + (l.gsm > 0 ? l.gsm : 0), 0);
+                                  return (
+                                    <>
+                                      <tr className="bg-violet-50/60">
+                                        <td colSpan={8} className="p-2 text-right text-violet-700 uppercase text-[10px] font-bold tracking-wider">Total Consumables GSM</td>
+                                        <td className="p-2 text-center bg-violet-100 text-violet-800 text-xs font-black">
+                                          {totalConsumablesGSM.toFixed(2)} GSM
+                                        </td>
+                                      </tr>
+                                      {/* Row 3 — Total Film GSM */}
+                                      <tr className="bg-blue-50/60">
+                                        <td colSpan={8} className="p-2 text-right text-blue-700 uppercase text-[10px] font-bold tracking-wider">Total Film GSM</td>
+                                        <td className="p-2 text-center bg-blue-100 text-blue-800 text-xs font-black">
+                                          {totalFilmGSM.toFixed(2)} GSM
+                                        </td>
+                                      </tr>
+                                      {/* Row 4 — Total Per Piece GSM = Film + Consumables */}
+                                      <tr className="bg-indigo-50">
+                                        <td colSpan={8} className="p-3 text-right text-indigo-900 uppercase text-[10px] font-black tracking-wider">Total Per Piece GSM</td>
+                                        <td className="p-3 text-center bg-indigo-200 text-indigo-900 text-xs font-black">
+                                          {(totalFilmGSM + totalConsumablesGSM).toFixed(2)} GSM
+                                        </td>
+                                      </tr>
+                                    </>
+                                  );
+                                })()}
                               </tfoot>
                             </table>
                           </div>
                         </div>
+                          </>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
@@ -2030,9 +2662,25 @@ export default function ProductCatalogPage() {
                 <div className="flex overflow-x-auto bg-gray-100 p-1 rounded-xl gap-1">
                   {([
                     { key: "shade",    label: "Color Shade & LAB"   },
-                    { key: "tool",     label: "Tool / Cylinder"     },
+                    { key: "tool",     label: "Cylinder Master"     },
                   ] as const).map(t => (
-                    <button key={t.key} onClick={() => setCatalogPrepTab(t.key)}
+                    <button key={t.key} onClick={() => {
+                      setCatalogPrepTab(t.key);
+                      if (t.key === "tool" && replanSelectedPlan) {
+                        const planCirc  = String(replanSelectedPlan.cylCirc);
+                        const planWidth = String((replanSelectedPlan as any).cylinderWidthVal ?? "");
+                        const planRUPS  = replanSelectedPlan.repeatUPS as number;
+                        const isSpecial = !!(replanSelectedPlan as any).isSpecial;
+                        setCatalogCylAllocs(p => p.map((c, ci) => ({
+                          ...c,
+                          circumference: planCirc,
+                          printWidth:    planWidth,
+                          repeatUPS:     planRUPS,
+                          cylinderNo:    c.cylinderNo || (isSpecial ? `SPL-C${String(ci + 1).padStart(2, "0")}` : `${(replanSelectedPlan as any).cylinderCode || "CYL"}-C${String(ci + 1).padStart(2, "0")}`),
+                          cylinderType:  c.cylinderType === "Existing" && isSpecial ? "New" : c.cylinderType,
+                        })));
+                      }
+                    }}
                       className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap ${catalogPrepTab === t.key ? "bg-white shadow text-purple-700" : "text-gray-500 hover:text-gray-700"}`}>
                       {t.label}
                     </button>
@@ -2057,16 +2705,12 @@ export default function ProductCatalogPage() {
                               <th key={h} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
                             ))}
                             <th colSpan={3} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold bg-indigo-700">Standard L* A* B*</th>
-                            <th colSpan={3} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold bg-teal-700">Actual L* A* B*</th>
-                            {["ΔE Tol.", "ΔE Calc.", "Result", "Shade Card Ref", "Status", "Remarks"].map(h => (
-                              <th key={h} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
-                            ))}
+                            <th className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">Remarks</th>
                           </tr>
                           <tr className="bg-purple-800 text-purple-200 text-[9px]">
                             {["", "", "", "", ""].map((_, i) => <th key={i} className="border border-purple-700/30" />)}
                             {["L*", "A*", "B*"].map(h => <th key={`s-${h}`} className="px-2 py-1 border border-purple-700/30 text-center bg-indigo-800/60">{h}</th>)}
-                            {["L*", "A*", "B*"].map(h => <th key={`a-${h}`} className="px-2 py-1 border border-purple-700/30 text-center bg-teal-800/60">{h}</th>)}
-                            {["", "", "", "", "", ""].map((_, i) => <th key={`e-${i}`} className="border border-purple-700/30" />)}
+                            <th className="border border-purple-700/30" />
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -2089,11 +2733,28 @@ export default function ProductCatalogPage() {
                                   value={(cs as any).inkItemId ?? ""}
                                   onChange={e => {
                                     const ink = INK_ITEMS.find(x => x.id === e.target.value);
+                                    const COLOR_LAB: Record<string, { l: string; a: string; b: string }> = {
+                                      "Red":     { l: "41.0",  a: "54.2",  b: "38.1"  },
+                                      "Yellow":  { l: "89.3",  a: "-6.1",  b: "80.4"  },
+                                      "Blue":    { l: "25.1",  a: "23.4",  b: "-52.8" },
+                                      "Black":   { l: "16.0",  a: "0.1",   b: "0.0"   },
+                                      "White":   { l: "95.2",  a: "-1.0",  b: "2.3"   },
+                                      "Green":   { l: "46.3",  a: "-50.2", b: "30.1"  },
+                                      "Cyan":    { l: "60.1",  a: "-38.2", b: "-31.4" },
+                                      "Magenta": { l: "48.2",  a: "72.1",  b: "-10.3" },
+                                      "Orange":  { l: "65.4",  a: "43.1",  b: "65.2"  },
+                                      "Violet":  { l: "30.2",  a: "40.1",  b: "-42.3" },
+                                    };
+                                    const lab = ink?.colour ? (COLOR_LAB[ink.colour] ?? null) : null;
+                                    const PROCESS_COLOURS = new Set(["Cyan","Magenta","Yellow","Black"]);
+                                    const autoType: ColorShade["inkType"] = ink?.colour && PROCESS_COLOURS.has(ink.colour) ? "Process" : "Spot";
                                     setCatalogColorShades(p => p.map((c, ci) => ci === i ? {
                                       ...c,
-                                      inkItemId: ink?.id ?? "",
-                                      colorName: ink?.colour || ink?.name || c.colorName,
+                                      inkItemId:  ink?.id ?? "",
+                                      colorName:  ink?.colour || ink?.name || c.colorName,
                                       pantoneRef: ink?.pantoneNo || c.pantoneRef,
+                                      inkType:    ink ? autoType : c.inkType,
+                                      ...(lab ? { labL: lab.l, labA: lab.a, labB: lab.b } : {}),
                                     } as any : c));
                                   }}>
                                   <option value="">-- Select Ink --</option>
@@ -2104,34 +2765,14 @@ export default function ProductCatalogPage() {
                               <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400" value={cs.inkType} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, inkType: e.target.value as ColorShade["inkType"] } : c))}><option value="Spot">Spot</option><option value="Process">Process</option><option value="Special">Special</option></select></td>
                               <td className="px-2 py-1.5"><input placeholder="PMS 485 C" className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.pantoneRef} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, pantoneRef: e.target.value } : c))} /></td>
                               {/* Standard LAB */}
-                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="L*" className="w-14 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labL} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labL: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="a*" className="w-14 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labA} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labA: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="b*" className="w-14 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labB} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labB: e.target.value } : c))} /></td>
-                              {/* Actual LAB */}
-                              <td className="px-2 py-1.5 bg-teal-50/40"><input type="number" step={0.01} placeholder="L*" className="w-14 text-xs border border-teal-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-teal-400 bg-white" value={cs.actualL} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, actualL: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5 bg-teal-50/40"><input type="number" step={0.01} placeholder="a*" className="w-14 text-xs border border-teal-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-teal-400 bg-white" value={cs.actualA} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, actualA: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5 bg-teal-50/40"><input type="number" step={0.01} placeholder="b*" className="w-14 text-xs border border-teal-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-teal-400 bg-white" value={cs.actualB} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, actualB: e.target.value } : c))} /></td>
-                              {/* ΔE Tol */}
-                              <td className="px-2 py-1.5"><input type="number" step={0.1} placeholder="1.0" className="w-14 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-purple-400" value={cs.deltaE} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, deltaE: e.target.value } : c))} /></td>
-                              {/* ΔE Calculated */}
-                              <td className="px-2 py-1.5 text-center">
-                                {calcDE !== null
-                                  ? <span className={`font-bold font-mono text-xs ${pass ? "text-green-700" : "text-red-600"}`}>{calcDE}</span>
-                                  : <span className="text-gray-300 text-xs">—</span>}
-                              </td>
-                              {/* Result Pass/Fail */}
-                              <td className="px-2 py-1.5 text-center">
-                                {pass === true && <span className="px-2 py-0.5 bg-green-100 text-green-700 border border-green-300 rounded-full text-[10px] font-bold">PASS</span>}
-                                {pass === false && <span className="px-2 py-0.5 bg-red-100 text-red-700 border border-red-300 rounded-full text-[10px] font-bold">FAIL</span>}
-                                {pass === null && <span className="text-gray-300 text-xs">—</span>}
-                              </td>
-                              <td className="px-2 py-1.5"><input placeholder="SC-001" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.shadeCardRef} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, shadeCardRef: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400" value={cs.status} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as ColorShade["status"] } : c))}><option value="Pending">Pending</option><option value="Standard Received">Std. Received</option><option value="Approved">Approved</option><option value="Rejected">Rejected</option></select></td>
-                              <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.remarks} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="L*" className="w-24 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labL} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labL: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="a*" className="w-24 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labA} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labA: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="b*" className="w-24 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labB} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, labB: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-36 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.remarks} onChange={e => setCatalogColorShades(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
                             </tr>
                             );
                           })}
-                          {catalogColorShades.length === 0 && <tr><td colSpan={17} className="p-6 text-center text-gray-400 text-xs">No colors. Set No. of Colors in Basic Info tab first.</td></tr>}
+                          {catalogColorShades.length === 0 && <tr><td colSpan={9} className="p-6 text-center text-gray-400 text-xs">No colors. Set No. of Colors in Basic Info tab first.</td></tr>}
                         </tbody>
                       </table>
                     </div>
@@ -2151,61 +2792,160 @@ export default function ProductCatalogPage() {
                 {/* ─── Tool / Cylinder Allocation ─── */}
                 {catalogPrepTab === "tool" && (
                   <div className="space-y-3">
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-2">
-                      <Wrench size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-xs font-bold text-amber-800">Tool & Cylinder Allocation</p>
-                        <p className="text-xs text-amber-700 mt-0.5">Assign print cylinders to each color. Track cylinder status, type, and circumference.</p>
+
+                    {/* Plan info banner */}
+                    {replanSelectedPlan && (
+                      <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 flex flex-wrap gap-4 items-center">
+                        <div className="flex items-center gap-1.5 text-xs"><span className="text-indigo-500 font-semibold uppercase text-[10px]">Plan Cylinder</span><span className="font-bold text-indigo-800">{(replanSelectedPlan as any).cylinderCode}</span></div>
+                        <div className="flex items-center gap-1.5 text-xs"><span className="text-indigo-500 font-semibold uppercase text-[10px]">Circumference</span><span className="font-bold text-indigo-800">{replanSelectedPlan.cylCirc} mm</span></div>
+                        <div className="flex items-center gap-1.5 text-xs"><span className="text-indigo-500 font-semibold uppercase text-[10px]">Repeat UPS</span><span className="font-bold text-indigo-800">{replanSelectedPlan.repeatUPS}×</span></div>
+                        <div className="flex items-center gap-1.5 text-xs"><span className="text-indigo-500 font-semibold uppercase text-[10px]">Print Width</span><span className="font-bold text-indigo-800">{(replanSelectedPlan as any).cylinderWidthVal ?? "—"} mm</span></div>
+                        {(replanSelectedPlan as any).isSpecial && (
+                          <span className="px-2 py-0.5 bg-amber-100 text-amber-700 border border-amber-300 rounded-full text-[10px] font-bold">Special Order Cylinder</span>
+                        )}
+                        <div className="ml-auto flex items-center gap-2">
+                          <button
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-300 text-[11px] font-bold rounded-lg transition"
+                            onClick={refreshFromCylinderMaster}>
+                            <RefreshCw size={11} /> Refresh from Master
+                          </button>
+                          <button
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-[11px] font-bold rounded-lg transition"
+                            onClick={openCylinderMaster}>
+                            <Check size={11} /> Create Cylinder in Master
+                          </button>
+                        </div>
                       </div>
+                    )}
+
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 flex items-start gap-2">
+                      <Wrench size={13} className="text-blue-600 mt-0.5 flex-shrink-0" />
+                      <p className="text-xs text-blue-800">
+                        All colors share <strong>same cylinder</strong> — same Circ, Print Width & Repeat UPS. Only artwork (color code) changes per color.
+                        Editing Circ or Print Width in row 1 auto-applies to all rows.
+                        Click <strong>Create Cylinder in Master</strong> (top right) — only <strong>1 cylinder</strong> will be registered (all colors share it).
+                      </p>
                     </div>
+
                     <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
                       <table className="min-w-full text-[11px] border-collapse">
                         <thead className="bg-amber-700 text-white uppercase tracking-wider">
-                          <tr>{["Color #", "Color Name", "Cylinder No.", "Circumference (mm)", "Type", "Status", "Remarks"].map(h => (
+                          <tr>{["#", "Repeat?", "Product Code", "Color Name", "Cylinder Code", "Cylinder Width (mm)", "Circ. (mm)", "Repeat UPS", "Type", "Status", "Remarks", "Action"].map(h => (
                             <th key={h} className="px-2 py-2 border border-amber-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
                           ))}</tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {catalogCylAllocs.map((ca, i) => (
-                            <tr key={i} className="hover:bg-amber-50/20">
+                          {catalogCylAllocs.map((ca, i) => {
+                            const cn = replanForm?.catalogNo || "";
+                            const m  = cn.match(/(\d+)$/);
+                            const pCode = m ? `P${m[1].padStart(4, "0")}` : cn || "—";
+                            return (
+                            <tr key={i} className={`hover:bg-amber-50/20 ${ca.repeatUse ? "bg-gray-50 opacity-60" : ca.createdInMaster ? "bg-green-50/30" : ""}`}>
                               <td className="px-2 py-1.5 text-center font-black text-amber-700">{ca.colorNo}</td>
+                              {/* Repeat Use checkbox */}
+                              <td className="px-2 py-1.5 text-center">
+                                <label className="flex flex-col items-center gap-0.5 cursor-pointer select-none">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!ca.repeatUse}
+                                    onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, repeatUse: e.target.checked } : c))}
+                                    className="w-4 h-4 accent-orange-500 cursor-pointer"
+                                  />
+                                  {ca.repeatUse && <span className="text-[9px] text-orange-600 font-bold leading-none">Skip</span>}
+                                </label>
+                              </td>
+                              {/* Product Code */}
+                              <td className="px-2 py-1.5 text-center">
+                                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold font-mono whitespace-nowrap">{pCode}</span>
+                              </td>
                               <td className="px-2 py-1.5">
-                                <div className="px-2 py-1 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-lg min-w-[100px]">
+                                <div className="px-2 py-1 text-xs font-semibold text-gray-700 bg-gray-50 border border-gray-200 rounded-lg min-w-[80px] flex items-center gap-1.5">
                                   {catalogColorShades[i]?.colorName || ca.colorName}
                                 </div>
                               </td>
-                              <td className="px-2 py-1.5 min-w-[200px]">
-                                <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400"
-                                  value={(ca as any).toolId ?? ""}
-                                  onChange={e => {
-                                    const tool = CYLINDER_TOOLS_ALL.find(t => t.id === e.target.value);
-                                    setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? {
-                                      ...c,
-                                      toolId: tool?.id ?? "",
-                                      cylinderNo: tool?.code ?? c.cylinderNo,
-                                      circumference: replanSelectedPlan ? String(replanSelectedPlan.cylCirc) : c.circumference,
-                                    } as any : c));
-                                  }}>
-                                  <option value="">{ca.cylinderNo || "-- Select Cylinder --"}</option>
-                                  {CYLINDER_TOOLS_ALL.map(t => <option key={t.id} value={t.id}>{t.code} — {t.name} ({t.printWidth}mm)</option>)}
+                              {/* Cylinder Code */}
+                              <td className="px-2 py-1.5">
+                                <input className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 bg-white"
+                                  placeholder="e.g. CYL-001"
+                                  value={ca.cylinderNo}
+                                  onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderNo: e.target.value } : c))} />
+                              </td>
+                              {/* Cylinder Width (Print Width) — edit propagates to all rows */}
+                              <td className="px-2 py-1.5">
+                                <input type="number" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 text-center"
+                                  value={ca.printWidth}
+                                  onChange={e => setCatalogCylAllocs(p => p.map(c => ({ ...c, printWidth: e.target.value })))} />
+                              </td>
+                              {/* Circumference — edit propagates to all rows */}
+                              <td className="px-2 py-1.5">
+                                <input type="number" className="w-20 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 text-center bg-indigo-50/40"
+                                  value={ca.circumference}
+                                  onChange={e => setCatalogCylAllocs(p => p.map(c => ({ ...c, circumference: e.target.value })))} />
+                              </td>
+                              {/* Repeat UPS */}
+                              <td className="px-2 py-1.5 text-center">
+                                <span className="px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-full text-[10px] font-bold">{ca.repeatUPS}×</span>
+                              </td>
+                              {/* Type */}
+                              <td className="px-2 py-1.5">
+                                <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400"
+                                  value={ca.cylinderType}
+                                  onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderType: e.target.value as CylinderAlloc["cylinderType"] } : c))}>
+                                  <option value="New">New</option>
+                                  <option value="Existing">Existing</option>
+                                  <option value="Repeat">Repeat Cylinder</option>
+                                  <option value="Rechromed">Rechromed</option>
                                 </select>
                               </td>
-                              <td className="px-2 py-1.5"><input type="number" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 text-center" value={ca.circumference} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, circumference: e.target.value } : c))} /></td>
-                              <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400" value={ca.cylinderType} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderType: e.target.value as CylinderAlloc["cylinderType"] } : c))}><option value="Existing">Existing</option><option value="New">New</option><option value="Rechromed">Rechromed</option></select></td>
-                              <td className="px-2 py-1.5"><select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400" value={ca.status} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as CylinderAlloc["status"] } : c))}><option value="Pending">Pending</option><option value="Available">Available</option><option value="In Use">In Use</option><option value="Under Chrome">Under Chrome</option><option value="Ordered">Ordered</option></select></td>
-                              <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-32 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400" value={ca.remarks} onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
+                              {/* Status */}
+                              <td className="px-2 py-1.5">
+                                <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400"
+                                  value={ca.status}
+                                  onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as CylinderAlloc["status"] } : c))}>
+                                  <option value="Pending">Pending</option>
+                                  <option value="Ordered">Ordered</option>
+                                  <option value="Available">Available</option>
+                                  <option value="In Use">In Use</option>
+                                  <option value="Under Chrome">Under Chrome</option>
+                                </select>
+                              </td>
+                              {/* Remarks */}
+                              <td className="px-2 py-1.5">
+                                <input placeholder="Notes…" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400"
+                                  value={ca.remarks}
+                                  onChange={e => setCatalogCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} />
+                              </td>
+                              {/* Create in Master — single cylinder shared by all colors */}
+                              <td className="px-2 py-1.5 text-center">
+                                {catalogCylAllocs[0]?.createdInMaster
+                                  ? <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 border border-green-300 rounded-full text-[10px] font-bold whitespace-nowrap"><Check size={10}/> Created</span>
+                                  : <button
+                                      onClick={openCylinderMaster}
+                                      className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded-lg transition whitespace-nowrap">
+                                      + Create
+                                    </button>
+                                }
+                              </td>
                             </tr>
-                          ))}
-                          {catalogCylAllocs.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-gray-400 text-xs">No cylinders. Set No. of Colors in Basic Info tab first.</td></tr>}
+                          );
+                          })}
+                          {catalogCylAllocs.length === 0 && (
+                            <tr><td colSpan={12} className="p-6 text-center text-gray-400 text-xs">No cylinders. Set No. of Colors in Basic Info tab first.</td></tr>
+                          )}
                         </tbody>
                       </table>
                     </div>
+
                     {catalogCylAllocs.length > 0 && (
-                      <div className="flex gap-2 flex-wrap">
-                        {(["Pending", "Available", "In Use", "Under Chrome", "Ordered"] as const).map(s => {
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <span className="text-[10px] text-gray-400 uppercase font-semibold">Status:</span>
+                        {(["Pending", "Ordered", "Available", "In Use", "Under Chrome"] as const).map(s => {
                           const cnt = catalogCylAllocs.filter(c => c.status === s).length;
                           return cnt > 0 ? <span key={s} className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${s === "Available" ? "bg-green-50 text-green-700 border-green-200" : s === "In Use" ? "bg-blue-50 text-blue-700 border-blue-200" : s === "Under Chrome" ? "bg-orange-50 text-orange-700 border-orange-200" : s === "Ordered" ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>{cnt} {s}</span> : null;
                         })}
+                        <span className="ml-auto text-[10px] text-green-700 font-semibold">
+                          {catalogCylAllocs[0]?.createdInMaster ? "✓ 1 cylinder created in master" : "1 cylinder — not yet created"}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -2221,50 +2961,53 @@ export default function ProductCatalogPage() {
         </Modal>
       )}
 
-      {/* ══ JOB SPEC SHEET PRINT MODAL ═══════════════════════════ */}
+      {/* ══ PRODUCT MASTER SHEET PRINT MODAL ════════════════════ */}
       {printRow && (() => {
         const r = printRow;
-        const machine = PRINT_MACHINES.find(m => m.id === r.machineId);
-        const trim    = r.trimmingSize || 0;
-        const cylMargin = machine ? parseFloat((machine as any).printingMargin || "15") : 15;
-        const cylLen    = machine ? parseFloat((machine as any).repeatLengthMax || "900") : 900;
-        const cylCirc   = r.jobHeight || 0;
-        const cylWidth  = r.actualWidth || r.jobWidth || 0;
-        const slittingTrim = trim * 2;
-        const printingWidth = cylWidth;
-        const today   = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-        const colorRows = r.secondaryLayers?.flatMap(l => l.consumableItems?.filter(ci => ci.itemGroup === "Ink").map(ci => ({ name: ci.itemName || ci.itemSubGroup || "", grade: "" })) ?? []) ?? [];
+        const trim     = r.trimmingSize || 0;
+        const cylWidth = r.actualWidth || r.jobWidth || 0;
+        const today    = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+
+        // Use saved plan data from the row
+        const savedPlan    = replanAllPlans.find(p => p.planId === r.savedPlanId) || null;
+        const colorShades  = (r.savedColorShades as any[]) || [];
+        const cylAllocs    = (r.savedCylAllocs   as any[]) || [];
+
+        // Derive plan values
+        const planFilmW    = savedPlan ? (savedPlan.filmSize ?? cylWidth) : cylWidth;
+        const planCylCirc  = savedPlan ? (savedPlan.cylCirc ?? r.jobHeight ?? 0) : (r.jobHeight ?? 0);
+        const planAcUPS    = savedPlan ? (savedPlan.totalUPS ?? "—") : "—";
+        const planRepUPS   = savedPlan ? ((savedPlan as any).repeatUPS ?? "—") : "—";
+        const planPieces   = savedPlan ? (savedPlan.totalUPS ?? "—") : "—";
+        const planSQM      = savedPlan ? (savedPlan.totalRMT * (r.jobWidth / 1000)).toFixed(2) : "—";
+        const planWastage  = savedPlan ? (savedPlan.wastage ?? 0) : 0;
 
         const handlePrint = () => {
-          const el = document.getElementById("job-spec-print-area");
+          const el = document.getElementById("pms-print-area");
           if (!el) return;
-          const w = window.open("", "_blank", "width=900,height=700");
+          const w = window.open("", "_blank", "width=960,height=750");
           if (!w) return;
-          w.document.write(`<!DOCTYPE html><html><head><title>Job Spec — ${r.catalogNo}</title>
+          w.document.write(`<!DOCTYPE html><html><head><title>Product Master Sheet — ${r.catalogNo}</title>
             <style>
-              *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif;font-size:10px;}
-              body{padding:12px;color:#000;}
-              .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:6px;}
-              .title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:1px;margin:4px 0 8px;}
-              table{width:100%;border-collapse:collapse;margin-bottom:6px;}
-              td,th{border:1px solid #000;padding:3px 5px;vertical-align:top;}
-              th{background:#e8e8e8;font-weight:bold;text-align:left;}
-              .section-title{font-weight:bold;text-decoration:underline;margin:6px 0 3px;}
-              .two-col{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
-              .swatch{width:60px;height:14px;display:inline-block;border:1px solid #999;}
-              .sign-row{display:flex;justify-content:space-between;margin-top:16px;border-top:1px solid #000;padding-top:8px;}
-              .no-border td{border:none;}
-              @media print{body{padding:6px;}}
+              *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif;font-size:9.5px;}
+              body{padding:10px;color:#000;background:#fff;}
+              table{width:100%;border-collapse:collapse;margin-bottom:5px;}
+              td,th{border:1px solid #333;padding:3px 5px;vertical-align:middle;}
+              th{background:#dce6f1;font-weight:bold;text-align:left;white-space:nowrap;}
+              .sec{font-size:10px;font-weight:bold;background:#1e3a5f;color:#fff;padding:3px 6px;margin:7px 0 3px;letter-spacing:.5px;}
+              .center{text-align:center;}
+              .bold{font-weight:bold;}
+              .sign-box{text-align:center;min-width:110px;}
+              .sign-line{border-bottom:1px solid #000;height:28px;margin-bottom:3px;}
+              @media print{body{padding:5px;} @page{margin:8mm;}}
             </style></head><body>${el.innerHTML}</body></html>`);
           w.document.close();
           w.focus();
           setTimeout(() => { w.print(); }, 400);
         };
 
-        const swatchColors = ["#1565C0","#2E7D32","#C62828","#B71C1C","#4527A0","#F57F17","#212121","#6A1B9A","#00695C"];
-
         return (
-          <Modal open onClose={() => setPrintRow(null)} title={`Job Specification Sheet — ${r.catalogNo}`} size="xl">
+          <Modal open onClose={() => setPrintRow(null)} title={`Product Master Sheet — ${r.catalogNo}`} size="xl">
             <div className="flex justify-end mb-3">
               <button onClick={handlePrint}
                 className="flex items-center gap-2 px-4 py-2 bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-bold rounded-xl shadow transition">
@@ -2272,173 +3015,295 @@ export default function ProductCatalogPage() {
               </button>
             </div>
 
-            <div id="job-spec-print-area" className="bg-white text-black text-[11px] p-4 border border-gray-300 rounded-xl font-sans">
-              {/* Header */}
-              <div className="flex justify-between items-start border-b-2 border-black pb-2 mb-2">
+            <div id="pms-print-area" className="bg-white text-black text-[10px] p-4 border border-gray-300 rounded-xl font-sans">
+
+              {/* ── Header ── */}
+              <div className="flex justify-between items-start border-b-2 border-black pb-2 mb-1">
                 <div>
-                  <div className="text-[18px] font-black tracking-widest text-blue-900">AJ SHRINK</div>
-                  <div className="text-[9px] text-gray-600 font-semibold">Flexible Packaging ERP</div>
+                  <div className="text-[20px] font-black tracking-widest" style={{ color: "#1e3a5f" }}>AJ SHRINK</div>
+                  <div className="text-[8px] text-gray-500 font-semibold tracking-wide">FLEXIBLE PACKAGING · GRAVURE PRINTING</div>
                 </div>
-                <div className="text-right text-[9px] leading-tight">
-                  <div className="font-bold">AJSW/QC/CAT/R0</div>
-                  <div>D.O.E — {today}</div>
-                  <div className="mt-1"><strong>Job Code:</strong> {r.catalogNo}</div>
-                  <div><strong>Type:</strong> {r.substrate || r.content || "—"}</div>
+                <div className="text-center px-4">
+                  <div className="text-[16px] font-black tracking-widest uppercase" style={{ color: "#1e3a5f" }}>Product Master Sheet</div>
+                  <div className="text-[8px] text-gray-500 mt-0.5">AJSW / PC / PMS / R0</div>
+                </div>
+                <div className="text-right text-[8.5px] leading-snug">
+                  <div><span className="font-bold">Doc No:</span> {r.catalogNo}</div>
+                  <div><span className="font-bold">Date:</span> {today}</div>
+                  <div><span className="font-bold">Status:</span> {r.status}</div>
+                  <div><span className="font-bold">Created:</span> {r.createdDate}</div>
                 </div>
               </div>
 
-              <div className="text-center text-[15px] font-black tracking-widest uppercase border-b border-black pb-1 mb-3">Job Specification Sheet</div>
-
-              {/* Top info */}
-              <table className="mb-2">
+              {/* ── A. Product Details ── */}
+              <div className="text-[9px] font-black uppercase px-2 py-0.5 mb-1 mt-2" style={{ background: "#1e3a5f", color: "#fff", letterSpacing: "0.5px" }}>A. Product Details</div>
+              <table className="mb-1">
                 <tbody>
                   <tr>
-                    <th style={{ width: "20%" }}>Job Name</th>
-                    <td colSpan={3} className="font-bold">{r.productName}</td>
+                    <th style={{ width: "16%" }}>Product Name</th>
+                    <td colSpan={3} className="font-bold text-[11px]">{r.productName || "—"}</td>
                   </tr>
                   <tr>
                     <th>Customer</th>
-                    <td>{r.customerName}</td>
-                    <th style={{ width: "18%" }}>Order Ref</th>
-                    <td>{r.sourceOrderNo || "—"}</td>
+                    <td style={{ width: "28%" }}>{r.customerName || "—"}</td>
+                    <th style={{ width: "16%" }}>Brand Name</th>
+                    <td>{r.brandName || "—"}</td>
                   </tr>
                   <tr>
-                    <th>Specification</th>
-                    <td>{cylWidth} mm × {r.jobHeight || "—"} mm{r.substrate ? `, ${r.substrate}` : ""}</td>
-                    <th>Print Type</th>
-                    <td>{r.printType}</td>
-                  </tr>
-                  <tr>
+                    <th>Size (W × H)</th>
+                    <td>{r.jobWidth} mm × {r.jobHeight} mm</td>
                     <th>Artwork Name</th>
-                    <td>{(r as any).artworkName || "—"}</td>
-                    <th>Brand Name</th>
-                    <td>{(r as any).brandName || "—"}</td>
+                    <td>{r.artworkName || "—"}</td>
                   </tr>
-                  {(r as any).specialSpecs && (
-                    <tr><th>Special Specs</th><td colSpan={3}>{(r as any).specialSpecs}</td></tr>
+                  <tr>
+                    <th>Substrate</th>
+                    <td>{r.substrate || r.content || "—"}</td>
+                    <th>Category</th>
+                    <td>{r.categoryName || "—"}</td>
+                  </tr>
+                  <tr>
+                    <th>Pack Size</th>
+                    <td>{r.packSize || "—"}</td>
+                    <th>SKU Type</th>
+                    <td>{r.skuType || "—"}</td>
+                  </tr>
+                  <tr>
+                    <th>Address Type</th>
+                    <td>{r.addressType || "—"}</td>
+                    <th>Print Type</th>
+                    <td>{r.printType || "—"}</td>
+                  </tr>
+                  <tr>
+                    <th>No. of Colors</th>
+                    <td>{r.noOfColors} colours ({r.frontColors ?? "—"} F + {r.backColors ?? "—"} B)</td>
+                    <th>Trimming</th>
+                    <td>{trim > 0 ? `${trim}+${trim} mm` : "—"}</td>
+                  </tr>
+                  {r.specialSpecs && (
+                    <tr><th>Special Specs</th><td colSpan={3}>{r.specialSpecs}</td></tr>
+                  )}
+                  {r.remarks && (
+                    <tr><th>Remarks</th><td colSpan={3}>{r.remarks}</td></tr>
                   )}
                 </tbody>
               </table>
 
-              <div className="grid grid-cols-2 gap-3 mb-2">
-                {/* Cylinder Details */}
-                <div>
-                  <div className="font-bold underline mb-1">Cylinder Details</div>
-                  <table>
-                    <tbody>
-                      <tr><th>Repeat (Height)</th><td>{r.jobHeight || "—"} mm{(r.widthShrinkage || 0) > 0 ? ` + ${r.widthShrinkage}mm shrink` : ""}</td></tr>
-                      <tr><th>Width</th><td>{cylWidth} mm</td></tr>
-                      <tr><th>No. of Colours</th><td>{r.noOfColors} colours</td></tr>
-                      <tr><th>Cylinder Circ.</th><td>{r.jobHeight || "—"} mm</td></tr>
-                      <tr><th>Machine</th><td>{r.machineName || "—"}</td></tr>
-                    </tbody>
-                  </table>
-                  <div className="mt-2">
-                    <table>
-                      <thead><tr><th>Printing Width</th><th>Slitting Trim</th><th>Cylinder Margin</th></tr></thead>
-                      <tbody>
-                        <tr>
-                          <td className="text-center font-bold">{printingWidth} mm</td>
-                          <td className="text-center">{slittingTrim} mm</td>
-                          <td className="text-center">{cylMargin} mm</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Printing Details */}
-                <div>
-                  <div className="font-bold underline mb-1">Printing Details</div>
-                  <table>
-                    <tbody>
-                      <tr><th>Printing Type</th><td>{r.printType}</td></tr>
-                      <tr><th>No. of Colors</th><td>{r.noOfColors}</td></tr>
-                      <tr><th>Front Colors</th><td>{r.frontColors || "—"}</td></tr>
-                      <tr><th>Back Colors</th><td>{r.backColors || "—"}</td></tr>
-                      <tr><th>Standard Qty</th><td>{(r.standardQty || 0).toLocaleString()} {r.standardUnit}</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Ink / Color table */}
-              <div className="font-bold underline mb-1">Ink Details</div>
-              <table className="mb-2">
+              {/* ── B. Production Planning ── */}
+              <div className="text-[9px] font-black uppercase px-2 py-0.5 mb-1 mt-2" style={{ background: "#1e3a5f", color: "#fff", letterSpacing: "0.5px" }}>B. Production Planning</div>
+              <table className="mb-1">
                 <thead>
                   <tr>
-                    <th style={{ width: "5%" }}>No.</th>
-                    <th style={{ width: "20%" }}>Ink Name</th>
-                    <th style={{ width: "35%" }}>Ink Code / Grade</th>
-                    <th style={{ width: "25%" }}>Ink Viscosity</th>
-                    <th style={{ width: "15%" }}>Drawdown Sample</th>
+                    <th className="text-center">Film Width (mm)</th>
+                    <th className="text-center">Cyl. Circumference (mm)</th>
+                    <th className="text-center">AC UPS</th>
+                    <th className="text-center">Repeat UPS</th>
+                    <th className="text-center">Total Pieces</th>
+                    <th className="text-center">Total SQM</th>
+                    <th className="text-center">Wastage (mm)</th>
+                    <th className="text-center">Machine</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {colorRows.length > 0 ? colorRows.map((c, i) => (
-                    <tr key={i}>
-                      <td className="text-center">{i + 1}</td>
-                      <td>{c.name || "—"}</td>
-                      <td>{c.grade || "—"}</td>
-                      <td></td>
-                      <td><div style={{ width: 60, height: 14, background: swatchColors[i] ?? "#ccc", border: "1px solid #999" }} /></td>
-                    </tr>
-                  )) : Array.from({ length: r.noOfColors || 4 }, (_, i) => (
-                    <tr key={i}>
-                      <td className="text-center">{i + 1}</td>
-                      <td></td><td></td><td></td>
-                      <td><div style={{ width: 60, height: 14, background: swatchColors[i] ?? "#eee", border: "1px solid #999" }} /></td>
-                    </tr>
-                  ))}
+                  <tr>
+                    <td className="text-center font-bold">{planFilmW}</td>
+                    <td className="text-center font-bold">{planCylCirc}</td>
+                    <td className="text-center">{planAcUPS}</td>
+                    <td className="text-center">{planRepUPS}</td>
+                    <td className="text-center">{planPieces}</td>
+                    <td className="text-center font-bold">{planSQM}</td>
+                    <td className="text-center">{planWastage || "—"}</td>
+                    <td className="text-center">{r.machineName || "—"}</td>
+                  </tr>
                 </tbody>
               </table>
 
-              {/* Slitting + Packing */}
-              <div className="grid grid-cols-2 gap-3 mb-2">
-                <div>
-                  <div className="font-bold underline mb-1">Slitting Details</div>
-                  <table>
-                    <tbody>
-                      <tr><th>Slitting Width</th><td>{cylWidth} mm</td></tr>
-                      <tr><th>Trimming Both Side</th><td>{trim} mm</td></tr>
-                      <tr><th>Core Type</th><td>3" Paper Core</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div>
-                  <div className="font-bold underline mb-1">Packing Details</div>
-                  <table>
-                    <tbody>
-                      <tr><th>Pack Size</th><td>{(r as any).packSize || "—"}</td></tr>
-                      <tr><th>SKU Type</th><td>{(r as any).skuType || "—"}</td></tr>
-                      <tr><th>Address Type</th><td>{(r as any).addressType || "—"}</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Remarks */}
-              {r.remarks && (
-                <table className="mb-2">
-                  <tbody><tr><th style={{ width: "15%" }}>Remarks</th><td>{r.remarks}</td></tr></tbody>
+              {/* ── C. Cylinder Allocation ── */}
+              <div className="text-[9px] font-black uppercase px-2 py-0.5 mb-1 mt-2" style={{ background: "#1e3a5f", color: "#fff", letterSpacing: "0.5px" }}>C. Cylinder Allocation</div>
+              {cylAllocs.length > 0 ? (
+                <table className="mb-1">
+                  <thead>
+                    <tr>
+                      <th className="text-center" style={{ width: "4%" }}>#</th>
+                      <th style={{ width: "18%" }}>Color Name</th>
+                      <th style={{ width: "16%" }}>Cylinder No.</th>
+                      <th className="text-center" style={{ width: "12%" }}>Circumference</th>
+                      <th className="text-center" style={{ width: "12%" }}>Print Width</th>
+                      <th className="text-center" style={{ width: "8%" }}>Rpt UPS</th>
+                      <th style={{ width: "12%" }}>Cyl. Type</th>
+                      <th style={{ width: "12%" }}>Status</th>
+                      <th>Remarks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cylAllocs.map((ca: any, i: number) => (
+                      <tr key={i}>
+                        <td className="text-center">{i + 1}</td>
+                        <td className="font-bold">{ca.colorName || "—"}</td>
+                        <td>{ca.cylinderNo || "—"}</td>
+                        <td className="text-center">{ca.circumference ? `${ca.circumference} mm` : "—"}</td>
+                        <td className="text-center">{ca.printWidth ? `${ca.printWidth} mm` : "—"}</td>
+                        <td className="text-center">{ca.repeatUPS ?? "—"}</td>
+                        <td>{ca.cylinderType || "—"}</td>
+                        <td>{ca.status || "—"}</td>
+                        <td>{ca.remarks || ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="mb-1">
+                  <thead>
+                    <tr>
+                      <th className="text-center" style={{ width: "4%" }}>#</th>
+                      <th style={{ width: "20%" }}>Color Name</th>
+                      <th style={{ width: "18%" }}>Cylinder No.</th>
+                      <th className="text-center">Circumference</th>
+                      <th className="text-center">Print Width</th>
+                      <th className="text-center">Rpt UPS</th>
+                      <th>Type</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: r.noOfColors || 4 }, (_, i) => (
+                      <tr key={i}>
+                        <td className="text-center">{i + 1}</td>
+                        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               )}
 
-              {/* Signatures */}
-              <div className="flex justify-between mt-4 border-t border-black pt-3">
-                <div className="text-center" style={{ minWidth: 120 }}>
-                  <div className="border-b border-black mb-1" style={{ height: 28 }}></div>
-                  <div className="text-[9px] font-bold">Prepared by</div>
-                </div>
-                <div className="text-center" style={{ minWidth: 120 }}>
-                  <div className="border-b border-black mb-1" style={{ height: 28 }}></div>
-                  <div className="text-[9px] font-bold">Checked by</div>
-                </div>
-                <div className="text-center" style={{ minWidth: 120 }}>
-                  <div className="border-b border-black mb-1" style={{ height: 28 }}></div>
-                  <div className="text-[9px] font-bold">Approved by</div>
-                </div>
+              {/* ── D. Color Shade & LAB ── */}
+              <div className="text-[9px] font-black uppercase px-2 py-0.5 mb-1 mt-2" style={{ background: "#1e3a5f", color: "#fff", letterSpacing: "0.5px" }}>D. Color Shade &amp; LAB Standards</div>
+              {colorShades.length > 0 ? (
+                <table className="mb-1">
+                  <thead>
+                    <tr>
+                      <th className="text-center" style={{ width: "4%" }}>#</th>
+                      <th style={{ width: "22%" }}>Ink Item</th>
+                      <th style={{ width: "14%" }}>Color Name</th>
+                      <th style={{ width: "10%" }}>Type</th>
+                      <th style={{ width: "12%" }}>Pantone Ref</th>
+                      <th className="text-center" style={{ width: "6%" }}>L*</th>
+                      <th className="text-center" style={{ width: "6%" }}>A*</th>
+                      <th className="text-center" style={{ width: "6%" }}>B*</th>
+                      <th>Remarks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {colorShades.map((cs: any, i: number) => {
+                      const inkItem = items.find((x: any) => x.id === cs.inkItemId);
+                      return (
+                        <tr key={i}>
+                          <td className="text-center">{i + 1}</td>
+                          <td>{inkItem?.name || cs.inkItemId || "—"}</td>
+                          <td className="font-bold">{cs.colorName || "—"}</td>
+                          <td>{cs.inkType || "—"}</td>
+                          <td>{cs.pantoneRef || "—"}</td>
+                          <td className="text-center">{cs.labL || "—"}</td>
+                          <td className="text-center">{cs.labA || "—"}</td>
+                          <td className="text-center">{cs.labB || "—"}</td>
+                          <td>{cs.remarks || ""}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="mb-1">
+                  <thead>
+                    <tr>
+                      <th className="text-center" style={{ width: "4%" }}>#</th>
+                      <th style={{ width: "22%" }}>Ink Item</th>
+                      <th style={{ width: "14%" }}>Color Name</th>
+                      <th style={{ width: "10%" }}>Type</th>
+                      <th style={{ width: "12%" }}>Pantone Ref</th>
+                      <th className="text-center">L*</th>
+                      <th className="text-center">A*</th>
+                      <th className="text-center">B*</th>
+                      <th>Remarks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: r.noOfColors || 4 }, (_, i) => (
+                      <tr key={i}>
+                        <td className="text-center">{i + 1}</td>
+                        <td></td><td></td><td></td><td></td>
+                        <td></td><td></td><td></td><td></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* ── E. Ply / Structure ── */}
+              {r.secondaryLayers && r.secondaryLayers.length > 0 && (
+                <>
+                  <div className="text-[9px] font-black uppercase px-2 py-0.5 mb-1 mt-2" style={{ background: "#1e3a5f", color: "#fff", letterSpacing: "0.5px" }}>E. Ply / Structure Details</div>
+                  <table className="mb-1">
+                    <thead>
+                      <tr>
+                        <th style={{ width: "4%" }}>#</th>
+                        <th style={{ width: "12%" }}>Ply Type</th>
+                        <th style={{ width: "22%" }}>Film / Material</th>
+                        <th className="text-center" style={{ width: "8%" }}>GSM</th>
+                        <th>Consumables</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {r.secondaryLayers.map((l, li) => {
+                        const consumablesSummary = l.consumableItems
+                          .filter((ci: any) => ci.itemName || ci.itemSubGroup)
+                          .map((ci: any) => `${ci.itemName || ci.itemSubGroup} (${ci.gsm ?? 0} ${ci.itemGroup === "Ink" ? "GSM" : ci.itemGroup === "Solvent" ? "%" : "GSM"})`)
+                          .join(" · ");
+                        return (
+                          <tr key={li}>
+                            <td className="text-center">{li + 1}</td>
+                            <td className="font-bold">{l.plyType || "—"}</td>
+                            <td>{l.itemSubGroup || l.plyType || "—"}</td>
+                            <td className="text-center">{l.gsm || "—"}</td>
+                            <td className="text-[8.5px]">{consumablesSummary || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </>
+              )}
+
+              {/* ── F. Slitting & Packing ── */}
+              <div className="text-[9px] font-black uppercase px-2 py-0.5 mb-1 mt-2" style={{ background: "#1e3a5f", color: "#fff", letterSpacing: "0.5px" }}>F. Slitting &amp; Packing</div>
+              <div className="grid grid-cols-2 gap-2 mb-1">
+                <table>
+                  <tbody>
+                    <tr><th style={{ width: "50%" }}>Slitting Width</th><td>{cylWidth} mm</td></tr>
+                    <tr><th>Trimming</th><td>{trim > 0 ? `${trim}+${trim} mm` : "—"}</td></tr>
+                    <tr><th>Core Type</th><td>3&quot; Paper Core</td></tr>
+                    <tr><th>Order Ref</th><td>{r.sourceOrderNo || "—"}</td></tr>
+                  </tbody>
+                </table>
+                <table>
+                  <tbody>
+                    <tr><th style={{ width: "50%" }}>Pack Size</th><td>{r.packSize || "—"}</td></tr>
+                    <tr><th>SKU Type</th><td>{r.skuType || "—"}</td></tr>
+                    <tr><th>Address Type</th><td>{r.addressType || "—"}</td></tr>
+                    <tr><th>Standard Qty</th><td>{(r.standardQty || 0).toLocaleString()} {r.standardUnit}</td></tr>
+                  </tbody>
+                </table>
               </div>
+
+              {/* ── Signatures ── */}
+              <div className="flex justify-between mt-4 pt-3 border-t-2 border-black">
+                {["Prepared by", "Reviewed by", "Approved by", "Customer Sign"].map(label => (
+                  <div key={label} className="text-center" style={{ minWidth: 100 }}>
+                    <div className="border-b border-black mb-1" style={{ height: 30 }}></div>
+                    <div className="text-[8px] font-bold">{label}</div>
+                  </div>
+                ))}
+              </div>
+
             </div>
           </Modal>
         );
@@ -2506,7 +3371,7 @@ export default function ProductCatalogPage() {
                   { l: "Job Height",  v: `${jobH} mm`,    cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
                   { l: "Job Width",   v: `${jobW} mm`,    cls: "bg-blue-50 text-blue-700 border-blue-200" },
                   { l: "Lane Width",  v: `${laneW} mm`,   cls: "bg-purple-50 text-purple-700 border-purple-200" },
-                  { l: "Trimming",    v: trim > 0 ? `${trim} mm` : "—", cls: "bg-orange-50 text-orange-700 border-orange-200" },
+                  { l: "Trimming",    v: trim > 0 ? `${trim}+${trim} mm` : "—", cls: "bg-orange-50 text-orange-700 border-orange-200" },
                 ].map(s => (
                   <div key={s.l} className={`px-2.5 py-1.5 rounded-lg border font-medium ${s.cls}`}>
                     <span className="opacity-60 text-[10px] uppercase tracking-wider block leading-none mb-0.5">{s.l}</span>
@@ -2598,10 +3463,10 @@ export default function ProductCatalogPage() {
                   { l: "Film Width",  v: `${filmW} mm`,  cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
                   { l: "AC UPS",      v: String(acUps),   cls: "bg-purple-50 text-purple-700 border-purple-200" },
                   { l: "Job Width",   v: `${jobW} mm`,    cls: "bg-blue-50 text-blue-700 border-blue-200" },
-                  { l: "Repeat Shrink", v: shrink > 0 ? `+${shrink} mm (on height)` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
-                  { l: "Trimming",    v: trim > 0 ? `${trim} mm` : "—",      cls: "bg-orange-50 text-orange-700 border-orange-200" },
+                  { l: "Repeat Shrink", v: shrink > 0 ? `+${shrink} mm (on repeat length)` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                  { l: "Trimming",    v: trim > 0 ? `${trim}+${trim} mm` : "—",      cls: "bg-orange-50 text-orange-700 border-orange-200" },
                   { l: "Repeat UPS",  v: String(plan.repeatUPS), cls: "bg-teal-50 text-teal-700 border-teal-200" },
-                  { l: "Total UPS",   v: String(plan.totalUPS),  cls: "bg-green-50 text-green-700 border-green-200" },
+                  { l: "Total Pieces", v: String(plan.totalUPS),  cls: "bg-green-50 text-green-700 border-green-200" },
                   { l: "Cylinder",    v: plan.cylinderCode,       cls: "bg-violet-50 text-violet-700 border-violet-200" },
                   { l: "Cyl. Circ",   v: `${plan.cylCirc} mm`,   cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
                 ].map(s => (
@@ -2612,47 +3477,221 @@ export default function ProductCatalogPage() {
                 ))}
               </div>
 
-              {/* Visual strip */}
-              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3">Film Web Cross-Section View (top view, not to scale)</p>
-                <div className="flex items-stretch rounded-md overflow-hidden border border-gray-300 shadow" style={{ height: 56 }}>
-                  {sections.map((sec, i) => (
-                    <div key={i}
-                      style={{ width: toW(sec.mm), background: sec.color, borderRight: i < sections.length - 1 ? "1px solid rgba(0,0,0,0.10)" : "none", flexShrink: 0 }}
-                      className="flex flex-col items-center justify-center overflow-hidden relative group"
-                      title={`${sec.label}`}>
-                      {toW(sec.mm) > 18 && (
-                        <span className="text-[8px] font-bold leading-none" style={{ color: sec.text, writingMode: "horizontal-tb" }}>{sec.label}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
+              {/* ── Combined 2D Layout Diagram ── */}
+              {(() => {
+                const effRepeat = (replanForm.jobHeight || 0) + shrink;
+                const repeatUPS = plan.repeatUPS as number;
+                const cylCirc   = plan.cylCirc   as number;
+                const jobH      = replanForm.jobHeight || 0;
 
-                {/* Bottom ruler */}
-                <div className="flex mt-1" style={{ width: CANVAS }}>
-                  <span className="text-[9px] text-gray-400">0</span>
-                  <span className="flex-1 text-center text-[9px] text-gray-400">{Math.round(filmW / 2)} mm</span>
-                  <span className="text-[9px] text-gray-400">{filmW} mm</span>
-                </div>
+                // SVG canvas
+                const SVG_W = 730;   // extra 70px right for height arrow
+                const SVG_H = 415;   // extra 55px bottom for width arrow
+                const RULER_LEFT  = 36;  // left ruler width
+                const RULER_BTM   = 22;  // bottom ruler height
+                const drawW = 660 - RULER_LEFT;  // keep same scale (old SVG_W)
+                const drawH = 360 - RULER_BTM;   // keep same scale (old SVG_H)
 
-                {/* Legend */}
-                <div className="flex flex-wrap gap-3 mt-3">
-                  {[
-                    { color: "#e0e7ff", border: "#6366f1", label: `Job Width (${jobW}mm × ${acUps} lanes)` },
-                    ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: `Repeat Shrinkage (+${shrink}mm on repeat length — does not affect film width)` }] : []),
-                    ...(trim > 0   ? [{ color: "#fed7aa", border: "#c2410c", label: `Trimming (left ${trim}mm + right ${trim}mm = ${2 * trim}mm total)` }] : []),
-                  ].map(l => (
-                    <div key={l.label} className="flex items-center gap-1.5">
-                      <div className="w-4 h-4 rounded border-2 flex-shrink-0" style={{ background: l.color, borderColor: l.border }} />
-                      <span className="text-[11px] text-gray-600">{l.label}</span>
+                // scales
+                const sx = (mm: number) => mm * (drawW / filmW);
+                const sy = (mm: number) => mm * (drawH / cylCirc);
+
+                // column x positions
+                const trimPx = sx(trim);
+                const lanePx = sx(jobW);
+
+                // repeat row heights
+                const repPx  = sy(effRepeat);
+
+                // colours
+                const C_TRIM  = "#fed7aa";
+                const C_LANE  = ["#dbeafe", "#bfdbfe"]; // alternating lane blues
+                const C_DASH  = "#6366f1";
+                const C_LABEL = "#1e40af";
+
+                return (
+                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3">
+                      Full Layout — {acUps} AC UPS × {repeatUPS} Repeat UPS = {plan.totalUPS} Total Pieces &nbsp;|&nbsp;
+                      Film {filmW}mm × Cyl. Circ {cylCirc}mm
+                    </p>
+
+                    <svg width={SVG_W} height={SVG_H} className="w-full" viewBox={`0 0 ${SVG_W} ${SVG_H}`}>
+                      <defs>
+                        <pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                          <line x1="0" y1="0" x2="0" y2="5" stroke="#f97316" strokeWidth="1.5" opacity="0.4"/>
+                        </pattern>
+                        {/* Arrowhead markers for dimension lines */}
+                        <marker id="dim-end" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+                          <path d="M0,0.5 L6,3.5 L0,6.5 Z" fill="#374151"/>
+                        </marker>
+                        <marker id="dim-start" markerWidth="7" markerHeight="7" refX="1" refY="3.5" orient="auto-start-reverse">
+                          <path d="M0,0.5 L6,3.5 L0,6.5 Z" fill="#374151"/>
+                        </marker>
+                      </defs>
+
+                      {/* ── Draw each repeat row ── */}
+                      {Array.from({ length: repeatUPS }, (_, ri) => {
+                        const ry = RULER_LEFT + ri * repPx;
+                        let cx = 0;
+                        const cells = [];
+
+                        // left trim
+                        if (trim > 0) {
+                          cells.push(<rect key={`lt-${ri}`} x={cx} y={ry} width={trimPx} height={repPx} fill={C_TRIM} stroke="#f97316" strokeWidth={0.5} />);
+                        }
+                        cx += trimPx;
+
+                        // job lanes
+                        for (let li = 0; li < acUps; li++) {
+                          const bg = C_LANE[li % 2];
+                          const laneStartX = cx;
+                          cells.push(
+                            <g key={`l-${ri}-${li}`}>
+                              <rect x={cx} y={ry} width={lanePx} height={repPx} fill={bg} stroke="#6366f1" strokeWidth={0.4} />
+                              {/* Width arrow in every cell */}
+                              {lanePx > 30 && repPx > 18 && (() => {
+                                const ax1 = laneStartX + 5;
+                                const ax2 = laneStartX + lanePx - 5;
+                                const ay  = ry + repPx / 2;
+                                return (
+                                  <g key="w-arrow">
+                                    <line x1={ax1} y1={ay} x2={ax2} y2={ay}
+                                      stroke="#1e40af" strokeWidth="1.3"
+                                      markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
+                                    <rect x={laneStartX + lanePx / 2 - 22} y={ay - 8} width={44} height={12} fill="rgba(255,255,255,0.85)" rx={2} />
+                                    <text x={laneStartX + lanePx / 2} y={ay + 3} textAnchor="middle" fontSize={8} fill="#1e40af" fontWeight="700">
+                                      {jobW} mm
+                                    </text>
+                                  </g>
+                                );
+                              })()}
+                            </g>
+                          );
+                          cx += lanePx;
+                        }
+
+                        // right trim
+                        if (trim > 0) {
+                          cells.push(<rect key={`rt-${ri}`} x={cx} y={ry} width={trimPx} height={repPx} fill={C_TRIM} stroke="#f97316" strokeWidth={0.5} />);
+                          cx += trimPx;
+                        }
+
+                        // repeat boundary dashed line
+                        const dashLine = ri < repeatUPS - 1
+                          ? <line key={`dh-${ri}`} x1={0} y1={ry + repPx} x2={cx} y2={ry + repPx} stroke={C_DASH} strokeWidth={1} strokeDasharray="4 3" />
+                          : null;
+
+                        // Left repeat-length arrow — one per row
+                        const rulerLabel = repPx > 20 ? (
+                          <g key={`rl-${ri}`}>
+                            <line x1={15} y1={ry + 4} x2={15} y2={ry + repPx - 4}
+                              stroke="#374151" strokeWidth="1.3"
+                              markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
+                            <rect x={2} y={ry + repPx / 2 - 22} width={14} height={44} fill="white" />
+                            <text x={15} y={ry + repPx / 2} textAnchor="middle" fontSize={8} fill="#111827" fontWeight="700"
+                              transform={`rotate(-90, 15, ${ry + repPx / 2})`}>
+                              {effRepeat} mm
+                            </text>
+                          </g>
+                        ) : null;
+
+                        return [rulerLabel, ...cells, dashLine];
+                      })}
+
+                      {/* bottom ruler last tick — intentionally blank (arrows carry the labels) */}
+
+                      {/* ── Bottom ruler (width) ── */}
+                      {(() => {
+                        const ry = RULER_LEFT + repeatUPS * repPx + 4;
+                        let cx = 0;
+                        const ticks = [];
+                        // 0
+                        ticks.push(<text key="t0" x={cx} y={ry + 8} fontSize={7} fill="#9ca3af">0</text>);
+                        if (trim > 0) {
+                          cx += trimPx;
+                          ticks.push(<text key="tt" x={cx} y={ry + 8} fontSize={7} fill="#f97316" textAnchor="middle">{trim}</text>);
+                        }
+                        for (let li = 0; li <= acUps; li++) {
+                          const xmm = trim + li * jobW;
+                          const xpx = sx(xmm);
+                          ticks.push(
+                            <g key={`bt-${li}`}>
+                              <line x1={xpx} y1={ry - 2} x2={xpx} y2={ry + 2} stroke="#9ca3af" strokeWidth={0.8} />
+                              {(li === 0 || li === acUps || li === Math.floor(acUps / 2)) && (
+                                <text x={xpx} y={ry + 9} fontSize={7} fill="#6b7280" textAnchor="middle">{xmm}</text>
+                              )}
+                            </g>
+                          );
+                        }
+                        ticks.push(<text key="total" x={sx(filmW)} y={ry + 9} fontSize={7} fill="#6b7280" textAnchor="end">{filmW}mm</text>);
+                        return ticks;
+                      })()}
+
+                      {/* ── Bottom horizontal dimension arrow — Total Film Width ── */}
+                      {(() => {
+                        const arrowY = RULER_LEFT + repeatUPS * repPx + RULER_BTM + 14;
+                        const midX   = drawW / 2;
+                        return (
+                          <g>
+                            <line x1={0} y1={arrowY} x2={drawW} y2={arrowY}
+                              stroke="#374151" strokeWidth="1.4"
+                              markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
+                            {/* end tick lines */}
+                            <line x1={0} y1={arrowY - 6} x2={0} y2={arrowY + 6} stroke="#374151" strokeWidth="1" />
+                            <line x1={drawW} y1={arrowY - 6} x2={drawW} y2={arrowY + 6} stroke="#374151" strokeWidth="1" />
+                            <rect x={midX - 42} y={arrowY - 7} width={84} height={13} fill="white" />
+                            <text x={midX} y={arrowY + 4} textAnchor="middle" fontSize={10} fill="#111827" fontWeight="700">
+                              Total Film Width: {filmW} mm
+                            </text>
+                          </g>
+                        );
+                      })()}
+
+                      {/* ── Right vertical dimension arrow — Cylinder Circumference ── */}
+                      {(() => {
+                        const arrX = drawW + 34;
+                        const y1   = RULER_LEFT;
+                        const y2   = RULER_LEFT + repeatUPS * repPx;
+                        const midY = (y1 + y2) / 2;
+                        return (
+                          <g>
+                            <line x1={arrX} y1={y1} x2={arrX} y2={y2}
+                              stroke="#374151" strokeWidth="1.4"
+                              markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
+                            {/* end tick lines */}
+                            <line x1={arrX - 6} y1={y1} x2={arrX + 6} y2={y1} stroke="#374151" strokeWidth="1" />
+                            <line x1={arrX - 6} y1={y2} x2={arrX + 6} y2={y2} stroke="#374151" strokeWidth="1" />
+                            <rect x={arrX - 6} y={midY - 38} width={12} height={76} fill="white" />
+                            <text x={arrX} y={midY} textAnchor="middle" fontSize={10} fill="#111827" fontWeight="700"
+                              transform={`rotate(-90, ${arrX}, ${midY})`}>
+                              Cyl. Circ: {cylCirc} mm
+                            </text>
+                          </g>
+                        );
+                      })()}
+                    </svg>
+
+                    {/* Legend */}
+                    <div className="flex flex-wrap gap-3 mt-3 pt-2 border-t border-gray-200">
+                      {[
+                        { color: "#dbeafe", border: "#6366f1", label: `Job cell — ${jobW}mm wide × ${effRepeat}mm repeat length` },
+                        ...(trim > 0 ? [{ color: C_TRIM, border: "#f97316", label: `Trim both sides (${trim}mm each)` }] : []),
+                        ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: `Shrinkage +${shrink}mm on repeat length` }] : []),
+                      ].map(l => (
+                        <div key={l.label} className="flex items-center gap-1.5">
+                          <div className="w-4 h-4 rounded border-2 flex-shrink-0" style={{ background: l.color, borderColor: l.border }} />
+                          <span className="text-[11px] text-gray-600">{l.label}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+                );
+              })()}
 
               {/* Width (Film) Lane-by-Lane breakdown */}
               <div>
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Lane-by-Lane Breakdown — Width Direction</p>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">UPS-by-UPS Breakdown — Width Direction</p>
                 <div className="overflow-x-auto rounded-xl border border-gray-200">
                   <table className="min-w-full text-xs">
                     <thead className="bg-gray-100">
@@ -2668,7 +3707,7 @@ export default function ProductCatalogPage() {
                       )}
                       {Array.from({ length: acUps }, (_, i) => (
                         <tr key={`lane-${i}`}>
-                          <td className="px-3 py-1.5 text-gray-500">Lane {i + 1}</td>
+                          <td className="px-3 py-1.5 text-gray-500">{i + 1} UPS</td>
                           <td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#e0e7ff", color: "#4338ca" }}>Job Width</span></td>
                           <td className="px-3 py-1.5 font-mono font-bold text-indigo-600">{jobW}</td>
                           <td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#e0e7ff", border: "1px solid #6366f1" }} /></td>
@@ -2692,7 +3731,7 @@ export default function ProductCatalogPage() {
 
               {/* Repeat (Height) direction breakdown */}
               <div>
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Repeat UPS Breakdown — Height Direction</p>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Repeat UPS Breakdown — Repeat Length Direction</p>
                 <div className="overflow-x-auto rounded-xl border border-gray-200">
                   <table className="min-w-full text-xs">
                     <thead className="bg-gray-100">
@@ -2710,7 +3749,7 @@ export default function ProductCatalogPage() {
                       </tr>
                       {shrink > 0 && (
                         <tr>
-                          <td className="px-3 py-1.5 text-gray-600">+ Shrinkage (on height)</td>
+                          <td className="px-3 py-1.5 text-gray-600">+ Shrinkage (on repeat length)</td>
                           <td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">+{shrink} mm</td>
                           <td className="px-3 py-1.5 text-gray-400 text-[10px]">Applied to repeat length only</td>
                         </tr>

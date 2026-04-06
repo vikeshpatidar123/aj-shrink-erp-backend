@@ -43,6 +43,7 @@ const pageTitles: Record<string, string> = {
   "/tool-inventory/tool-return":           "Tool Return",
   "/tool-inventory/tool-transfer":         "Tool Transfer",
   "/tool-inventory/physical-verification": "Tool Physical Verification",
+  "/email": "Email",
 };
 
 const AUTH_PATHS = ["/login", "/login/user"];
@@ -72,15 +73,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <EnquiryProvider>
     <CategoriesProvider>
     <UnitProvider>
-      <div className="flex h-screen overflow-hidden" style={{ background: "var(--background)" }}>
+      <div className="flex" style={{ height: "100vh", width: "100vw", overflow: "hidden", background: "var(--background)" }}>
         <Sidebar
           mobileOpen={mobileOpen}
           desktopOpen={desktopOpen}
           onClose={() => setMobileOpen(false)}
+          onNavClick={() => setDesktopOpen(false)}
         />
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="flex flex-col min-w-0" style={{ flex: 1, overflow: "hidden" }}>
           <Topbar onMenuClick={handleMenuClick} title={title} />
-          <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-7">{children}</main>
+          <main
+            className="p-4 md:p-6 lg:p-7"
+            style={{ flex: 1, overflowY: "scroll", overflowX: "hidden" }}
+          >
+            {children}
+          </main>
         </div>
       </div>
     </UnitProvider>

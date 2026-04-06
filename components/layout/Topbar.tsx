@@ -1,8 +1,10 @@
 "use client";
 import { useState } from "react";
-import { Menu, Bell, Search, User, LogOut, ChevronDown, Settings } from "lucide-react";
+import { Menu, Search, User, LogOut, ChevronDown, Settings, Mail } from "lucide-react";
 import { useUnit, BusinessUnit } from "@/context/UnitContext";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import NotificationPanel from "./NotificationPanel";
 
 interface TopbarProps {
   onMenuClick: () => void;
@@ -12,7 +14,6 @@ interface TopbarProps {
 const UNITS: { value: BusinessUnit; label: string }[] = [
   { value: "Extrusion", label: "Extrusion" },
   { value: "Gravure",   label: "Gravure"   },
-  { value: "Both",      label: "Both"      },
 ];
 
 export default function Topbar({ onMenuClick, title }: TopbarProps) {
@@ -90,11 +91,14 @@ export default function Topbar({ onMenuClick, title }: TopbarProps) {
           />
         </div>
 
-        {/* Bell */}
-        <button className="relative p-2 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
-          <Bell size={16} />
-          <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full" />
-        </button>
+        {/* Bell — Notification Panel */}
+        <NotificationPanel />
+
+        {/* Email */}
+        <Link href="/email"
+          className="p-2 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors hidden md:flex">
+          <Mail size={16} />
+        </Link>
 
         {/* Settings — md+ only */}
         <button className="p-2 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors hidden md:flex">

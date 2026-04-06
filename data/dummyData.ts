@@ -43,6 +43,7 @@ export type PlyConsumableItem = {
   solidPct?: number;         // ink solid content % (default 40), used to calc liquid GSM
   ohPct?: number;            // OH% for Adhesive items
   ncoPct?: number;           // NCO% for Hardener items (Hardener GSM = Adhesive_GSM × OH% / NCO%)
+  isClone?: boolean;         // true if created via Clone button (label stays "Consumable 1")
 };
 
 export type CategoryMaster = {
@@ -134,6 +135,9 @@ export type Customer = {
   id: string; code: string; name: string; contact: string; phone: string;
   email: string; city: string; state: string; gst: string;
   status: "Active" | "Inactive"; createdAt: string;
+  packSizes?: string[];
+  brandNames?: string[];
+  skuTypes?: string[];
 };
 
 export type RawMaterial = {
@@ -219,6 +223,13 @@ export const tools: Tool[] = [
   // Doctor Blades
   { id: "T010", code: "DB-001", name: "Steel Doctor Blade – ROTO-01", toolType: "Doctor Blade", ...bt, machine: "ROTO-01", material: "Steel", bladeWidth: "60", bladeThickness: "0.15", bladeLength: "1400", location: "Consumables Store" },
   { id: "T011", code: "DB-002", name: "Composite Blade – ROTO-02", toolType: "Doctor Blade", ...bt, machine: "ROTO-02", material: "Composite", bladeWidth: "60", bladeThickness: "0.20", bladeLength: "1500", location: "Consumables Store" },
+  // Doctor Blades sized for demo (+51+51 = +102mm over each sleeve → Cyl Extra = +2)
+  { id: "T053", code: "DB-003", name: "Steel Blade 422mm (+51+51 for Sleeve 320mm)", toolType: "Doctor Blade", ...bt, material: "Steel", bladeWidth: "60", bladeThickness: "0.15", bladeLength: "422", location: "Consumables Store" },
+  { id: "T054", code: "DB-004", name: "Steel Blade 522mm (+51+51 for Sleeve 420mm)", toolType: "Doctor Blade", ...bt, material: "Steel", bladeWidth: "60", bladeThickness: "0.15", bladeLength: "522", location: "Consumables Store" },
+  { id: "T055", code: "DB-005", name: "Steel Blade 632mm (+51+51 for Sleeve 530mm)", toolType: "Doctor Blade", ...bt, material: "Steel", bladeWidth: "60", bladeThickness: "0.15", bladeLength: "632", location: "Consumables Store" },
+  { id: "T056", code: "DB-006", name: "Composite Blade 742mm (+51+51 for Sleeve 640mm)", toolType: "Doctor Blade", ...bt, material: "Composite", bladeWidth: "60", bladeThickness: "0.20", bladeLength: "742", location: "Consumables Store" },
+  { id: "T057", code: "DB-007", name: "Composite Blade 842mm (+51+51 for Sleeve 740mm)", toolType: "Doctor Blade", ...bt, material: "Composite", bladeWidth: "60", bladeThickness: "0.20", bladeLength: "842", location: "Consumables Store" },
+  { id: "T058", code: "DB-008", name: "Steel Blade 1102mm (+51+51 for Sleeve 1000mm)", toolType: "Doctor Blade", ...bt, material: "Steel", bladeWidth: "60", bladeThickness: "0.15", bladeLength: "1102", location: "Consumables Store" },
   // Impression Rollers
   { id: "T012", code: "IR-001", name: "Rubber Impression Roller – ROTO-01", toolType: "Impression Roller", ...bt, machine: "ROTO-01", material: "Rubber", rollDiameter: "220", rollWidth: "1400", hardness: "70", location: "Press Room – ROTO-01" },
   { id: "T013", code: "IR-002", name: "PU Impression Roller – ROTO-03", toolType: "Impression Roller", ...bt, machine: "ROTO-03", material: "Polyurethane", rollDiameter: "240", rollWidth: "1650", hardness: "75", location: "Press Room – ROTO-03" },
@@ -318,6 +329,16 @@ export const toolInventory: ToolInventory[] = [
   { id: "TI049", code: "INV-T049-A", toolId: "T049", toolCode: "CYL-DEM-001", toolName: "Cylinder 1100mm – Circ 480mm", toolType: "Cylinder", serialNo: "SN-CYL-049", condition: "New", status: "Available", location: "Rack F-1", remarks: "" },
   { id: "TI050", code: "INV-T050-A", toolId: "T050", toolCode: "CYL-DEM-002", toolName: "Cylinder 1100mm – Circ 360mm", toolType: "Cylinder", serialNo: "SN-CYL-050", condition: "New", status: "Available", location: "Rack F-2", remarks: "" },
   { id: "TI051", code: "INV-T051-A", toolId: "T051", toolCode: "CYL-DEM-003", toolName: "Cylinder 1100mm – Circ 240mm", toolType: "Cylinder", serialNo: "SN-CYL-051", condition: "New", status: "Available", location: "Rack F-3", remarks: "" },
+  // Doctor Blade inventory — Available (existing large blades)
+  { id: "TI010", code: "INV-DB-001", toolId: "T010", toolCode: "DB-001", toolName: "Steel Doctor Blade 1400mm – ROTO-01", toolType: "Doctor Blade", serialNo: "SN-DB-001", condition: "Good", status: "Available", location: "Consumables Store", remarks: "" },
+  { id: "TI011", code: "INV-DB-002", toolId: "T011", toolCode: "DB-002", toolName: "Composite Blade 1500mm – ROTO-02", toolType: "Doctor Blade", serialNo: "SN-DB-002", condition: "Good", status: "Available", location: "Consumables Store", remarks: "" },
+  // Doctor Blade inventory — Demo blades (+51+51 over each sleeve)
+  { id: "TI053", code: "INV-DB-003", toolId: "T053", toolCode: "DB-003", toolName: "Steel Blade 422mm (+51+51 for Sleeve 320mm)", toolType: "Doctor Blade", serialNo: "SN-DB-003", condition: "New", status: "Available", location: "Consumables Store", remarks: "" },
+  { id: "TI054", code: "INV-DB-004", toolId: "T054", toolCode: "DB-004", toolName: "Steel Blade 522mm (+51+51 for Sleeve 420mm)", toolType: "Doctor Blade", serialNo: "SN-DB-004", condition: "New", status: "Available", location: "Consumables Store", remarks: "" },
+  { id: "TI055", code: "INV-DB-005", toolId: "T055", toolCode: "DB-005", toolName: "Steel Blade 632mm (+51+51 for Sleeve 530mm)", toolType: "Doctor Blade", serialNo: "SN-DB-005", condition: "New", status: "Available", location: "Consumables Store", remarks: "" },
+  { id: "TI056", code: "INV-DB-006", toolId: "T056", toolCode: "DB-006", toolName: "Composite Blade 742mm (+51+51 for Sleeve 640mm)", toolType: "Doctor Blade", serialNo: "SN-DB-006", condition: "New", status: "Available", location: "Consumables Store", remarks: "" },
+  { id: "TI057", code: "INV-DB-007", toolId: "T057", toolCode: "DB-007", toolName: "Composite Blade 842mm (+51+51 for Sleeve 740mm)", toolType: "Doctor Blade", serialNo: "SN-DB-007", condition: "New", status: "Available", location: "Consumables Store", remarks: "" },
+  { id: "TI058", code: "INV-DB-008", toolId: "T058", toolCode: "DB-008", toolName: "Steel Blade 1102mm (+51+51 for Sleeve 1000mm)", toolType: "Doctor Blade", serialNo: "SN-DB-008", condition: "New", status: "Available", location: "Consumables Store", remarks: "" },
 ];
 
 // ─── Tool Inventory Transaction Types ────────────────────────
@@ -1097,7 +1118,12 @@ export const items: Item[] = [
   { id: "ITM009", code: "RM-INK-003", name: "MAGENTA INK SOLVENT BASED", category: "Raw Material (RM)", group: "Ink", subGroup: "Solvent Based Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, supplier: "Huber Group", supplierRef: "HB-MAG-SB", reOrderQty: "50", minStockQty: "20", shelfLife: "365", leadTime: "14", colour: "Magenta", pantoneNo: "P 52-8 C", substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "490.00", estimationRate: "500.00", remarks: "" },
   { id: "ITM010", code: "RM-INK-004", name: "BLACK INK SOLVENT BASED", category: "Raw Material (RM)", group: "Ink", subGroup: "Solvent Based Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, supplier: "Huber Group", supplierRef: "HB-BLK-SB", reOrderQty: "100", minStockQty: "40", shelfLife: "365", leadTime: "14", isRegularItem: true, colour: "Black", pantoneNo: "Process Black C", substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "420.00", estimationRate: "430.00", remarks: "Huber Group" },
   { id: "ITM013", code: "RM-INK-005", name: "WHITE INK WATER BASED", category: "Raw Material (RM)", group: "Ink", subGroup: "Water Based Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, supplier: "Sakata Inx India", reOrderQty: "50", minStockQty: "20", shelfLife: "180", leadTime: "14", colour: "White", substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "380.00", estimationRate: "390.00", remarks: "Water based white ink" },
-  { id: "ITM014", code: "RM-INK-006", name: "RED INK PU BASED", category: "Raw Material (RM)", group: "Ink", subGroup: "PU Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, supplier: "Toyo Ink", reOrderQty: "30", minStockQty: "10", shelfLife: "365", leadTime: "14", colour: "Red", substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "520.00", estimationRate: "535.00", remarks: "" },
+  { id: "ITM014",  code: "RM-INK-006", name: "RED INK PU BASED",    category: "Raw Material (RM)", group: "Ink", subGroup: "PU Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, pantoneNo: "PMS 485 C",   supplier: "Toyo Ink",          reOrderQty: "30", minStockQty: "10", shelfLife: "365", leadTime: "14", colour: "Red",     substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "520.00", estimationRate: "535.00", remarks: "" },
+  { id: "ITM014B", code: "RM-INK-007", name: "YELLOW INK PU BASED", category: "Raw Material (RM)", group: "Ink", subGroup: "PU Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, pantoneNo: "PMS 012 C",   supplier: "Toyo Ink",          reOrderQty: "30", minStockQty: "10", shelfLife: "365", leadTime: "14", colour: "Yellow", substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "510.00", estimationRate: "525.00", remarks: "" },
+  { id: "ITM014C", code: "RM-INK-008", name: "BLUE INK PU BASED",   category: "Raw Material (RM)", group: "Ink", subGroup: "PU Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, pantoneNo: "PMS 286 C",   supplier: "Sakata Inx India", reOrderQty: "30", minStockQty: "10", shelfLife: "365", leadTime: "14", colour: "Blue",   substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "530.00", estimationRate: "545.00", remarks: "" },
+  { id: "ITM014D", code: "RM-INK-009", name: "BLACK INK PU BASED",  category: "Raw Material (RM)", group: "Ink", subGroup: "PU Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, pantoneNo: "Process Black", supplier: "Sakata Inx India", reOrderQty: "30", minStockQty: "10", shelfLife: "365", leadTime: "14", colour: "Black",  substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "490.00", estimationRate: "505.00", remarks: "" },
+  { id: "ITM014E", code: "RM-INK-010", name: "WHITE INK PU BASED",  category: "Raw Material (RM)", group: "Ink", subGroup: "PU Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, pantoneNo: "PMS 9160 C",  supplier: "Flint Group India", reOrderQty: "30", minStockQty: "10", shelfLife: "365", leadTime: "14", colour: "White",  substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "540.00", estimationRate: "555.00", remarks: "" },
+  { id: "ITM014F", code: "RM-INK-011", name: "GREEN INK PU BASED",  category: "Raw Material (RM)", group: "Ink", subGroup: "PU Ink", hsnCode: "3215", gstRate: "18%", stockUom: "Kg", active: true, ...ib, pantoneNo: "PMS 355 C",   supplier: "Flint Group India", reOrderQty: "30", minStockQty: "10", shelfLife: "365", leadTime: "14", colour: "Green",  substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "515.00", estimationRate: "530.00", remarks: "" },
   // ── Solvents ──
   { id: "ITM015", code: "RM-SOL-001", name: "ETHYL ACETATE (EA) GRADE", category: "Raw Material (RM)", group: "Solvent", subGroup: "Ethyl Acetate (EA)", hsnCode: "2915", gstRate: "18%", stockUom: "Kg", active: true, ...ib, supplier: "Eastman Chemical India", supplierRef: "EC-EA-99", reOrderQty: "500", minStockQty: "200", shelfLife: "365", leadTime: "7", isRegularItem: true, substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "62.00", estimationRate: "65.00", remarks: "99% purity EA solvent" },
   { id: "ITM016", code: "RM-SOL-002", name: "TOLUENE SOLVENT", category: "Raw Material (RM)", group: "Solvent", subGroup: "Toluene", hsnCode: "2902", gstRate: "18%", stockUom: "Kg", active: true, ...ib, supplier: "Deepak Nitrite", reOrderQty: "500", minStockQty: "200", shelfLife: "365", leadTime: "7", substrate: "", webWidth: "", thickness: "", shrinkage: "0", purchaseRate: "55.00", estimationRate: "58.00", remarks: "Industrial grade toluene" },
@@ -1290,13 +1316,60 @@ export const hsnMasters: HSNMaster[] = [
 
 // ─── CUSTOMERS ───────────────────────────────────────────────
 export const customers: Customer[] = [
-  { id: "C001", code: "CUST001", name: "Parle Products Pvt Ltd", contact: "Ramesh Shah", phone: "9876543210", email: "ramesh@parle.com", city: "Mumbai", state: "Maharashtra", gst: "27AAACP1234A1ZR", status: "Active", createdAt: "2024-01-10" },
-  { id: "C002", code: "CUST002", name: "Britannia Industries Ltd", contact: "Suresh Kumar", phone: "9823456781", email: "suresh@britannia.in", city: "Bengaluru", state: "Karnataka", gst: "29AABCB1234B1Z5", status: "Active", createdAt: "2024-01-15" },
-  { id: "C003", code: "CUST003", name: "Haldiram Snacks Pvt Ltd", contact: "Manoj Agarwal", phone: "9712345678", email: "manoj@haldiram.com", city: "Delhi", state: "Delhi", gst: "07AABCH1234C1Z3", status: "Active", createdAt: "2024-02-01" },
-  { id: "C004", code: "CUST004", name: "ITC Limited", contact: "Priya Nair", phone: "9654321098", email: "priya@itc.in", city: "Kolkata", state: "West Bengal", gst: "19AAACI1234D1Z7", status: "Active", createdAt: "2024-02-10" },
-  { id: "C005", code: "CUST005", name: "Amul Dairy", contact: "Kiran Patel", phone: "9543210987", email: "kiran@amul.com", city: "Anand", state: "Gujarat", gst: "24AAACA1234E1Z1", status: "Active", createdAt: "2024-02-15" },
-  { id: "C006", code: "CUST006", name: "Nestle India Ltd", contact: "Anita Mehta", phone: "9432109876", email: "anita@nestle.in", city: "Pune", state: "Maharashtra", gst: "27AAACN1234F1Z9", status: "Active", createdAt: "2024-03-01" },
-  { id: "C007", code: "CUST007", name: "Dabur India Ltd", contact: "Deepak Sharma", phone: "9210987654", email: "deepak@dabur.com", city: "Ghaziabad", state: "Uttar Pradesh", gst: "09AAACD1234H1ZB", status: "Active", createdAt: "2024-03-15" },
+  {
+    id: "C001", code: "CUST001", name: "Parle Products Pvt Ltd", contact: "Ramesh Shah", phone: "9876543210", email: "ramesh@parle.com", city: "Mumbai", state: "Maharashtra", gst: "27AAACP1234A1ZR", status: "Active", createdAt: "2024-01-10",
+    packSizes: ["50g", "100g", "200g", "400g", "1Kg"],
+    brandNames: ["Parle-G", "Monaco", "Krackjack", "Hide & Seek", "Bourbon"],
+    skuTypes: ["Regular", "Premium", "Export", "Promo Pack", "Festive"],
+  },
+  {
+    id: "C002", code: "CUST002", name: "Britannia Industries Ltd", contact: "Suresh Kumar", phone: "9823456781", email: "suresh@britannia.in", city: "Bengaluru", state: "Karnataka", gst: "29AABCB1234B1Z5", status: "Active", createdAt: "2024-01-15",
+    packSizes: ["75g", "150g", "300g", "600g"],
+    brandNames: ["Good Day", "Marie Gold", "NutriChoice", "Tiger", "Treat"],
+    skuTypes: ["Regular", "Family Pack", "Travel Pack", "Gift Pack"],
+  },
+  {
+    id: "C003", code: "CUST003", name: "Haldiram Snacks Pvt Ltd", contact: "Manoj Agarwal", phone: "9712345678", email: "manoj@haldiram.com", city: "Delhi", state: "Delhi", gst: "07AABCH1234C1Z3", status: "Active", createdAt: "2024-02-01",
+    packSizes: ["30g", "60g", "100g", "200g", "500g"],
+    brandNames: ["Haldiram's", "Aloo Bhujia", "Moong Dal", "Navratan Mix"],
+    skuTypes: ["Regular", "Premium", "Export", "Party Pack"],
+  },
+  {
+    id: "C004", code: "CUST004", name: "ITC Limited", contact: "Priya Nair", phone: "9654321098", email: "priya@itc.in", city: "Kolkata", state: "West Bengal", gst: "19AAACI1234D1Z7", status: "Active", createdAt: "2024-02-10",
+    packSizes: ["100g", "250g", "500g", "1Kg", "2Kg"],
+    brandNames: ["Sunfeast", "Bingo", "Aashirvaad", "Yippee", "B Natural"],
+    skuTypes: ["Regular", "Family", "Jumbo", "Mini", "Export"],
+  },
+  {
+    id: "C005", code: "CUST005", name: "Amul Dairy", contact: "Kiran Patel", phone: "9543210987", email: "kiran@amul.com", city: "Anand", state: "Gujarat", gst: "24AAACA1234E1Z1", status: "Active", createdAt: "2024-02-15",
+    packSizes: ["200ml", "500ml", "1L", "5L", "200g", "400g", "1Kg"],
+    brandNames: ["Amul Gold", "Amul Taaza", "Amul Butter", "Amul Ice Cream", "Amul Cheese"],
+    skuTypes: ["Regular", "Slim Pack", "Pouch", "Tetra", "Bulk"],
+  },
+  {
+    id: "C006", code: "CUST006", name: "Nestle India Ltd", contact: "Anita Mehta", phone: "9432109876", email: "anita@nestle.in", city: "Pune", state: "Maharashtra", gst: "27AAACN1234F1Z9", status: "Active", createdAt: "2024-03-01",
+    packSizes: ["10g", "50g", "100g", "200g", "500g"],
+    brandNames: ["KitKat", "Munch", "Milkmaid", "Nescafe", "Maggi"],
+    skuTypes: ["Regular", "Premium", "Export", "Gift Pack", "Seasonal"],
+  },
+  {
+    id: "C007", code: "CUST007", name: "Dabur India Ltd", contact: "Deepak Sharma", phone: "9210987654", email: "deepak@dabur.com", city: "Ghaziabad", state: "Uttar Pradesh", gst: "09AAACD1234H1ZB", status: "Active", createdAt: "2024-03-15",
+    packSizes: ["50ml", "100ml", "200ml", "500ml", "1L"],
+    brandNames: ["Dabur Honey", "Real Juice", "Hajmola", "Vatika", "Chyawanprash"],
+    skuTypes: ["Regular", "Economy", "Premium", "Travel Size", "Refill Pack"],
+  },
+  {
+    id: "C008", code: "CUST008", name: "Bisleri International Pvt Ltd", contact: "Rahul Chauhan", phone: "9312345670", email: "rahul@bisleri.com", city: "Mumbai", state: "Maharashtra", gst: "27AAACB1234I1Z2", status: "Active", createdAt: "2024-04-01",
+    packSizes: ["250ml", "500ml", "1L", "1.5L", "2L", "5L", "20L"],
+    brandNames: ["Bisleri", "Vedica", "Spyci", "Limonata", "Pop"],
+    skuTypes: ["Regular", "Slim Can", "Sports Cap", "Bulk Jar", "Export"],
+  },
+  {
+    id: "C009", code: "CUST009", name: "Coca-Cola India Pvt Ltd", contact: "Sameer Joshi", phone: "9876501234", email: "sameer@coca-cola.in", city: "Gurugram", state: "Haryana", gst: "06AAACC1234J1Z8", status: "Active", createdAt: "2024-04-10",
+    packSizes: ["200ml", "250ml", "330ml", "500ml", "600ml", "1.25L", "2L"],
+    brandNames: ["Coca-Cola", "Thums Up", "Limca", "Sprite", "Fanta", "Maaza", "Kinley"],
+    skuTypes: ["Regular", "Zero Sugar", "Export", "Promo Can", "Festive Pack", "Vending"],
+  },
 ];
 
 // ─── PRODUCTS ────────────────────────────────────────────────
@@ -1316,7 +1389,7 @@ export const machines: Machine[] = [
   { id: "M001", code: "CYL-01", name: "Cylinder Engraver 1", department: "Pre-Press", status: "Running", ...bm, displayName: "CYL-ENG-1", machineType: "Electromechanical Engraver", maxCylinderWidth: "1600", maxCircumference: "1200", costPerHour: "450", electricConsumption: "15", operator: "Mahesh Gupta" },
   { id: "M002", code: "CYL-02", name: "Chrome Plating Bath", department: "Pre-Press", status: "Running", ...bm, displayName: "Chrome Bath", machineType: "Chrome Plating", maxCylinderWidth: "1600", costPerHour: "120", operator: "Ramesh Patel" },
   // Printing
-  { id: "M004", code: "ROTO-01", name: "Roto Press 1 – 8 Color", department: "Printing", status: "Running", ...bm, displayName: "ROTO-1", machineType: "Rotogravure Press", noOfColors: "8", maxWebWidth: "1200", minWebWidth: "500", speedMax: "150", repeatLengthMin: "300", repeatLengthMax: "1200", gripper: "10", printingMargin: "15", makeReadyWastage: "50", makeReadyCharges: "1500", makeReadyTime: "20", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1200", jobChangeOverTime: "30", minPrintingImpr: "500", basicPrintingCharged: "800", roundImpWith: "100", electricConsumption: "80", costPerHour: "1200", operator: "Amit Tiwari" },
+  { id: "M004", code: "ROTO-01", name: "Roto Press 1 – 8 Color", department: "Printing", status: "Running", ...bm, displayName: "ROTO-1", machineType: "Rotogravure Press", noOfColors: "8", maxWebWidth: "1200", minWebWidth: "300", speedMax: "150", repeatLengthMin: "300", repeatLengthMax: "1200", gripper: "10", printingMargin: "15", makeReadyWastage: "50", makeReadyCharges: "1500", makeReadyTime: "20", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1200", jobChangeOverTime: "30", minPrintingImpr: "500", basicPrintingCharged: "800", roundImpWith: "100", electricConsumption: "80", costPerHour: "1200", operator: "Amit Tiwari" },
   { id: "M005", code: "ROTO-02", name: "Roto Press 2 – 9 Color", department: "Printing", status: "Running", ...bm, displayName: "ROTO-2", machineType: "Rotogravure Press", noOfColors: "9", maxWebWidth: "1450", minWebWidth: "200", speedMax: "160", repeatLengthMin: "300", repeatLengthMax: "1400", gripper: "10", printingMargin: "15", makeReadyWastage: "55", makeReadyCharges: "1800", makeReadyTime: "20", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1300", jobChangeOverTime: "30", minPrintingImpr: "500", basicPrintingCharged: "900", roundImpWith: "100", electricConsumption: "90", costPerHour: "1350", operator: "Deepak Verma" },
   { id: "M006", code: "ROTO-03", name: "Roto Press 3 – 10 Color", department: "Printing", status: "Maintenance", ...bm, displayName: "ROTO-3", machineType: "Rotogravure Press", noOfColors: "10", maxWebWidth: "3500", minWebWidth: "200", speedMax: "180", repeatLengthMin: "300", repeatLengthMax: "1500", gripper: "10", printingMargin: "15", makeReadyWastage: "60", makeReadyCharges: "2000", makeReadyTime: "22", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1400", jobChangeOverTime: "35", minPrintingImpr: "500", basicPrintingCharged: "1000", roundImpWith: "100", electricConsumption: "95", costPerHour: "1400", operator: "Santosh Rao" },
   { id: "M018", code: "ROTO-05", name: "Roto Press 5 – 8 Color (Demo)", department: "Printing", status: "Running", ...bm, displayName: "ROTO-5", machineType: "Rotogravure Press", noOfColors: "8", maxWebWidth: "1200", minWebWidth: "500", speedMax: "150", repeatLengthMin: "200", repeatLengthMax: "1000", gripper: "10", printingMargin: "15", makeReadyWastage: "50", makeReadyCharges: "1500", makeReadyTime: "20", makeReadyTimeMode: "Per Color", makeReadyChargesPerHr: "1200", jobChangeOverTime: "30", minPrintingImpr: "500", basicPrintingCharged: "800", roundImpWith: "100", electricConsumption: "80", costPerHour: "1200", operator: "Demo Operator" },
@@ -2094,6 +2167,7 @@ export type GravureEstimation = {
   content?: string;
   jobWidth: number; jobHeight: number; ups: number;
   trimmingSize?: number;
+  widthShrinkage?: number;
   actualWidth: number; actualHeight: number;
   substrateItemId: string; substrateName: string;
   width: number; noOfColors: number; frontColors?: number; backColors?: number;
@@ -2211,11 +2285,15 @@ export type GravureProductCatalog = {
   productType?: string;
   skuType?: string;
   bottleType?: string;
-  addressType?: "Single" | "Multi";
+  addressType?: "Single" | "Multi" | "QR Code";
   specialSpecs?: string;
   artworkName?: string;
   status: "Active" | "Inactive";
   remarks: string;
+  // ── Saved prep data (color shades, cylinders, plan) ──
+  savedPlanId?: string;
+  savedColorShades?: any[];
+  savedCylAllocs?: any[];
 };
 
 export type GravureWorkOrder = {
@@ -2625,9 +2703,169 @@ export const gravureOrders: GravureOrder[] = [
 
 // ─── GRAVURE PRODUCT CATALOG ──────────────────────────────────
 export const gravureProductCatalog: GravureProductCatalog[] = [
-  { id: "GPC001", catalogNo: "GRV-CAT-001", createdDate: "2024-03-05", productName: "Parle-G Biscuit 100g Wrap", customerId: "C001", customerName: "Parle Products Pvt Ltd", categoryId: "CAT001", categoryName: "Roto - Label", content: "BOPP Label", jobWidth: 340, jobHeight: 450, actualWidth: 341, actualHeight: 451, noOfColors: 8, printType: "Surface Print", substrate: "BOPP 20μ", secondaryLayers: [{ id: "GPC001-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 20, gsm: 18.2, consumableItems: [] }, { id: "GPC001-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM007", itemName: "YELLOW INK SOLVENT BASED", gsm: 3.5, rate: 460 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }, { id: "GPC001-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 30, gsm: 27.6, consumableItems: [{ consumableId: "DEF_ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 }, { consumableId: "DEF_HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 }] }], processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 8, setupCharge: 0, amount: 28000 }, { processId: "PR004", processName: "8-Color Roto Printing", chargeUnit: "m²", rate: 2.50, qty: 0, setupCharge: 1500, amount: 1500 }, { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 0, setupCharge: 0, amount: 0 }], machineId: "M004", machineName: "Roto Press 1 – 8 Color", cylinderCostPerColor: 3500, overheadPct: 12, profitPct: 15, perMeterRate: 1.36, standardQty: 200000, standardUnit: "Meter", sourceEstimationId: "", sourceEstimationNo: "", sourceOrderId: "GO001", sourceOrderNo: "GRV-ORD-2024-001", sourceWorkOrderId: "GWO001", sourceWorkOrderNo: "GRV-WO-2024-001", status: "Active", remarks: "" },
-  { id: "GPC002", catalogNo: "GRV-CAT-002", createdDate: "2024-03-08", productName: "Britannia NutriChoice 200g Pouch", customerId: "C002", customerName: "Britannia Industries Ltd", categoryId: "CAT002", categoryName: "Pouch", content: "3-Side Seal", jobWidth: 420, jobHeight: 400, actualWidth: 421, actualHeight: 401, noOfColors: 6, printType: "Reverse Print", substrate: "PET 12μ + PE 40μ", secondaryLayers: [{ id: "GPC002-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 12, gsm: 10.9, consumableItems: [] }, { id: "GPC002-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM008", itemName: "CYAN INK SOLVENT BASED", gsm: 3.5, rate: 490 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }, { id: "GPC002-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 40, gsm: 36.8, consumableItems: [{ consumableId: "DEF_ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 }, { consumableId: "DEF_HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 }] }], processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 6, setupCharge: 0, amount: 21000 }, { processId: "PR003", processName: "6-Color Roto Printing", chargeUnit: "m²", rate: 2.00, qty: 0, setupCharge: 1200, amount: 1200 }, { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 0, setupCharge: 0, amount: 0 }], machineId: "M003", machineName: "Roto Press 4 – 6 Color", cylinderCostPerColor: 3500, overheadPct: 12, profitPct: 15, perMeterRate: 1.52, standardQty: 150000, standardUnit: "Meter", sourceEstimationId: "", sourceEstimationNo: "", sourceOrderId: "GO002", sourceOrderNo: "GRV-ORD-2024-002", sourceWorkOrderId: "GWO002", sourceWorkOrderNo: "GRV-WO-2024-002", status: "Active", remarks: "" },
-  { id: "GPC003", catalogNo: "GRV-CAT-003", createdDate: "2024-03-12", productName: "Amul Butter Shrink Sleeve", customerId: "C005", customerName: "Amul Dairy", categoryId: "CAT001", categoryName: "Roto - Label", content: "Shrink Sleeve", jobWidth: 260, jobHeight: 360, actualWidth: 261, actualHeight: 361, noOfColors: 6, printType: "Surface Print", substrate: "PVC 50μ", secondaryLayers: [{ id: "GPC003-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 50, gsm: 45.5, consumableItems: [] }, { id: "GPC003-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM009", itemName: "MAGENTA INK SOLVENT BASED", gsm: 3.5, rate: 500 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }], processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 6, setupCharge: 0, amount: 21000 }, { processId: "PR003", processName: "6-Color Roto Printing", chargeUnit: "m²", rate: 2.00, qty: 0, setupCharge: 1200, amount: 1200 }], machineId: "M003", machineName: "Roto Press 4 – 6 Color", cylinderCostPerColor: 3500, overheadPct: 12, profitPct: 15, perMeterRate: 0.90, standardQty: 500000, standardUnit: "Meter", sourceEstimationId: "", sourceEstimationNo: "", sourceOrderId: "GO004", sourceOrderNo: "GRV-ORD-2024-004", sourceWorkOrderId: "", sourceWorkOrderNo: "", status: "Active", remarks: "" },
+  {
+    id: "GPC001", catalogNo: "GRV-CAT-001", createdDate: "2024-03-05",
+    productName: "Parle-G Biscuit 100g Wrap",
+    customerId: "C001", customerName: "Parle Products Pvt Ltd",
+    categoryId: "CAT003", categoryName: "Labels & Stickers", content: "Wrap Around Labels",
+    jobWidth: 340, jobHeight: 450, actualWidth: 341, actualHeight: 451,
+    noOfColors: 8, frontColors: 6, backColors: 2,
+    printType: "Surface Print", substrate: "BOPP 20μ",
+    trimmingSize: 5, widthShrinkage: 0,
+    packSize: "100g", brandName: "Parle-G", artworkName: "PARLE-ART-2024-01",
+    productType: "Biscuit Wrap", skuType: "Regular",
+    addressType: "Single" as const,
+    specialSpecs: "Pantone matching mandatory. Approved sample to be matched.",
+    machineId: "M004", machineName: "Roto Press 1 – 8 Color",
+    cylinderCostPerColor: 3500, overheadPct: 12, profitPct: 15,
+    perMeterRate: 4.60, standardQty: 0, standardUnit: "",
+    sourceEstimationId: "GEST001", sourceEstimationNo: "GRV-EST-2024-001",
+    sourceOrderId: "GO001", sourceOrderNo: "GRV-ORD-2024-001",
+    sourceWorkOrderId: "GWO001", sourceWorkOrderNo: "GRV-WO-2024-001",
+    status: "Active", remarks: "Pantone match approved from lab. Priority job.",
+    savedPlanId: "GPC001-PLAN-A1",
+    secondaryLayers: [
+      { id: "GPC001-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 20, gsm: 18.2, consumableItems: [] },
+      { id: "GPC001-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [
+        { consumableId: "GPC001-INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM007", itemName: "YELLOW INK SOLVENT BASED", gsm: 3.5, rate: 460 },
+        { consumableId: "GPC001-SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 },
+      ]},
+      { id: "GPC001-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "CPP Film", density: 0.90, thickness: 30, gsm: 27.0, consumableItems: [
+        { consumableId: "GPC001-ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 },
+        { consumableId: "GPC001-HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 },
+      ]},
+    ],
+    processes: [
+      { processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 8, setupCharge: 0, amount: 28000 },
+      { processId: "PR004", processName: "8-Color Roto Printing", chargeUnit: "m²", rate: 2.50, qty: 153000, setupCharge: 1500, amount: 384000 },
+      { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 153000, setupCharge: 800, amount: 276240 },
+    ],
+    savedColorShades: [
+      { colorNo: 1, colorName: "Cyan",    inkType: "Process", pantoneRef: "Cyan", labL: "55.0", labA: "-37.0", labB: "-50.0", actualL: "54.8", actualA: "-36.5", actualB: "-49.7", deltaE: "0.6", shadeCardRef: "SC-PARLE-C", status: "Approved", remarks: "" },
+      { colorNo: 2, colorName: "Magenta", inkType: "Process", pantoneRef: "Magenta", labL: "48.0", labA: "74.0", labB: "-3.0", actualL: "47.8", actualA: "73.6", actualB: "-3.1", deltaE: "0.5", shadeCardRef: "SC-PARLE-M", status: "Approved", remarks: "" },
+      { colorNo: 3, colorName: "Yellow",  inkType: "Process", pantoneRef: "Yellow", labL: "88.0", labA: "-5.0", labB: "93.0", actualL: "87.9", actualA: "-5.1", actualB: "92.8", deltaE: "0.3", shadeCardRef: "SC-PARLE-Y", status: "Approved", remarks: "" },
+      { colorNo: 4, colorName: "Black",   inkType: "Process", pantoneRef: "Black", labL: "16.0", labA: "0.5", labB: "0.5", actualL: "16.1", actualA: "0.4", actualB: "0.4", deltaE: "0.2", shadeCardRef: "SC-PARLE-K", status: "Approved", remarks: "" },
+      { colorNo: 5, colorName: "White",   inkType: "Spot", pantoneRef: "White", labL: "95.0", labA: "-0.5", labB: "1.0", actualL: "94.8", actualA: "-0.4", actualB: "1.1", deltaE: "0.3", shadeCardRef: "SC-PARLE-W", status: "Approved", remarks: "Opaque white" },
+      { colorNo: 6, colorName: "Red",     inkType: "Spot", pantoneRef: "485 C", labL: "41.0", labA: "63.0", labB: "47.0", actualL: "40.8", actualA: "62.7", actualB: "46.8", deltaE: "0.4", shadeCardRef: "SC-PARLE-R", status: "Approved", remarks: "" },
+      { colorNo: 7, colorName: "Gold",    inkType: "Special", pantoneRef: "871 C", labL: "65.0", labA: "8.0", labB: "38.0", actualL: "64.5", actualA: "8.2", actualB: "37.6", deltaE: "0.7", shadeCardRef: "SC-PARLE-G", status: "Approved", remarks: "Metallic gold" },
+      { colorNo: 8, colorName: "Orange",  inkType: "Spot", pantoneRef: "165 C", labL: "62.0", labA: "46.0", labB: "68.0", actualL: "61.7", actualA: "45.8", actualB: "67.5", deltaE: "0.6", shadeCardRef: "SC-PARLE-O", status: "Approved", remarks: "" },
+    ],
+    savedCylAllocs: [
+      { colorNo: 1, colorName: "Cyan",    cylinderNo: "CYL-P001", circumference: "450", printWidth: "320", repeatUPS: 1, cylinderType: "New",      status: "Available",   remarks: "Chromium plated. Approved.", createdInMaster: true },
+      { colorNo: 2, colorName: "Magenta", cylinderNo: "CYL-P001", circumference: "450", printWidth: "320", repeatUPS: 1, cylinderType: "New",      status: "Available",   remarks: "", createdInMaster: true },
+      { colorNo: 3, colorName: "Yellow",  cylinderNo: "CYL-P001", circumference: "450", printWidth: "320", repeatUPS: 1, cylinderType: "New",      status: "Available",   remarks: "", createdInMaster: true },
+      { colorNo: 4, colorName: "Black",   cylinderNo: "CYL-P001", circumference: "450", printWidth: "320", repeatUPS: 1, cylinderType: "New",      status: "Available",   remarks: "", createdInMaster: true },
+      { colorNo: 5, colorName: "White",   cylinderNo: "CYL-P001", circumference: "450", printWidth: "320", repeatUPS: 1, cylinderType: "New",      status: "Available",   remarks: "", createdInMaster: true },
+      { colorNo: 6, colorName: "Red",     cylinderNo: "CYL-P001", circumference: "450", printWidth: "320", repeatUPS: 1, cylinderType: "New",      status: "Available",   remarks: "", createdInMaster: true },
+      { colorNo: 7, colorName: "Gold",    cylinderNo: "CYL-P001", circumference: "450", printWidth: "320", repeatUPS: 1, cylinderType: "New",      status: "Available",   remarks: "", createdInMaster: true },
+      { colorNo: 8, colorName: "Orange",  cylinderNo: "CYL-P001", circumference: "450", printWidth: "320", repeatUPS: 1, cylinderType: "New",      status: "Available",   remarks: "", createdInMaster: true },
+    ],
+  } as any,
+
+  {
+    id: "GPC002", catalogNo: "GRV-CAT-002", createdDate: "2024-03-08",
+    productName: "Britannia NutriChoice 200g Pouch",
+    customerId: "C002", customerName: "Britannia Industries Ltd",
+    categoryId: "CAT001", categoryName: "Flexible Packaging", content: "Pouch — 3 Side Seal",
+    jobWidth: 420, jobHeight: 400, actualWidth: 421, actualHeight: 401,
+    noOfColors: 6, frontColors: 4, backColors: 2,
+    printType: "Reverse Print", substrate: "PET 12μ + PE 40μ",
+    trimmingSize: 5, widthShrinkage: 0,
+    packSize: "200g", brandName: "NutriChoice", artworkName: "BRIT-ART-2024-05",
+    productType: "Biscuit Pouch", skuType: "Regular",
+    addressType: "Single" as const,
+    specialSpecs: "Matte OPV coating required. Existing cylinders rechromed.",
+    machineId: "M003", machineName: "Roto Press 4 – 6 Color",
+    cylinderCostPerColor: 3500, overheadPct: 12, profitPct: 15,
+    perMeterRate: 4.03, standardQty: 0, standardUnit: "",
+    sourceEstimationId: "GEST002", sourceEstimationNo: "GRV-EST-2024-002",
+    sourceOrderId: "GO002", sourceOrderNo: "GRV-ORD-2024-002",
+    sourceWorkOrderId: "GWO002", sourceWorkOrderNo: "GRV-WO-2024-002",
+    status: "Active", remarks: "Matte OPV confirmed. Cylinders under chrome.",
+    savedPlanId: "GPC002-PLAN-A1",
+    secondaryLayers: [
+      { id: "GPC002-L1", layerNo: 1, plyType: "Film", itemSubGroup: "PET Film", density: 1.39, thickness: 12, gsm: 16.7, consumableItems: [] },
+      { id: "GPC002-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [
+        { consumableId: "GPC002-INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM008", itemName: "CYAN INK SOLVENT BASED", gsm: 3.5, rate: 490 },
+        { consumableId: "GPC002-SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 },
+      ]},
+      { id: "GPC002-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 40, gsm: 36.8, consumableItems: [
+        { consumableId: "GPC002-ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 },
+        { consumableId: "GPC002-HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 },
+      ]},
+    ],
+    processes: [
+      { processId: "PR001", processName: "Cylinder Engraving (Rechrome)", chargeUnit: "Cylinder", rate: 2500, qty: 6, setupCharge: 0, amount: 15000 },
+      { processId: "PR003", processName: "6-Color Roto Printing", chargeUnit: "m²", rate: 2.00, qty: 176400, setupCharge: 1200, amount: 354000 },
+      { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 176400, setupCharge: 800, amount: 318320 },
+    ],
+    savedColorShades: [
+      { colorNo: 1, colorName: "Cyan",    inkType: "Process", pantoneRef: "Cyan", labL: "55.0", labA: "-37.0", labB: "-50.0", actualL: "55.1", actualA: "-37.2", actualB: "-49.9", deltaE: "0.3", shadeCardRef: "SC-BRIT-C", status: "Approved", remarks: "" },
+      { colorNo: 2, colorName: "Magenta", inkType: "Process", pantoneRef: "Magenta", labL: "48.0", labA: "74.0", labB: "-3.0", actualL: "47.9", actualA: "73.9", actualB: "-3.0", deltaE: "0.1", shadeCardRef: "SC-BRIT-M", status: "Approved", remarks: "" },
+      { colorNo: 3, colorName: "Yellow",  inkType: "Process", pantoneRef: "Yellow", labL: "88.0", labA: "-5.0", labB: "93.0", actualL: "88.1", actualA: "-4.9", actualB: "92.9", deltaE: "0.2", shadeCardRef: "SC-BRIT-Y", status: "Approved", remarks: "" },
+      { colorNo: 4, colorName: "Black",   inkType: "Process", pantoneRef: "Black", labL: "16.0", labA: "0.5", labB: "0.5", actualL: "16.0", actualA: "0.5", actualB: "0.5", deltaE: "0.0", shadeCardRef: "SC-BRIT-K", status: "Approved", remarks: "" },
+      { colorNo: 5, colorName: "White",   inkType: "Spot", pantoneRef: "White", labL: "95.0", labA: "-0.5", labB: "1.0", actualL: "94.7", actualA: "-0.6", actualB: "1.2", deltaE: "0.4", shadeCardRef: "SC-BRIT-W", status: "Approved", remarks: "" },
+      { colorNo: 6, colorName: "Gold",    inkType: "Special", pantoneRef: "871 C", labL: "65.0", labA: "8.0", labB: "38.0", actualL: "64.8", actualA: "8.1", actualB: "37.8", deltaE: "0.3", shadeCardRef: "SC-BRIT-G", status: "Standard Received", remarks: "Metallic gold — awaiting print trial" },
+    ],
+    savedCylAllocs: [
+      { colorNo: 1, colorName: "Cyan",    cylinderNo: "CYL-B001", circumference: "400", printWidth: "400", repeatUPS: 1, cylinderType: "Rechromed", status: "Under Chrome", remarks: "Expected ready: 8 Apr", createdInMaster: true },
+      { colorNo: 2, colorName: "Magenta", cylinderNo: "CYL-B001", circumference: "400", printWidth: "400", repeatUPS: 1, cylinderType: "Rechromed", status: "Under Chrome", remarks: "", createdInMaster: true },
+      { colorNo: 3, colorName: "Yellow",  cylinderNo: "CYL-B001", circumference: "400", printWidth: "400", repeatUPS: 1, cylinderType: "Rechromed", status: "Under Chrome", remarks: "", createdInMaster: true },
+      { colorNo: 4, colorName: "Black",   cylinderNo: "CYL-B001", circumference: "400", printWidth: "400", repeatUPS: 1, cylinderType: "Rechromed", status: "Under Chrome", remarks: "", createdInMaster: true },
+      { colorNo: 5, colorName: "White",   cylinderNo: "CYL-B001", circumference: "400", printWidth: "400", repeatUPS: 1, cylinderType: "Rechromed", status: "Under Chrome", remarks: "", createdInMaster: true },
+      { colorNo: 6, colorName: "Gold",    cylinderNo: "CYL-B001", circumference: "400", printWidth: "400", repeatUPS: 1, cylinderType: "Rechromed", status: "Under Chrome", remarks: "", createdInMaster: true },
+    ],
+  } as any,
+
+  {
+    id: "GPC003", catalogNo: "GRV-CAT-003", createdDate: "2024-03-12",
+    productName: "Amul Butter Shrink Sleeve",
+    customerId: "C005", customerName: "Amul Dairy",
+    categoryId: "CAT003", categoryName: "Labels & Stickers", content: "Shrink Labels",
+    jobWidth: 260, jobHeight: 360, actualWidth: 261, actualHeight: 361,
+    noOfColors: 6, frontColors: 6, backColors: 0,
+    printType: "Surface Print", substrate: "PVC 50μ",
+    trimmingSize: 3, widthShrinkage: 8,
+    packSize: "25g", brandName: "Amul Butter", artworkName: "AMUL-ART-2024-01",
+    productType: "Shrink Sleeve", skuType: "Regular",
+    addressType: "Single" as const,
+    specialSpecs: "UV ink required. Shrinkage 8%. PVC shrink tunnel settings to be confirmed.",
+    machineId: "M003", machineName: "Roto Press 4 – 6 Color",
+    cylinderCostPerColor: 3500, overheadPct: 12, profitPct: 15,
+    perMeterRate: 3.50, standardQty: 0, standardUnit: "",
+    sourceEstimationId: "", sourceEstimationNo: "",
+    sourceOrderId: "GO004", sourceOrderNo: "GRV-ORD-2024-004",
+    sourceWorkOrderId: "", sourceWorkOrderNo: "",
+    status: "Active", remarks: "UV ink approved. Shrinkage test passed at 8%.",
+    savedPlanId: "GPC003-PLAN-A1",
+    secondaryLayers: [
+      { id: "GPC003-L1", layerNo: 1, plyType: "Film", itemSubGroup: "PVC Film", density: 1.35, thickness: 50, gsm: 67.5, consumableItems: [] },
+      { id: "GPC003-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [
+        { consumableId: "GPC003-INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "UV Ink", itemId: "ITM009", itemName: "MAGENTA INK SOLVENT BASED", gsm: 3.5, rate: 500 },
+        { consumableId: "GPC003-SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 },
+      ]},
+    ],
+    processes: [
+      { processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 6, setupCharge: 0, amount: 21000 },
+      { processId: "PR003", processName: "6-Color Roto Printing (UV)", chargeUnit: "m²", rate: 2.20, qty: 234000, setupCharge: 1200, amount: 515800 },
+    ],
+    savedColorShades: [
+      { colorNo: 1, colorName: "Cyan",    inkType: "Process", pantoneRef: "Cyan", labL: "55.0", labA: "-37.0", labB: "-50.0", actualL: "55.0", actualA: "-37.0", actualB: "-50.0", deltaE: "0.0", shadeCardRef: "SC-AMUL-C", status: "Approved", remarks: "" },
+      { colorNo: 2, colorName: "Magenta", inkType: "Process", pantoneRef: "Magenta", labL: "48.0", labA: "74.0", labB: "-3.0", actualL: "48.2", actualA: "74.3", actualB: "-3.1", deltaE: "0.4", shadeCardRef: "SC-AMUL-M", status: "Approved", remarks: "" },
+      { colorNo: 3, colorName: "Yellow",  inkType: "Process", pantoneRef: "Yellow", labL: "88.0", labA: "-5.0", labB: "93.0", actualL: "87.8", actualA: "-5.2", actualB: "92.7", deltaE: "0.4", shadeCardRef: "SC-AMUL-Y", status: "Approved", remarks: "" },
+      { colorNo: 4, colorName: "Black",   inkType: "Process", pantoneRef: "Black", labL: "16.0", labA: "0.5", labB: "0.5", actualL: "16.2", actualA: "0.4", actualB: "0.3", deltaE: "0.3", shadeCardRef: "SC-AMUL-K", status: "Approved", remarks: "" },
+      { colorNo: 5, colorName: "Red",     inkType: "Spot", pantoneRef: "485 C", labL: "41.0", labA: "63.0", labB: "47.0", actualL: "41.3", actualA: "62.5", actualB: "46.8", deltaE: "0.6", shadeCardRef: "SC-AMUL-R", status: "Approved", remarks: "Amul red — critical match" },
+      { colorNo: 6, colorName: "Gold",    inkType: "Special", pantoneRef: "871 C", labL: "65.0", labA: "8.0", labB: "38.0", actualL: "64.6", actualA: "8.3", actualB: "37.5", deltaE: "0.8", shadeCardRef: "SC-AMUL-G", status: "Standard Received", remarks: "Metallic gold UV" },
+    ],
+    savedCylAllocs: [
+      { colorNo: 1, colorName: "Cyan",    cylinderNo: "CYL-A001", circumference: "360", printWidth: "240", repeatUPS: 1, cylinderType: "New", status: "Available", remarks: "", createdInMaster: true },
+      { colorNo: 2, colorName: "Magenta", cylinderNo: "CYL-A001", circumference: "360", printWidth: "240", repeatUPS: 1, cylinderType: "New", status: "Available", remarks: "", createdInMaster: true },
+      { colorNo: 3, colorName: "Yellow",  cylinderNo: "CYL-A001", circumference: "360", printWidth: "240", repeatUPS: 1, cylinderType: "New", status: "Available", remarks: "", createdInMaster: true },
+      { colorNo: 4, colorName: "Black",   cylinderNo: "CYL-A001", circumference: "360", printWidth: "240", repeatUPS: 1, cylinderType: "New", status: "Available", remarks: "", createdInMaster: true },
+      { colorNo: 5, colorName: "Red",     cylinderNo: "CYL-A001", circumference: "360", printWidth: "240", repeatUPS: 1, cylinderType: "New", status: "Available", remarks: "", createdInMaster: true },
+      { colorNo: 6, colorName: "Gold",    cylinderNo: "CYL-A001", circumference: "360", printWidth: "240", repeatUPS: 1, cylinderType: "New", status: "Available", remarks: "", createdInMaster: true },
+    ],
+  } as any,
 ];
 
 // ─── GRAVURE WORK ORDERS ──────────────────────────────────────

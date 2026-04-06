@@ -125,7 +125,7 @@ export default function EnquiryPage() {
   const contentSelected = !!form.selectedContent;
 
   // Filter table by global unit
-  const displayData = globalUnit === "Both" ? data : data.filter(d => d.businessUnit === globalUnit);
+  const displayData = data.filter(d => d.businessUnit === globalUnit);
 
   const openAdd = () => {
     setEditing(null);

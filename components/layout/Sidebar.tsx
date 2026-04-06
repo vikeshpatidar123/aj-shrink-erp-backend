@@ -8,17 +8,18 @@ import {
   Printer, BookOpen, Barcode, Tag, Workflow, Wrench, Boxes, Building2,
   Warehouse, ShoppingBag, ReceiptText, PackageCheck, ArrowLeftRight, ClipboardCheck, PackageMinus, ArrowRightLeft,
   Package, BookMarked, Layers, RotateCcw, Shuffle, ScanSearch, PackagePlus, ClipboardSignature,
+  ChevronLeft,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useUnit } from "@/context/UnitContext";
 
 // ─── Badge helpers ─────────────────────────────────────────────────────────────
 const ExtBadge = () => (
-  <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded leading-none tracking-wide"
+  <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded leading-none tracking-wide flex-shrink-0"
     style={{ background: "rgba(255,255,255,0.18)", color: "#fff" }}>EXT</span>
 );
 const GrvBadge = () => (
-  <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded leading-none tracking-wide"
+  <span className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded leading-none tracking-wide flex-shrink-0"
     style={{ background: "rgba(255,255,255,0.18)", color: "#fff" }}>GRV</span>
 );
 
@@ -28,33 +29,33 @@ type GroupItem = { label: string; icon: React.ElementType; children: { label: st
 type NavItem   = FlatItem | GroupItem;
 
 const navItems: NavItem[] = [
-  { label: "Dashboard",     href: "/dashboard",          icon: LayoutDashboard },
-  { label: "Enquiry",        href: "/extrusion/enquiry",  icon: ClipboardList,  badge: "EXT" },
-  { label: "Enquiry",        href: "/enquiry",            icon: ClipboardList,  badge: "GRV" },
-  { label: "Estimation",    href: "/cost-estimation",    icon: Calculator,     badge: "EXT" },
-  { label: "Estimation",       href: "/gravure/estimation",    icon: Calculator,   badge: "GRV" },
-  { label: "Product Catalog",  href: "/extrusion/product-catalog", icon: BookMarked, badge: "EXT" },
-  { label: "Product Catalog",  href: "/gravure/product-catalog",   icon: BookMarked, badge: "GRV" },
-  { label: "Order Booking",    href: "/gravure/orders",        icon: ShoppingCart,   badge: "GRV" },
-  { label: "Work Order",    href: "/extrusion/workorder",  icon: Printer,       badge: "EXT" },
-  { label: "Work Order",    href: "/gravure/workorder",    icon: Printer,       badge: "GRV" },
-  { label: "Production",    href: "/production",         icon: PlayCircle,     badge: "EXT" },
-  { label: "Production",    href: "/gravure/production", icon: PlayCircle,     badge: "GRV" },
-  { label: "Dispatch",      href: "/dispatch",           icon: Truck,          badge: null },
+  { label: "Dashboard",        href: "/dashboard",                 icon: LayoutDashboard },
+  { label: "Enquiry",          href: "/extrusion/enquiry",         icon: ClipboardList,  badge: "EXT" },
+  { label: "Enquiry",          href: "/enquiry",                   icon: ClipboardList,  badge: "GRV" },
+  { label: "Estimation",       href: "/cost-estimation",           icon: Calculator,     badge: "EXT" },
+  { label: "Estimation",       href: "/gravure/estimation",        icon: Calculator,     badge: "GRV" },
+  { label: "Product Catalog",  href: "/extrusion/product-catalog", icon: BookMarked,     badge: "EXT" },
+  { label: "Product Catalog",  href: "/gravure/product-catalog",   icon: BookMarked,     badge: "GRV" },
+  { label: "Order Booking",    href: "/gravure/orders",            icon: ShoppingCart,   badge: "GRV" },
+  { label: "Work Order",       href: "/extrusion/workorder",       icon: Printer,        badge: "EXT" },
+  { label: "Work Order",       href: "/gravure/workorder",         icon: Printer,        badge: "GRV" },
+  { label: "Production",       href: "/production",                icon: PlayCircle,     badge: "EXT" },
+  { label: "Production",       href: "/gravure/production",        icon: PlayCircle,     badge: "GRV" },
+  { label: "Dispatch",         href: "/dispatch",                  icon: Truck,          badge: null },
   {
     label: "Masters", icon: Settings2, children: [
-      { label: "Product Category Master",    href: "/masters/categories",   icon: Boxes },
-      { label: "Item Master",        href: "/masters/items",        icon: FlaskConical },
-      { label: "Ledger Master",      href: "/masters/employees",    icon: UserCheck },
-      { label: "Tool Master",        href: "/masters/tools",        icon: Wrench },
-      { label: "Process Master",     href: "/masters/processes",    icon: Workflow },
-      { label: "Machine Master",     href: "/masters/machines",     icon: Factory },
-      { label: "Item Group Master",  href: "/masters/item-groups",  icon: Boxes },
-      { label: "SubGroup Master",    href: "/masters/subgroups",    icon: Tag },
-      { label: "Department Master",  href: "/masters/departments",  icon: Building2 },
-      { label: "Recipe Master",      href: "/masters/recipes",      icon: BookOpen },
-      { label: "HSN Master",         href: "/masters/hsn",          icon: Barcode },
-      { label: "Unit Master",        href: "/masters/units",        icon: Factory },
+      { label: "Product Category Master", href: "/masters/categories",  icon: Boxes },
+      { label: "Item Master",             href: "/masters/items",        icon: FlaskConical },
+      { label: "Ledger Master",           href: "/masters/employees",    icon: UserCheck },
+      { label: "Cylinder Master",         href: "/masters/tools",        icon: Wrench },
+      { label: "Process Master",          href: "/masters/processes",    icon: Workflow },
+      { label: "Machine Master",          href: "/masters/machines",     icon: Factory },
+      { label: "Item Group Master",       href: "/masters/item-groups",  icon: Boxes },
+      { label: "SubGroup Master",         href: "/masters/subgroups",    icon: Tag },
+      { label: "Department Master",       href: "/masters/departments",  icon: Building2 },
+      { label: "Recipe Master",           href: "/masters/recipes",      icon: BookOpen },
+      { label: "HSN Master",              href: "/masters/hsn",          icon: Barcode },
+      { label: "Unit Master",             href: "/masters/units",        icon: Factory },
     ],
   },
   {
@@ -84,106 +85,213 @@ const navItems: NavItem[] = [
   },
 ];
 
-interface SidebarProps { mobileOpen: boolean; desktopOpen: boolean; onClose: () => void; }
+// ─── Flyout panel (collapsed mode only) ────────────────────────────────────────
+interface FlyoutProps {
+  group: GroupItem;
+  anchorY: number;
+  pathname: string;
+  onClose: () => void;
+  onNavigate: () => void;
+  onNavClick?: () => void;
+}
 
-export default function Sidebar({ mobileOpen, desktopOpen, onClose }: SidebarProps) {
+function Flyout({ group, anchorY, pathname, onClose, onNavigate, onNavClick }: FlyoutProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  // Clamp so panel doesn't overflow bottom of viewport
+  const panelHeight = group.children.length * 36 + 44; // approx
+  const maxTop = typeof window !== "undefined" ? window.innerHeight - panelHeight - 8 : anchorY;
+  const top = Math.min(anchorY, maxTop);
+
+  return (
+    <div
+      ref={panelRef}
+      className="fixed z-50 rounded-xl shadow-2xl py-2 overflow-hidden"
+      style={{
+        left: 66,
+        top: Math.max(8, top),
+        minWidth: 210,
+        background: "var(--erp-sidebar-bg)",
+        border: "1px solid rgba(255,255,255,0.10)",
+      }}
+    >
+      {/* Group label */}
+      <div
+        className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest"
+        style={{
+          color: "rgba(255,255,255,0.35)",
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+          marginBottom: 4,
+        }}
+      >
+        {group.label}
+      </div>
+
+      {group.children.map(child => {
+        const active = pathname === child.href;
+        return (
+          <Link
+            key={child.href}
+            href={child.href}
+            onClick={() => { onNavigate(); onClose(); onNavClick?.(); }}
+            className="flex items-center gap-2.5 px-4 py-2 text-[13px] font-medium transition-colors"
+            style={{
+              color: active ? "#fff" : "rgba(255,255,255,0.6)",
+              background: active ? "var(--erp-primary)" : "transparent",
+            }}
+            onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = "rgba(44,93,138,0.45)"; }}
+            onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            <child.icon size={14} className="flex-shrink-0" />
+            <span className="whitespace-nowrap">{child.label}</span>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+interface SidebarProps { mobileOpen: boolean; desktopOpen: boolean; onClose: () => void; onNavClick?: () => void; }
+
+export default function Sidebar({ mobileOpen, desktopOpen, onClose, onNavClick }: SidebarProps) {
   const pathname = usePathname();
   const { unit } = useUnit();
   const [expanded, setExpanded] = useState<string | null>(null);
   const toggle = (label: string) => setExpanded(p => p === label ? null : label);
 
+  // Flyout state for collapsed mode
+  const [flyout, setFlyout] = useState<{ key: string; group: GroupItem; anchorY: number } | null>(null);
+
+  // collapsed = icon-only narrow sidebar on desktop
+  const collapsed = !desktopOpen;
+
   const visibleItems = navItems.filter(item => {
     if ("children" in item) return true;
     const badge = (item as FlatItem).badge;
     if (badge === null || badge === undefined) return true;
-    if (unit === "Both") return true;
     if (unit === "Extrusion" && badge === "EXT") return true;
     if (unit === "Gravure"   && badge === "GRV") return true;
     return false;
   });
 
+  const openFlyout = (key: string, group: GroupItem, e: React.MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setFlyout({ key, group, anchorY: rect.top });
+  };
+
   return (
     <>
-      {mobileOpen && <div className="fixed inset-0 z-20 bg-black/50 lg:hidden" onClick={onClose} />}
+      {/* Mobile overlay */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-20 bg-black/50 lg:hidden" onClick={onClose} />
+      )}
 
       <aside
-        className={`fixed top-0 left-0 z-30 h-full w-[220px] flex flex-col transition-transform duration-300 select-none
-          ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
+        className={`
+          fixed top-0 left-0 z-30 h-full flex flex-col select-none
+          transition-all duration-300
+          ${mobileOpen ? "translate-x-0 w-[220px]" : "-translate-x-full w-[220px]"}
           lg:translate-x-0 lg:static lg:z-auto
-          ${!desktopOpen ? "lg:hidden" : ""}`}
+          ${collapsed ? "lg:w-[60px]" : "lg:w-[220px]"}
+        `}
         style={{ background: "var(--erp-sidebar-bg)" }}
       >
         {/* ── Logo ── */}
         <div
-          className="flex items-center justify-between px-4 py-4"
+          className="flex items-center px-3 py-4 flex-shrink-0"
           style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}
         >
-          <div className="flex items-center gap-2.5">
-            <div
-              className="w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0"
-              style={{ background: "var(--erp-primary)" }}
-            >
-              <Package size={16} className="text-white" />
-            </div>
-            <div>
-              <p className="text-[9px] font-semibold uppercase tracking-widest leading-none mb-0.5"
-                style={{ color: "rgba(255,255,255,0.35)" }}>
-                Flexible Packaging ERP
-              </p>
-              <h1 className="text-sm font-bold text-white leading-none">AJ Shrink</h1>
-            </div>
+          <div
+            className="w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0"
+            style={{ background: "var(--erp-primary)" }}
+          >
+            <Package size={16} className="text-white" />
           </div>
-          <button onClick={onClose} className="lg:hidden hover:text-white transition-colors"
+
+          {/* Text — hidden when collapsed */}
+          <div className={`ml-2.5 overflow-hidden transition-all duration-300 ${collapsed ? "lg:w-0 lg:opacity-0" : "lg:w-auto lg:opacity-100"} w-auto opacity-100`}>
+            <p className="text-[9px] font-semibold uppercase tracking-widest leading-none mb-0.5 whitespace-nowrap"
+              style={{ color: "rgba(255,255,255,0.35)" }}>
+              Flexible Packaging ERP
+            </p>
+            <h1 className="text-sm font-bold text-white leading-none whitespace-nowrap">AJ Shrink</h1>
+          </div>
+
+          {/* Mobile close */}
+          <button onClick={onClose} className="ml-auto lg:hidden hover:text-white transition-colors"
             style={{ color: "rgba(255,255,255,0.35)" }}>
             <X size={17} />
           </button>
         </div>
 
-        {/* ── Unit label strip ── */}
-        <div
-          className="px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest"
-          style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.3)" }}
-        >
-          Navigation
-        </div>
+        {/* ── Section label — hidden when collapsed ── */}
+        {!collapsed && (
+          <div
+            className="px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest hidden lg:block"
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.3)" }}
+          >
+            Navigation
+          </div>
+        )}
 
         {/* ── Nav ── */}
-        <nav className="erp-sidebar-scroll flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
+        <nav className="erp-sidebar-scroll flex-1 overflow-y-auto py-2 px-1.5 space-y-0.5">
           {visibleItems.map((item, idx) => {
             const children = "children" in item ? item.children : undefined;
 
             if (children) {
               const key        = item.label + idx;
-              const isExpanded = expanded === key;
+              const isExpanded = expanded === key && !collapsed;
               const isActive   = children.some(c => pathname.startsWith(c.href));
+              const isFlyoutOpen = flyout?.key === key;
 
               return (
                 <div key={key}>
                   <button
-                    onClick={() => toggle(key)}
-                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-md text-sm font-medium transition-colors"
+                    onClick={e => {
+                      if (collapsed) {
+                        // Toggle flyout
+                        if (isFlyoutOpen) {
+                          setFlyout(null);
+                        } else {
+                          openFlyout(key, item as GroupItem, e);
+                        }
+                      } else {
+                        toggle(key);
+                      }
+                    }}
+                    title={collapsed ? item.label : undefined}
+                    className="w-full flex items-center px-2.5 py-2.5 rounded-md text-sm font-medium transition-colors"
                     style={{
-                      color:      isActive ? "#fff" : "rgba(255,255,255,0.55)",
-                      background: isActive ? "rgba(44,93,138,0.55)" : "transparent",
+                      color:      (isActive || isFlyoutOpen) ? "#fff" : "rgba(255,255,255,0.55)",
+                      background: (isActive || isFlyoutOpen) ? "rgba(44,93,138,0.55)" : "transparent",
+                      justifyContent: collapsed ? "center" : "space-between",
                     }}
-                    onMouseEnter={e => {
-                      if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)";
-                    }}
-                    onMouseLeave={e => {
-                      if (!isActive) (e.currentTarget as HTMLElement).style.background = "transparent";
-                    }}
+                    onMouseEnter={e => { if (!isActive && !isFlyoutOpen) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+                    onMouseLeave={e => { if (!isActive && !isFlyoutOpen) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                   >
                     <span className="flex items-center gap-3">
-                      <item.icon size={15} />
-                      <span className="text-[13px]">{item.label}</span>
+                      <item.icon size={15} className="flex-shrink-0" />
+                      {!collapsed && <span className="text-[13px] whitespace-nowrap">{item.label}</span>}
                     </span>
-                    {isExpanded
-                      ? <ChevronDown size={12} style={{ color: "rgba(255,255,255,0.3)" }} />
-                      : <ChevronRight size={12} style={{ color: "rgba(255,255,255,0.3)" }} />
-                    }
+                    {!collapsed && (
+                      isExpanded
+                        ? <ChevronDown size={12} style={{ color: "rgba(255,255,255,0.3)" }} />
+                        : <ChevronRight size={12} style={{ color: "rgba(255,255,255,0.3)" }} />
+                    )}
                   </button>
 
-                  {isExpanded && (
+                  {isExpanded && !collapsed && (
                     <div
                       className="mt-0.5 ml-3 pl-3 space-y-0.5"
                       style={{ borderLeft: "1px solid rgba(44,93,138,0.4)" }}
@@ -192,18 +300,14 @@ export default function Sidebar({ mobileOpen, desktopOpen, onClose }: SidebarPro
                         const active = pathname === child.href;
                         return (
                           <Link
-                            key={child.href} href={child.href} onClick={onClose}
+                            key={child.href} href={child.href} onClick={() => { onClose(); onNavClick?.(); }}
                             className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-colors"
                             style={{
                               color:      active ? "#fff" : "rgba(255,255,255,0.45)",
                               background: active ? "var(--erp-primary)" : "transparent",
                             }}
-                            onMouseEnter={e => {
-                              if (!active) (e.currentTarget as HTMLElement).style.background = "rgba(44,93,138,0.3)";
-                            }}
-                            onMouseLeave={e => {
-                              if (!active) (e.currentTarget as HTMLElement).style.background = "transparent";
-                            }}
+                            onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = "rgba(44,93,138,0.3)"; }}
+                            onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                           >
                             <child.icon size={13} />
                             {child.label}
@@ -223,23 +327,26 @@ export default function Sidebar({ mobileOpen, desktopOpen, onClose }: SidebarPro
 
             return (
               <Link
-                key={href + idx} href={href} onClick={onClose}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-md text-[13px] font-medium transition-colors"
+                key={href + idx} href={href} onClick={() => { onClose(); onNavClick?.(); }}
+                title={collapsed ? (item as FlatItem).label : undefined}
+                className="flex items-center px-2.5 py-2.5 rounded-md text-[13px] font-medium transition-colors"
                 style={{
                   color:      isActive ? "#ffffff" : "rgba(255,255,255,0.55)",
                   background: isActive ? "var(--erp-primary)" : "transparent",
+                  gap: collapsed ? 0 : "12px",
+                  justifyContent: collapsed ? "center" : "flex-start",
                 }}
-                onMouseEnter={e => {
-                  if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)";
-                }}
-                onMouseLeave={e => {
-                  if (!isActive) (e.currentTarget as HTMLElement).style.background = "transparent";
-                }}
+                onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+                onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
               >
                 <item.icon size={15} className="flex-shrink-0" />
-                <span className="flex-1 leading-none">{item.label}</span>
-                {badge === "EXT" && <ExtBadge />}
-                {badge === "GRV" && <GrvBadge />}
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 leading-none whitespace-nowrap">{(item as FlatItem).label}</span>
+                    {badge === "EXT" && <ExtBadge />}
+                    {badge === "GRV" && <GrvBadge />}
+                  </>
+                )}
               </Link>
             );
           })}
@@ -247,12 +354,17 @@ export default function Sidebar({ mobileOpen, desktopOpen, onClose }: SidebarPro
 
         {/* ── Footer ── */}
         <div
-          className="px-4 py-3 flex items-center justify-between"
-          style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}
+          className="px-3 py-3 flex items-center"
+          style={{
+            borderTop: "1px solid rgba(255,255,255,0.07)",
+            justifyContent: collapsed ? "center" : "space-between",
+          }}
         >
-          <span className="text-[10px] font-medium" style={{ color: "rgba(255,255,255,0.25)" }}>
-            v1.2024 AJ Shrink ERP
-          </span>
+          {!collapsed && (
+            <span className="text-[10px] font-medium" style={{ color: "rgba(255,255,255,0.25)" }}>
+              v1.2024 AJ Shrink ERP
+            </span>
+          )}
           <Settings2 size={13} className="cursor-pointer transition-colors"
             style={{ color: "rgba(255,255,255,0.25)" }}
             onMouseEnter={e => { (e.currentTarget as SVGElement).style.color = "rgba(255,255,255,0.7)"; }}
@@ -260,6 +372,18 @@ export default function Sidebar({ mobileOpen, desktopOpen, onClose }: SidebarPro
           />
         </div>
       </aside>
+
+      {/* ── Flyout panel (collapsed desktop mode only) ── */}
+      {collapsed && flyout && (
+        <Flyout
+          group={flyout.group}
+          anchorY={flyout.anchorY}
+          pathname={pathname}
+          onClose={() => setFlyout(null)}
+          onNavigate={onClose}
+          onNavClick={onNavClick}
+        />
+      )}
     </>
   );
 }

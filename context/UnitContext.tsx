@@ -1,7 +1,7 @@
 "use client";
 import { createContext, useContext, useState } from "react";
 
-export type BusinessUnit = "Extrusion" | "Gravure" | "Both";
+export type BusinessUnit = "Extrusion" | "Gravure";
 
 type UnitContextType = {
   unit: BusinessUnit;
@@ -9,12 +9,12 @@ type UnitContextType = {
 };
 
 const UnitContext = createContext<UnitContextType>({
-  unit: "Both",
+  unit: "Gravure",
   setUnit: () => {},
 });
 
 export function UnitProvider({ children }: { children: React.ReactNode }) {
-  const [unit, setUnit] = useState<BusinessUnit>("Both");
+  const [unit, setUnit] = useState<BusinessUnit>("Gravure");
   return (
     <UnitContext.Provider value={{ unit, setUnit }}>
       {children}
