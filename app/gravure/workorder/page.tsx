@@ -1,9 +1,9 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Eye, Pencil, Trash2, Printer, CheckCircle2, ClipboardList,
   Clock, RefreshCw, Edit3, Calculator, BookMarked, ChevronRight,
-  Layers, AlertCircle, ArrowRight, Plus, X, Check,
+  Layers, AlertCircle, ArrowRight, Plus, X, Check, Search,
   Factory, Send, Package, ShoppingCart, Palette, Wrench, Archive,
 } from "lucide-react";
 import {
@@ -17,6 +17,7 @@ import { useCategories } from "@/context/CategoriesContext";
 import { useProductCatalog } from "@/context/ProductCatalogContext";
 import { GravureProductCatalog } from "@/data/dummyData";
 import { PlanViewer, PlanInput } from "@/components/gravure/PlanViewer";
+import { DimensionDiagram, DimensionInputPanel, DimValues, CONTENT_TYPE_CONFIG } from "@/components/gravure/DimensionDiagram";
 import { generateCode, UNIT_CODE, MODULE_CODE } from "@/lib/generateCode";
 import { DataTable, Column } from "@/components/tables/DataTable";
 import { statusBadge }       from "@/components/ui/Badge";
@@ -152,20 +153,38 @@ const blankWO: Omit<GravureWorkOrder, "id" | "workOrderNo"> = {
   actualWidth: 0, actualHeight: 0,
   width: 0, noOfColors: 6,
   printType: "Surface Print",
+  // Structure & dimension extras
+  structureType: undefined,
+  trimmingSize: 0, widthShrinkage: 0,
+  gusset: 0, topSeal: 0, bottomSeal: 0,
+  sideSeal: 0, centerSealWidth: 0, sideGusset: 0,
+  seamingArea: 0, transparentArea: 0,
+  finalRollOD: undefined, rollUnit: "Meter",
+  unwindDirection: 0,
+  frontColors: 4, backColors: 2,
+  salesPerson: "", salesType: "Local",
   machineId: "", machineName: "",
   cylinderCostPerColor: 3500,
   operatorId: "", operatorName: "",
   cylinderSet: "", inks: [],
   quantity: 0, unit: "Meter",
+  wastagePct: 1,
   plannedDate: "",
   processes: [], secondaryLayers: [],
   selectedPlanId: "", ups: 0,
-  trimmingSize: 0, frontColors: 4, backColors: 2,
   overheadPct: 12, profitPct: 15,
   perMeterRate: 0, totalAmount: 0,
   specialInstructions: "",
   status: "Open",
 };
+
+// ─── Auto-process qty helper (mirrors estimation) ────────────
+function autoProcessQty(chargeUnit: string, qty: number, areaM2: number, colors: number): number {
+  if (chargeUnit === "m²")       return parseFloat(areaM2.toFixed(4));
+  if (chargeUnit === "Meter")    return qty;
+  if (chargeUnit === "Cylinder") return colors;
+  return 0;
+}
 
 // ─── Section Header ────────────────────────────────────────────
 const SH = ({ label }: { label: string }) => (
@@ -188,8 +207,12 @@ export default function GravureWorkOrderPage() {
   const [pendingWOCategoryId, setPendingWOCategoryId] = useState<string | null>(null);
   const [showPlan,      setShowPlan]      = useState(false);
   const [isPlanApplied, setIsPlanApplied] = useState(false);
-  const [planSearch,    setPlanSearch]    = useState("");
-  const [planSort,      setPlanSort]      = useState<{ key: string; dir: "asc" | "desc" }>({ key: "", dir: "asc" });
+  const [planSearch,       setPlanSearch]       = useState("");
+  const [planSort,         setPlanSort]         = useState<{ key: string; dir: "asc" | "desc" }>({ key: "", dir: "asc" });
+  const [planColFilters,   setPlanColFilters]   = useState<Record<string, Set<string>>>({});
+  const [planFilterOpen,   setPlanFilterOpen]   = useState<string | null>(null);
+  const [planFilterSearch, setPlanFilterSearch] = useState<Record<string, string>>({});
+  const [planFilterDraft,  setPlanFilterDraft]  = useState<Record<string, Set<string>>>({});
 
   // ── Production Preparation Types ────────────────────────────
   type FilmRequisition = { source: "Extrusion" | "Purchase" | ""; status: "Pending" | "Requested" | "Available"; requiredDate?: string; spec?: string; priority?: string; vendor?: string; expectedRate?: number; remarks?: string; };
@@ -201,23 +224,109 @@ export default function GravureWorkOrderPage() {
   const [materialAllocs, setMaterialAllocs] = useState<MaterialAlloc[]>([]);
   const [cylinderAllocs, setCylinderAllocs] = useState<CylinderAlloc[]>([]);
   const [prepTab,        setPrepTab]        = useState<"film" | "shade" | "material" | "tool">("film");
+  // ── New Cylinder Modal (for life-expired cylinder replacement) ─
+  type NewCylModalState = { rowIdx: number; fromTool: typeof CYLINDER_TOOLS_ALL[number] };
+  const [newCylModal, setNewCylModal]   = useState<NewCylModalState | null>(null);
+  const [newCylForm,  setNewCylForm]    = useState({ code: "", name: "", printWidth: "", repeatLength: "", shelfLifeMeters: "25000", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome" });
+  const [extraCyls,   setExtraCyls]    = useState<(typeof CYLINDER_TOOLS_ALL[number])[]>([]);
 
-  // ── View Plan ─────────────────────────────────────────────
+  // ── Dimension diagram state ───────────────────────────────
+  const [dimValues, setDimValues] = useState<DimValues>({});
+  const patchDim = (patch: DimValues) => setDimValues(p => ({ ...p, ...patch }));
+
+  // ── Derive structureType from content string ──────────────
+  const getStructureType = (content: string): "Label" | "Sleeve" | "Pouch" => {
+    if (!content) return "Label";
+    const c = content.toLowerCase();
+    if (c.includes("sleeve")) return "Sleeve";
+    if (c.includes("pouch") || c.includes("standup") || c.includes("zipper") || c.includes("3d") || c.includes("flat bottom") || c.includes("gusset") || c.includes("center seal") || c.includes("side seal")) return "Pouch";
+    return "Label";
+  };
+
+  // ── View Plan (WO list) ────────────────────────────────────
   const [viewPlanWO, setViewPlanWO]   = useState<GravureWorkOrder | null>(null);
 
-  // ── Production Plan calculation (Sleeve × Cylinder based) ────
+  // ── UPS Layout preview (plan selection table) ─────────────
+  const [woUpsPreview, setWoUpsPreview] = useState<any>(null);
+
+  // ── Total ply GSM (for weight calculation in plan rows) ─────
+  const totalPlyGSM = useMemo(() =>
+    form.secondaryLayers.reduce((s, l) => s + l.gsm + l.consumableItems.reduce((cs, ci) => cs + (ci.gsm || 0), 0), 0),
+    [form.secondaryLayers]);
+
+  // ── Production Plan calculation — content/structureType aware (mirrors estimation) ──
   const allPlans = useMemo(() => {
     const machine = PRINT_MACHINES.find(m => m.id === form.machineId);
     if (!machine || !form.actualWidth || form.actualWidth <= 0) return [];
 
     const machineMaxFilm = parseFloat((machine as any).maxWebWidth) || 1300;
-    const baseCirc   = form.jobHeight > 0 ? Math.ceil(form.jobHeight / 12) * 12 : 450;
-    const laneWidth  = form.actualWidth + (form.trimmingSize || 0);
+    const machineMinFilm = parseFloat((machine as any).minWebWidth) || 0;
+    const machineMinCirc = parseFloat((machine as any).repeatLengthMin) || 0;
+    const machineMaxCirc = parseFloat((machine as any).repeatLengthMax) || 9999;
 
-    const trim      = form.trimmingSize || 0;
-    const repeatUPS = form.jobHeight > 0 ? Math.max(1, Math.floor(baseCirc / form.jobHeight)) : 10;
+    const sType    = (form as any).structureType || getStructureType(form.content || "");
+    const content  = form.content || "";
+    const trim     = form.trimmingSize || 0;
+    const shrink   = (form as any).widthShrinkage || 0;
+    const gusset   = (form as any).gusset   || 0;
+    const topSeal  = (form as any).topSeal  || 0;
+    const btmSeal  = (form as any).bottomSeal || 0;
+    const sideSeal = (form as any).sideSeal || 0;
+    const ctrSeal  = (form as any).centerSealWidth || 0;
+    const sideGust = (form as any).sideGusset || 0;
+    const slvTransp= (form as any).transparentArea || 0;
+    const slvSeam  = (form as any).seamingArea || 0;
+    const speed    = parseFloat((machine as any).speedMax) || 150;
+    const plyGSM   = totalPlyGSM;
+    const jobW     = form.actualWidth || 0;
+    const jobH     = form.jobHeight   || 0;
 
-    // ── LOOP A: Sleeve in stock → cylinder (or SPECIAL CYL) ──
+    // ── Lane width per UPS (matches estimation logic) ──
+    let laneWidth: number;
+    if (sType === "Sleeve") {
+      laneWidth = jobW * 2 + slvTransp + slvSeam;
+    } else if (content === "Pouch — 3 Side Seal" || content === "Standup Pouch" || content === "Zipper Pouch") {
+      laneWidth = jobW + 2 * sideSeal;
+    } else if (content === "Pouch — Center Seal") {
+      laneWidth = jobW * 2 + ctrSeal;
+    } else if (content === "Both Side Gusset Pouch" || content === "3D Pouch / Flat Bottom") {
+      laneWidth = jobW + 2 * sideGust;
+    } else {
+      laneWidth = jobW;
+    }
+    if (laneWidth <= 0) laneWidth = jobW > 0 ? jobW : 1;
+
+    // ── Effective repeat (cylinder circumference direction) ──
+    const sleeveCutLength = sType === "Sleeve" ? jobH + shrink : 0;
+    let effectiveRepeat: number;
+    if (sType === "Sleeve") {
+      effectiveRepeat = sleeveCutLength;
+    } else if (content === "Pouch — 3 Side Seal" || content === "Pouch — Center Seal" || content === "Both Side Gusset Pouch") {
+      effectiveRepeat = jobH + topSeal + btmSeal + shrink;
+    } else if (content === "Standup Pouch" || content === "Zipper Pouch" || content === "3D Pouch / Flat Bottom") {
+      effectiveRepeat = jobH + topSeal + (gusset > 0 ? gusset / 2 : 0) + shrink;
+    } else {
+      effectiveRepeat = jobH + shrink;
+    }
+
+    const calcRepeatUPS = (cylCirc: number) => {
+      if (effectiveRepeat <= 0) return 1;
+      return Math.round(cylCirc / effectiveRepeat);
+    };
+
+    const isValidCircumference = (cylCirc: number) => {
+      if (cylCirc < machineMinCirc || cylCirc > machineMaxCirc) return false;
+      if (sType === "Sleeve") {
+        if (sleeveCutLength <= 0) return false;
+        const rem = cylCirc % sleeveCutLength;
+        return rem < 1 || (sleeveCutLength - rem) < 1;
+      }
+      if (effectiveRepeat <= 0) return true;
+      const rem = cylCirc % effectiveRepeat;
+      return rem < 0.5 || (effectiveRepeat - rem) < 0.5;
+    };
+
+    // ── LOOP A: Sleeve in stock → cylinder ──
     const loopA = SLEEVE_TOOLS.flatMap(sleeve => {
       const sleeveWidthVal = parseFloat(sleeve.printWidth);
       if (sleeveWidthVal > machineMaxFilm) return [];
@@ -228,74 +337,112 @@ export default function GravureWorkOrderPage() {
         const printingWidth = acUps * laneWidth;
         const filmWidth = printingWidth + 2 * trim;
         if (filmWidth > sleeveWidthVal) return [];
+        if (filmWidth < machineMinFilm) return [];
         const req    = filmWidth + 100;
         const minCyl = req < sleeveWidthVal ? req : sleeveWidthVal + 100;
-        const validCylinders = CYLINDER_TOOLS.filter(t => parseFloat(t.printWidth) >= minCyl);
+        const validCylinders = CYLINDER_TOOLS.filter(t => {
+          if (parseFloat(t.printWidth) < minCyl) return false;
+          const circ = parseFloat(t.repeatLength || "450") || 450;
+          return isValidCircumference(circ);
+        });
+        const specialCylinders = (() => {
+          if (sType === "Sleeve") {
+            if (effectiveRepeat < machineMinCirc || effectiveRepeat > machineMaxCirc) return [];
+            return [{ id: "SPECIAL-CYL-SLEEVE", code: "SPL", name: `Special Order Sleeve Cyl (${effectiveRepeat}mm)`, printWidth: String(Math.ceil(minCyl)), repeatLength: String(effectiveRepeat), isSpecial: true }];
+          }
+          if (effectiveRepeat <= 0) return [{ id: "SPECIAL-CYL-1", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: "450", isSpecial: true }];
+          const results = [];
+          for (let mult = 1; mult * effectiveRepeat <= machineMaxCirc; mult++) {
+            const circ = mult * effectiveRepeat;
+            if (circ < machineMinCirc) continue;
+            results.push({ id: `SPECIAL-CYL-${mult}`, code: "SPL", name: `Special Order (${mult}×${effectiveRepeat}mm)`, printWidth: String(Math.ceil(minCyl)), repeatLength: String(circ), isSpecial: true });
+          }
+          return results.length > 0 ? results : [];
+        })();
         const cylList = validCylinders.length > 0
-          ? validCylinders.map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, isSpecial: false, isSpecialSleeve: false }))
-          : [{ id: "SPECIAL-CYL", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), isSpecial: true, isSpecialSleeve: false }];
+          ? validCylinders.map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, repeatLength: c.repeatLength || "450", isSpecial: false, isSpecialSleeve: false }))
+          : specialCylinders.map(c => ({ ...c, isSpecialSleeve: false }));
         const sideWaste  = parseFloat((2 * trim).toFixed(1));
         const deadMargin = parseFloat((sleeveWidthVal - filmWidth).toFixed(1));
         const totalWaste = parseFloat((sideWaste + deadMargin).toFixed(1));
-        const totalUPS   = acUps * repeatUPS;
-        const reqRMT     = form.quantity > 0 ? Math.ceil(form.quantity / totalUPS) : 1;
-        const totalRMT   = Math.ceil(reqRMT * 1.01);
-        return cylList.map(cylinder => ({
-          planId: `PLAN-${machine.id}-${sleeve.id}-UPS${acUps}-${cylinder.id}`,
-          machineName: machine.name,
-          filmSize: filmWidth, acUps, printingWidth,
-          sleeveCode: sleeve.code, sleeveName: sleeve.name, sleeveWidthVal,
-          cylinderCode: cylinder.code, cylinderName: cylinder.name,
-          cylinderWidthVal: parseFloat(cylinder.printWidth),
-          sideWaste, deadMargin, totalWaste,
-          cylCirc: baseCirc, repeatUPS, totalUPS,
-          reqRMT, totalRMT, wastage: totalWaste,
-          isSpecial: cylinder.isSpecial, isSpecialSleeve: false, isBest: false,
-        }));
+        return cylList.flatMap(cylinder => {
+          const cylWidthV = parseFloat(cylinder.printWidth);
+          if (cylWidthV < sleeveWidthVal + 100) return [];
+          if (cylWidthV < machineMinFilm || cylWidthV > machineMaxFilm) return [];
+          const cylCirc       = parseFloat(cylinder.repeatLength) || 450;
+          const repeatUPS     = calcRepeatUPS(cylCirc);
+          const totalUPS      = acUps * repeatUPS;
+          const reqRMT        = form.quantity > 0 ? Math.ceil(form.quantity / totalUPS) : 1;
+          const totalRMT      = Math.ceil(reqRMT * 1.01);
+          const cylAreaSqMm   = cylWidthV * cylCirc;
+          const cylAreaSqInch = parseFloat((cylAreaSqMm / 645.16).toFixed(2));
+          const totalWt       = parseFloat((totalRMT * (form.actualWidth / 1000) * plyGSM / 1000).toFixed(3));
+          const totalTime     = parseFloat((totalRMT / (speed * 60)).toFixed(2));
+          return [{
+            planId: `WO-${machine.id}-${sleeve.id}-UPS${acUps}-${cylinder.id}`,
+            machineName: machine.name,
+            filmSize: filmWidth, acUps, printingWidth,
+            sleeveCode: sleeve.code, sleeveName: sleeve.name, sleeveWidthVal,
+            cylinderCode: cylinder.code, cylinderName: cylinder.name,
+            cylinderWidthVal: cylWidthV,
+            sideWaste, deadMargin, totalWaste,
+            cylCirc, cylRepeatLength: cylCirc, cylAreaSqMm, cylAreaSqInch,
+            repeatUPS, totalUPS,
+            reqRMT, totalRMT, totalWt, totalTime, wastage: totalWaste,
+            isSpecial: cylinder.isSpecial, isSpecialSleeve: false, isBest: false,
+          }];
+        }).flat();
       }).flat();
     });
 
-    // ── LOOP B: Cylinder in stock → no sleeve available → SPECIAL SLEEVE ──
+    // ── LOOP B: Cylinder in stock → SPECIAL SLEEVE ──
     const loopB = CYLINDER_TOOLS.flatMap(cylinder => {
       const cylWidthVal = parseFloat(cylinder.printWidth);
-      const maxAcUps    = Math.floor(cylWidthVal / laneWidth);
+      if (cylWidthVal < machineMinFilm || cylWidthVal > machineMaxFilm) return [];
+      const cylCirc = parseFloat(cylinder.repeatLength || "450") || 450;
+      if (!isValidCircumference(cylCirc)) return [];
+      const maxAcUps = Math.floor((cylWidthVal - 100) / laneWidth);
       if (maxAcUps === 0) return [];
       return Array.from({ length: maxAcUps }, (_, i) => {
         const acUps = i + 1;
         const printingWidth = acUps * laneWidth;
         const filmWidth = printingWidth + 2 * trim;
         if (filmWidth > machineMaxFilm) return [];
+        if (filmWidth < machineMinFilm) return [];
         const realSleeveExists = SLEEVE_TOOLS.some(s => {
           const sw = parseFloat(s.printWidth);
           if (sw < filmWidth || sw > machineMaxFilm) return false;
-          const req = filmWidth + 100;
-          const minCyl = req < sw ? req : sw + 100;
-          return cylWidthVal >= minCyl;
+          return cylWidthVal >= sw + 100;
         });
         if (realSleeveExists) return [];
-        if (cylWidthVal < filmWidth + 100) return [];
         const sideWaste  = parseFloat((2 * trim).toFixed(1));
         const deadMargin = 0;
         const totalWaste = sideWaste;
+        const repeatUPS  = calcRepeatUPS(cylCirc);
         const totalUPS   = acUps * repeatUPS;
         const reqRMT     = form.quantity > 0 ? Math.ceil(form.quantity / totalUPS) : 1;
         const totalRMT   = Math.ceil(reqRMT * 1.01);
+        const cylAreaSqMm   = cylWidthVal * cylCirc;
+        const cylAreaSqInch = parseFloat((cylAreaSqMm / 645.16).toFixed(2));
+        const totalWt       = parseFloat((totalRMT * (form.actualWidth / 1000) * plyGSM / 1000).toFixed(3));
+        const totalTime     = parseFloat((totalRMT / (speed * 60)).toFixed(2));
         return [{
-          planId: `PLAN-${machine.id}-SPLSLV-UPS${acUps}-${cylinder.id}`,
+          planId: `WO-${machine.id}-SPLSLV-UPS${acUps}-${cylinder.id}`,
           machineName: machine.name,
           filmSize: filmWidth, acUps, printingWidth,
-          sleeveCode: "SPL-S", sleeveName: "Special Order", sleeveWidthVal: filmWidth,
+          sleeveCode: "SPL-S", sleeveName: "Special Order Sleeve", sleeveWidthVal: filmWidth,
           cylinderCode: cylinder.code, cylinderName: cylinder.name,
           cylinderWidthVal: cylWidthVal,
           sideWaste, deadMargin, totalWaste,
-          cylCirc: baseCirc, repeatUPS, totalUPS,
-          reqRMT, totalRMT, wastage: totalWaste,
+          cylCirc, cylRepeatLength: cylCirc, cylAreaSqMm, cylAreaSqInch,
+          repeatUPS, totalUPS,
+          reqRMT, totalRMT, totalWt, totalTime, wastage: totalWaste,
           isSpecial: true, isSpecialSleeve: true, isBest: false,
         }];
       }).flat();
     });
 
-    const rawPlans = [...loopA, ...loopB];
+    const rawPlans = sType === "Sleeve" ? loopA : [...loopA, ...loopB];
     if (rawPlans.length === 0) return rawPlans;
     const sorted = [...rawPlans].sort((a, b) =>
       a.totalWaste  !== b.totalWaste  ? a.totalWaste  - b.totalWaste  :
@@ -304,12 +451,18 @@ export default function GravureWorkOrderPage() {
       b.acUps       !== a.acUps       ? b.acUps        - a.acUps       : 0
     );
     return sorted.map((p, idx) => ({ ...p, isBest: !p.isSpecial && idx === 0 }));
-  }, [form.machineId, form.actualWidth, form.jobHeight, form.trimmingSize, form.quantity]);
+  }, [form.machineId, form.actualWidth, form.jobHeight, form.trimmingSize, form.quantity, form.content, (form as any).structureType, (form as any).widthShrinkage, (form as any).gusset, (form as any).topSeal, (form as any).bottomSeal, (form as any).sideSeal, (form as any).centerSealWidth, (form as any).sideGusset, (form as any).seamingArea, (form as any).transparentArea]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visiblePlans = useMemo(() => {
     let rows = allPlans;
     const q = planSearch.trim().toLowerCase();
     if (q) rows = rows.filter(r => r.machineName.toLowerCase().includes(q) || String(r.cylCirc).includes(q) || String(r.totalUPS).includes(q) || String(r.filmSize).includes(q));
+    // Apply column filters (Excel-style, mirrors estimation)
+    Object.entries(planColFilters).forEach(([key, vals]) => {
+      if (vals.size > 0) {
+        rows = rows.filter(r => vals.has(String((r as any)[key] ?? "")));
+      }
+    });
     if (planSort.key) {
       rows = [...rows].sort((a, b) => {
         const av = (a as any)[planSort.key] ?? 0;
@@ -319,7 +472,7 @@ export default function GravureWorkOrderPage() {
       });
     }
     return rows;
-  }, [allPlans, planSearch, planSort]);
+  }, [allPlans, planSearch, planSort, planColFilters]);
 
   const togglePlanSort = (key: string) =>
     setPlanSort(s => s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" });
@@ -335,6 +488,66 @@ export default function GravureWorkOrderPage() {
   const woHasSpecialPlan = (wo: GravureWorkOrder) =>
     wo.selectedPlanId?.includes("SPECIAL") || wo.selectedPlanId?.includes("SPLSLV") || false;
 
+  // ── Live cost calculation (mirrors estimation calcCosts) ───
+  const liveCost = useMemo(() => {
+    const areaM2 = form.quantity * (form.jobWidth / 1000);
+    let plyMaterialCost = 0;
+    form.secondaryLayers.forEach(l => {
+      if (l.gsm > 0) {
+        const filmItem = FILM_ITEMS.find(i => i.subGroup === l.itemSubGroup);
+        const fr = filmItem ? parseFloat((filmItem as any).estimationRate || "0") : 0;
+        if (fr > 0) plyMaterialCost += (l.gsm * areaM2 / 1000) * fr;
+      }
+      l.consumableItems.forEach(ci => {
+        if (ci.gsm > 0 && ci.rate > 0) {
+          const pct = (ci as any).coveragePct ?? 100;
+          const effectiveGsm = pct < 100 ? ci.gsm * (pct / 100) : ci.gsm;
+          plyMaterialCost += (effectiveGsm * areaM2 / 1000) * ci.rate;
+        }
+      });
+    });
+    const materialCost  = parseFloat(plyMaterialCost.toFixed(2));
+    const processCost   = parseFloat(form.processes.reduce((s, p) => {
+      const qty = p.qty > 0 ? p.qty : autoProcessQty(p.chargeUnit, form.quantity, areaM2, form.noOfColors);
+      return s + (p.rate * qty + p.setupCharge);
+    }, 0).toFixed(2));
+    const cylinderCost  = form.cylinderCostPerColor * form.noOfColors;
+    const sub           = materialCost + processCost + cylinderCost;
+    const overheadAmt   = parseFloat(((sub * form.overheadPct) / 100).toFixed(2));
+    const profitAmt     = parseFloat((((sub + overheadAmt) * form.profitPct) / 100).toFixed(2));
+    const totalAmount   = parseFloat((sub + overheadAmt + profitAmt).toFixed(2));
+    const perMeterRate  = form.quantity > 0 ? parseFloat((totalAmount / form.quantity).toFixed(4)) : 0;
+    return { materialCost, processCost, cylinderCost, overheadAmt, profitAmt, totalAmount, perMeterRate };
+  }, [form.quantity, form.jobWidth, form.secondaryLayers, form.processes, form.cylinderCostPerColor, form.noOfColors, form.overheadPct, form.profitPct]);
+
+  // ── Plan column filter helpers (mirrors estimation) ─────────
+  const openPlanFilter = (key: string) => {
+    setPlanFilterDraft(d => ({ ...d, [key]: new Set(planColFilters[key] ?? []) }));
+    setPlanFilterOpen(key);
+  };
+  const applyPlanFilter = (key: string) => {
+    const draft = planFilterDraft[key];
+    if (!draft || draft.size === 0) { setPlanColFilters(f => { const n = { ...f }; delete n[key]; return n; }); }
+    else { setPlanColFilters(f => ({ ...f, [key]: new Set(draft) })); }
+    setPlanFilterOpen(null);
+  };
+  const clearPlanFilter = (key: string) => {
+    setPlanColFilters(f => { const n = { ...f }; delete n[key]; return n; });
+    setPlanFilterDraft(d => { const n = { ...d }; delete n[key]; return n; });
+    setPlanFilterOpen(null);
+  };
+  const togglePlanFilterVal = (key: string, val: string) =>
+    setPlanFilterDraft(d => {
+      const s = new Set(d[key] ?? []);
+      s.has(val) ? s.delete(val) : s.add(val);
+      return { ...d, [key]: s };
+    });
+  const togglePlanFilterAll = (key: string, allVals: string[]) =>
+    setPlanFilterDraft(d => {
+      const s = d[key] ?? new Set<string>();
+      const newSet = s.size === allVals.length ? new Set<string>() : new Set(allVals);
+      return { ...d, [key]: newSet };
+    });
 
   // ── Save to Catalog ────────────────────────────────────────
   const [catSaveWO,   setCatSaveWO]   = useState<GravureWorkOrder | null>(null);
@@ -430,14 +643,41 @@ export default function GravureWorkOrderPage() {
   };
 
   const onPlyTypeChange = (index: number, plyType: string) => {
-    const consumables = getCategoryConsumables(form.categoryId || "", plyType);
-    const consumableItems: PlyConsumableItem[] = consumables.map((pc: { id: string; fieldDisplayName: string; itemGroup: string; itemSubGroup: string; defaultValue: number }) => ({
-      consumableId: pc.id, fieldDisplayName: pc.fieldDisplayName,
-      itemGroup: pc.itemGroup, itemSubGroup: pc.itemSubGroup,
-      itemId: "", itemName: "", gsm: pc.defaultValue, rate: 0,
-    }));
     const layers = [...form.secondaryLayers];
-    layers[index] = { ...layers[index], plyType, consumableItems };
+    layers[index] = { ...layers[index], plyType, consumableItems: [] };
+    f("secondaryLayers", layers);
+  };
+
+  const addPlyConsumable = (layerIdx: number) => {
+    const layers = [...form.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    layer.consumableItems = [...layer.consumableItems, {
+      consumableId: Math.random().toString(),
+      fieldDisplayName: "", itemGroup: "", itemSubGroup: "",
+      itemId: "", itemName: "", gsm: 0, rate: 0,
+    } as PlyConsumableItem];
+    layers[layerIdx] = layer;
+    f("secondaryLayers", layers);
+  };
+
+  const removePlyConsumable = (layerIdx: number, ciIdx: number) => {
+    const layers = [...form.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    layer.consumableItems = layer.consumableItems.filter((_, i) => i !== ciIdx);
+    layers[layerIdx] = layer;
+    f("secondaryLayers", layers);
+  };
+
+  const clonePlyConsumable = (layerIdx: number, ciIdx: number) => {
+    const layers = [...form.secondaryLayers];
+    const layer = { ...layers[layerIdx] };
+    const clone: PlyConsumableItem = { ...layer.consumableItems[ciIdx], consumableId: Math.random().toString(), isClone: true };
+    layer.consumableItems = [
+      ...layer.consumableItems.slice(0, ciIdx + 1),
+      clone,
+      ...layer.consumableItems.slice(ciIdx + 1),
+    ];
+    layers[layerIdx] = layer;
     f("secondaryLayers", layers);
   };
 
@@ -495,12 +735,66 @@ export default function GravureWorkOrderPage() {
   const toggleInk = (color: string) =>
     setForm(p => ({ ...p, inks: p.inks.includes(color) ? p.inks.filter(c => c !== color) : [...p.inks, color] }));
 
+  // ── Auto-sync colorShades + cylinderAllocs with inks in ply layers ──
+  // Runs whenever ply consumables change; preserves user-entered LAB data by consumableId
+  useEffect(() => {
+    if (!modalOpen) return;
+    const inkList = form.secondaryLayers.flatMap((l, li) =>
+      l.consumableItems
+        .filter(ci => ci.itemGroup === "Ink")
+        .map(ci => ({
+          consumableId: ci.consumableId,
+          inkItemId: ci.itemId ?? "",
+          inkName: ci.itemName || ci.fieldDisplayName || `Ink ${li + 1}`,
+        }))
+    );
+
+    setColorShades(prev =>
+      inkList.map((ink, i) => {
+        const existing = prev.find(c => (c as any).consumableId === ink.consumableId);
+        if (existing) return { ...existing, colorNo: i + 1 };
+        const inkItem = INK_ITEMS.find(x => x.id === ink.inkItemId);
+        return {
+          colorNo: i + 1,
+          colorName: inkItem?.colour || inkItem?.name || ink.inkName,
+          inkType: "Spot" as const,
+          pantoneRef: (inkItem as any)?.pantoneNo || "",
+          labL: "", labA: "", labB: "",
+          labLMeas: "", labAMeas: "", labBMeas: "",
+          deltaE: "--", deltaETol: "1.0",
+          shadeCardRef: "", status: "Pending" as const, remarks: "",
+          consumableId: ink.consumableId,
+          inkItemId: ink.inkItemId,
+        } as any;
+      })
+    );
+
+    setCylinderAllocs(prev =>
+      inkList.map((ink, i) => {
+        const existing = prev.find(c => (c as any).consumableId === ink.consumableId);
+        if (existing) return { ...existing, colorNo: i + 1, colorName: ink.inkName };
+        return {
+          colorNo: i + 1,
+          colorName: ink.inkName,
+          cylinderNo: form.cylinderSet ? `${form.cylinderSet}-C${String(i + 1).padStart(2, "0")}` : "",
+          circumference: selectedPlan ? String(selectedPlan.cylCirc) : "",
+          cylinderType: "Existing" as const,
+          status: "Pending" as const,
+          remarks: "",
+          consumableId: ink.consumableId,
+        } as any;
+      })
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.secondaryLayers, form.cylinderSet, modalOpen]);
 
   const cellInput = "w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-1 focus:ring-purple-400 bg-white";
 
   // ── Convert pending order to WO ────────────────────────────
   const convertToWO = (order: GravureOrder) => {
     setEditing(null);
+    const o = order as any;
+    const sType: GravureWorkOrder["structureType"] = o.structureType || undefined;
     setForm({
       ...blankWO,
       sourceOrderType: order.sourceType || "Estimation",
@@ -516,8 +810,8 @@ export default function GravureWorkOrderPage() {
       content:         order.content,
       jobWidth:        order.jobWidth,
       jobHeight:       order.jobHeight,
-      actualWidth:     order.jobWidth,
-      actualHeight:    order.jobHeight,
+      actualWidth:     o.actualWidth  || order.jobWidth,
+      actualHeight:    o.actualHeight || order.jobHeight,
       width:           order.jobWidth,
       noOfColors:      order.noOfColors,
       printType:       (order.printType as GravureWorkOrder["printType"]) || "Surface Print",
@@ -529,15 +823,47 @@ export default function GravureWorkOrderPage() {
       cylinderCostPerColor: 3500,
       processes:       order.processes,
       secondaryLayers: order.secondaryLayers,
-      selectedPlanId:  "",
+      // ── Planning fields from estimation ──
+      selectedPlanId:  o.selectedPlanId || "",
       ups:             0,
+      structureType:   sType,
+      trimmingSize:    o.trimmingSize    || 0,
+      widthShrinkage:  o.widthShrinkage  || 0,
+      gusset:          o.gusset          || 0,
+      topSeal:         o.topSeal         || 0,
+      bottomSeal:      o.bottomSeal      || 0,
+      sideSeal:        o.sideSeal        || 0,
+      centerSealWidth: o.centerSealWidth || 0,
+      sideGusset:      o.sideGusset      || 0,
+      seamingArea:     o.seamingArea     || 0,
+      transparentArea: o.transparentArea || 0,
+      finalRollOD:     o.finalRollOD     || undefined,
+      rollUnit:        o.rollUnit        || "Meter",
+      unwindDirection: o.unwindDirection || 0,
+      frontColors:     o.frontColors     || 0,
+      backColors:      o.backColors      || 0,
+      salesPerson:     o.salesPerson     || order.salesPerson || "",
+      salesType:       o.salesType       || order.salesType   || "Local",
       overheadPct:     order.overheadPct,
       profitPct:       order.profitPct,
       perMeterRate:    order.perMeterRate,
       totalAmount:     order.totalAmount,
-      trimmingSize:    (order as any).trimmingSize || 0,
-      frontColors:     (order as any).frontColors || 0,
-      backColors:      (order as any).backColors || 0,
+    });
+    // Pre-populate dimValues from order fields
+    setDimValues({
+      width:           o.actualWidth  || order.jobWidth  || undefined,
+      height:          o.actualHeight || order.jobHeight || undefined,
+      layflatWidth:    sType === "Sleeve" ? (o.actualWidth || order.jobWidth || undefined) : undefined,
+      cutHeight:       sType === "Sleeve" ? (o.actualHeight || order.jobHeight || undefined) : undefined,
+      gusset:          o.gusset          || undefined,
+      topSeal:         o.topSeal         || undefined,
+      bottomSeal:      o.bottomSeal      || undefined,
+      sideSeal:        o.sideSeal        || undefined,
+      centerSealWidth: o.centerSealWidth || undefined,
+      sideGusset:      o.sideGusset      || undefined,
+      seamingArea:     o.seamingArea     || undefined,
+      transparentArea: o.transparentArea || undefined,
+      widthShrinkage:  o.widthShrinkage  || undefined,
     });
     setModalTab("basic");
     setShowPlan(false); setIsPlanApplied(false);
@@ -583,8 +909,25 @@ export default function GravureWorkOrderPage() {
   const openEdit = (wo: GravureWorkOrder) => {
     setEditing(wo);
     setForm({ ...wo });
+    // Restore dimValues from saved WO fields
+    const w = wo as any;
+    setDimValues({
+      width:           wo.actualWidth   || undefined,
+      height:          wo.actualHeight  || undefined,
+      layflatWidth:    w.structureType === "Sleeve" ? (wo.actualWidth || undefined) : undefined,
+      cutHeight:       w.structureType === "Sleeve" ? (wo.actualHeight || undefined) : undefined,
+      gusset:          w.gusset          || undefined,
+      topSeal:         w.topSeal         || undefined,
+      bottomSeal:      w.bottomSeal      || undefined,
+      sideSeal:        w.sideSeal        || undefined,
+      centerSealWidth: w.centerSealWidth || undefined,
+      sideGusset:      w.sideGusset      || undefined,
+      seamingArea:     w.seamingArea     || undefined,
+      transparentArea: w.transparentArea || undefined,
+      widthShrinkage:  w.widthShrinkage  || undefined,
+    });
     setModalTab("basic");
-    setShowPlan(false); setIsPlanApplied(false);
+    setShowPlan(false); setIsPlanApplied(!!wo.selectedPlanId);
     setFilmReqs([]); setColorShades([]); setMaterialAllocs([]); setCylinderAllocs([]); setPrepTab("film");
     setModal(true);
   };
@@ -617,9 +960,16 @@ export default function GravureWorkOrderPage() {
     // When replanning a previously special-plan WO with a real plan → activate it
     const wasSpecialNowReal = editing && woHasSpecialPlan(editing) && !isSelectedPlanSpecial && isPlanApplied;
 
+    // Persist live-calculated cost into the saved WO
+    const formWithCost = {
+      ...form,
+      totalAmount:  liveCost.totalAmount  > 0 ? liveCost.totalAmount  : form.totalAmount,
+      perMeterRate: liveCost.perMeterRate > 0 ? liveCost.perMeterRate : form.perMeterRate,
+    };
+
     const saveForm = wasSpecialNowReal
-      ? { ...form, status: "Open" as const }
-      : form;
+      ? { ...formWithCost, status: "Open" as const }
+      : formWithCost;
 
     if (editing) {
       setWOs(d => d.map(r => r.id === editing.id ? { ...saveForm, id: editing.id, workOrderNo: editing.workOrderNo } : r));
@@ -736,11 +1086,12 @@ export default function GravureWorkOrderPage() {
               <Input label="Substrate" value={form.substrate} onChange={e => f("substrate", e.target.value)} placeholder="e.g. BOPP 20μ" />
               <Input label="Structure" value={form.structure} onChange={e => f("structure", e.target.value)} placeholder="e.g. BOPP + CPP" />
 
-              {/* Category — dropdown from Category Master for Direct; locked display for order-linked */}
+              {/* Category — dropdown for Direct; locked display for order-linked */}
               {form.sourceOrderType === "Direct" ? (
                 <Select label="Category *" value={form.categoryId}
                   onChange={e => {
-                    if (!e.target.value) { setForm(p => ({ ...p, categoryId: "", categoryName: "", secondaryLayers: [] })); return; }
+                    setDimValues({});
+                    if (!e.target.value) { setForm(p => ({ ...p, categoryId: "", categoryName: "", content: "", structureType: undefined, secondaryLayers: [] } as any)); return; }
                     const hasPlys = form.secondaryLayers.some(l => l.plyType || l.consumableItems.length > 0);
                     if (hasPlys) { setPendingWOCategoryId(e.target.value); }
                     else { applyWOCategory(e.target.value); }
@@ -753,6 +1104,27 @@ export default function GravureWorkOrderPage() {
                   <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-700 font-medium">{form.categoryName || "—"}</div>
                 </div>
               )}
+
+              {/* Content Type — dropdown for Direct with category; read-only for order-linked */}
+              {form.sourceOrderType === "Direct" && form.categoryId ? (
+                <Select label="Content Type *" value={form.content}
+                  onChange={e => {
+                    const content = e.target.value;
+                    const sType = getStructureType(content);
+                    setForm(p => ({ ...p, content, structureType: sType } as any));
+                    setDimValues({});
+                  }}
+                  options={[
+                    { value: "", label: "-- Select Content Type --" },
+                    ...(categories.find(c => c.id === form.categoryId)?.contents || []).map(ct => ({ value: ct, label: ct })),
+                  ]}
+                />
+              ) : form.sourceOrderType !== "Direct" && form.content ? (
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Content Type</label>
+                  <div className="px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-700 font-medium">{form.content}</div>
+                </div>
+              ) : null}
 
               {/* No. of Plys — only for Direct, updates secondaryLayers count */}
               {form.sourceOrderType === "Direct" && form.categoryId && (
@@ -773,8 +1145,6 @@ export default function GravureWorkOrderPage() {
                 />
               )}
 
-              <Input label="Job Width (mm)" type="number" value={form.jobWidth || ""} onChange={e => { const v = Number(e.target.value); setForm(p => ({ ...p, jobWidth: v, width: v, actualWidth: v })); }} />
-              <Input label="Job Height (mm)" type="number" value={form.jobHeight || ""} onChange={e => { const v = Number(e.target.value); setForm(p => ({ ...p, jobHeight: v, actualHeight: v })); }} />
               <Input label="Trimming Size (mm)" type="number" value={form.trimmingSize || ""} onChange={e => f("trimmingSize", Number(e.target.value))} placeholder="e.g. 118" />
               <Input label="Front Colors" type="number" value={form.frontColors || ""} onChange={e => f("frontColors", Number(e.target.value))} min={0} max={12} />
               <Input label="Back Colors" type="number" value={form.backColors || ""} onChange={e => f("backColors", Number(e.target.value))} min={0} max={12} />
@@ -788,19 +1158,198 @@ export default function GravureWorkOrderPage() {
               <Select label="Unit" value={form.unit} onChange={e => f("unit", e.target.value)}
                 options={[{ value: "Pcs", label: "Pcs" }, { value: "Kg", label: "Kg" }]} />
               <Input label="Cylinder Set" value={form.cylinderSet} onChange={e => f("cylinderSet", e.target.value)} placeholder="e.g. CYL-P001" />
+              <Input label="Wastage %" type="number" value={form.wastagePct ?? 1} onChange={e => f("wastagePct", Number(e.target.value) || 1)} placeholder="1" />
               <Input label="Planned Date" type="date" value={form.plannedDate} onChange={e => f("plannedDate", e.target.value)} />
               <Select label="Status" value={form.status} onChange={e => f("status", e.target.value as typeof form.status)}
                 options={[{ value: "Open", label: "Open" }, { value: "In Progress", label: "In Progress" }, { value: "Completed", label: "Completed" }, { value: "On Hold", label: "On Hold" }]} />
             </div>
           </div>
 
-          {form.totalAmount > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-              <div className="bg-gray-50 border rounded-xl p-3"><p className="text-xs text-gray-400">Total Amount</p><p className="font-bold">₹{form.totalAmount.toLocaleString()}</p></div>
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3"><p className="text-xs text-gray-400">Rate / Kg</p><p className="font-bold text-blue-700">₹{form.perMeterRate.toFixed(2)}</p></div>
-              <div className="bg-purple-50 border border-purple-200 rounded-xl p-3"><p className="text-xs text-gray-400">Processes</p><p className="font-bold text-purple-700">{form.processes.length} steps</p></div>
+          {/* ── Dimension Setup + Live Diagram (when content type is known) ── */}
+          {form.content && CONTENT_TYPE_CONFIG[form.content] && (
+            <div className="border border-indigo-200 rounded-2xl overflow-hidden">
+              <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-2.5 flex items-center gap-2">
+                <Calculator size={14} className="text-white" />
+                <p className="text-xs font-bold text-white uppercase tracking-widest">Dimension Setup — {form.content}</p>
+                {(form as any).structureType && (
+                  <span className="ml-auto px-2 py-0.5 bg-white/20 text-white text-[10px] font-bold rounded-full uppercase">
+                    {(form as any).structureType}
+                  </span>
+                )}
+              </div>
+
+              {/* Sleeve / Pouch specs bar */}
+              {(() => {
+                const sType = (form as any).structureType || getStructureType(form.content);
+                if (sType === "Sleeve" && form.jobWidth > 0) {
+                  const lf = form.jobWidth || 0;
+                  const sh = (form as any).widthShrinkage || 0;
+                  const sa = (form as any).seamingArea || 0;
+                  const ta = (form as any).transparentArea || 0;
+                  const dc = lf * 2 + sa + ta;
+                  return (
+                    <div className="px-4 pt-3">
+                      <div className="flex flex-wrap items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-[10px]">
+                        <div className="flex items-center gap-1.5 text-blue-700 font-bold uppercase tracking-wide"><Layers size={12} /> Sleeve Planning</div>
+                        <div className="px-3 py-1.5 bg-white border border-blue-200 rounded-lg font-bold text-blue-700">Layflat = {lf} mm</div>
+                        <div className="flex flex-col px-3 py-1.5 bg-blue-600 text-white rounded-lg font-bold text-[10px] leading-tight">
+                          <span>Design Circ</span><span>{lf}×2{ta > 0 ? `+${ta}` : ""}{sa > 0 ? `+${sa}` : ""} = {dc} mm</span>
+                        </div>
+                        <div className="px-3 py-1.5 bg-white border border-blue-200 rounded-lg text-blue-600">Cut Length = {form.jobHeight} mm</div>
+                        {sh > 0 && <div className="px-3 py-1.5 bg-amber-50 border border-amber-300 rounded-lg text-amber-700 font-bold ml-auto text-[10px]">Shrinkage +{sh}mm per sleeve</div>}
+                      </div>
+                    </div>
+                  );
+                }
+                if (sType === "Pouch" && form.jobWidth > 0) {
+                  const c = form.content;
+                  const jW = form.jobWidth; const jH = form.jobHeight;
+                  const tS = (form as any).topSeal || 0; const bS = (form as any).bottomSeal || 0;
+                  const sS = (form as any).sideSeal || 0; const cS = (form as any).centerSealWidth || 0;
+                  const sG = (form as any).sideGusset || 0; const gus = (form as any).gusset || 0;
+                  let lane = jW, repeat = jH;
+                  if (c === "Pouch — 3 Side Seal" || c === "Standup Pouch" || c === "Zipper Pouch") lane = jW + 2 * sS;
+                  else if (c === "Pouch — Center Seal") lane = jW * 2 + cS;
+                  else if (c === "Both Side Gusset Pouch" || c === "3D Pouch / Flat Bottom") lane = jW + 2 * sG;
+                  if (c === "Pouch — 3 Side Seal" || c === "Pouch — Center Seal" || c === "Both Side Gusset Pouch") repeat = jH + tS + bS;
+                  else if (c === "Standup Pouch" || c === "Zipper Pouch" || c === "3D Pouch / Flat Bottom") repeat = jH + tS + (gus > 0 ? gus / 2 : 0);
+                  return (
+                    <div className="px-4 pt-3">
+                      <div className="flex flex-wrap items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-xl text-[10px]">
+                        <div className="flex items-center gap-1.5 text-orange-700 font-bold uppercase tracking-wide"><Package size={12} /> Pouch Specs</div>
+                        <div className="ml-auto flex gap-2">
+                          <div className="px-3 py-1.5 bg-white border border-orange-200 rounded-lg font-bold text-orange-700">Lane = {lane} mm</div>
+                          <div className="px-3 py-1.5 bg-white border border-orange-200 rounded-lg text-orange-600">Repeat = {repeat} mm</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Left: dimension inputs */}
+                <div className="space-y-3">
+                  <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-widest mb-1">Packaging Dimensions</p>
+                  <DimensionInputPanel
+                    contentType={form.content}
+                    dims={dimValues}
+                    onChange={patch => {
+                      patchDim(patch);
+                      if ("width"           in patch && patch.width           !== undefined) setForm(p => ({ ...p, jobWidth: patch.width!, width: patch.width!, actualWidth: patch.width! }));
+                      if ("layflatWidth"    in patch && patch.layflatWidth    !== undefined) setForm(p => ({ ...p, jobWidth: patch.layflatWidth!, width: patch.layflatWidth!, actualWidth: patch.layflatWidth! }));
+                      if ("height"          in patch && patch.height          !== undefined) setForm(p => ({ ...p, jobHeight: patch.height!, actualHeight: patch.height! }));
+                      if ("cutHeight"       in patch && patch.cutHeight       !== undefined) setForm(p => ({ ...p, jobHeight: patch.cutHeight!, actualHeight: patch.cutHeight! }));
+                      if ("gusset"          in patch && patch.gusset          !== undefined) setForm(p => ({ ...p, gusset:          patch.gusset }          as any));
+                      if ("seamingArea"     in patch && patch.seamingArea     !== undefined) setForm(p => ({ ...p, seamingArea:     patch.seamingArea }     as any));
+                      if ("transparentArea" in patch && patch.transparentArea !== undefined) setForm(p => ({ ...p, transparentArea: patch.transparentArea } as any));
+                      if ("topSeal"         in patch && patch.topSeal         !== undefined) setForm(p => ({ ...p, topSeal:         patch.topSeal }         as any));
+                      if ("bottomSeal"      in patch && patch.bottomSeal      !== undefined) setForm(p => ({ ...p, bottomSeal:      patch.bottomSeal }      as any));
+                      if ("sideSeal"        in patch && patch.sideSeal        !== undefined) setForm(p => ({ ...p, sideSeal:        patch.sideSeal }        as any));
+                      if ("centerSealWidth" in patch && patch.centerSealWidth !== undefined) setForm(p => ({ ...p, centerSealWidth: patch.centerSealWidth } as any));
+                      if ("sideGusset"      in patch && patch.sideGusset      !== undefined) setForm(p => ({ ...p, sideGusset:      patch.sideGusset }      as any));
+                    }}
+                  />
+                  {/* Shrinkage */}
+                  <div>
+                    {(() => {
+                      const isSl = ((form as any).structureType || getStructureType(form.content)) === "Sleeve";
+                      return (
+                        <>
+                          <label className="text-[10px] font-semibold text-rose-500 uppercase block mb-1">
+                            {isSl ? <>Length Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— per sleeve</span></> : <>Repeat Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— optional</span></>}
+                          </label>
+                          <input type="number" min={0} max={isSl ? 10 : 1.5} step={0.1}
+                            placeholder={isSl ? "e.g. 3" : "e.g. 1"}
+                            value={(form as any).widthShrinkage || ""}
+                            onChange={e => { const v = Math.min(isSl ? 10 : 1.5, Math.max(0, Number(e.target.value) || 0)); patchDim({ widthShrinkage: v }); setForm(p => ({ ...p, widthShrinkage: v } as any)); }}
+                            className="w-full text-sm border border-rose-200 rounded-xl px-3 py-2 bg-rose-50 focus:bg-white outline-none focus:ring-2 focus:ring-rose-400 font-mono" />
+                        </>
+                      );
+                    })()}
+                  </div>
+                  {/* Roll OD + Roll Unit + Unwind Direction */}
+                  <div className="border-t border-indigo-100 pt-3 grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-semibold text-teal-600 uppercase block mb-1">Final Roll OD (mm)</label>
+                      <input type="number" min={0} placeholder="e.g. 200"
+                        className="w-full text-sm border border-teal-200 rounded-xl px-3 py-2 bg-teal-50 focus:bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                        value={(form as any).finalRollOD ?? ""}
+                        onChange={e => setForm(p => ({ ...p, finalRollOD: Number(e.target.value) || undefined } as any))} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-teal-600 uppercase block mb-1">Roll Qty Unit</label>
+                      <div className="flex gap-2 mt-0.5">
+                        {(["Meter", "KG"] as const).map(u => (
+                          <button key={u} type="button" onClick={() => setForm(p => ({ ...p, rollUnit: u } as any))}
+                            className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-all ${((form as any).rollUnit ?? "Meter") === u ? "bg-teal-600 text-white border-teal-600" : "bg-white text-gray-600 border-gray-200 hover:border-teal-400"}`}>{u}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Unwind Direction */}
+                  <div className="border-t border-indigo-100 pt-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-widest">Unwind Direction (Pifa)</p>
+                      <span className="text-[9px] text-gray-400">AJSW Printing &amp; Winding Chart</span>
+                    </div>
+                    <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1.5">Printed ACROSS the Roll</p>
+                    <div className="grid grid-cols-4 gap-1.5 mb-2">
+                      {([
+                        { n: 1, label: "Outside · Across\nTop off first" },
+                        { n: 2, label: "Inside · Across\nTop off first" },
+                        { n: 3, label: "Outside · Across\nBottom off first" },
+                        { n: 4, label: "Inside · Across\nBottom off first" },
+                      ]).map(({ n, label }) => {
+                        const sel = ((form as any).unwindDirection ?? 0) === n;
+                        return (
+                          <button key={n} type="button" onClick={() => setForm(p => ({ ...p, unwindDirection: n } as any))}
+                            title={label.replace("\n", " ")}
+                            className={`flex flex-col items-center gap-0.5 p-1.5 rounded-xl border-2 text-center transition-all ${sel ? "border-orange-500 bg-orange-50" : "border-gray-200 bg-white hover:border-orange-300"}`}>
+                            <span className={`text-[11px] font-black ${sel ? "text-orange-600" : "text-gray-700"}`}>#{n}</span>
+                            <span className={`text-[7px] font-medium leading-tight whitespace-pre-line ${sel ? "text-orange-500" : "text-gray-400"}`}>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1.5">Printed WITH the Roll</p>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {([
+                        { n: 5, label: "Outside · With Roll\nRight off first" },
+                        { n: 6, label: "Inside · With Roll\nRight off first" },
+                        { n: 7, label: "Outside · With Roll\nLeft off first" },
+                        { n: 8, label: "Inside · With Roll\nLeft off first" },
+                      ]).map(({ n, label }) => {
+                        const sel = ((form as any).unwindDirection ?? 0) === n;
+                        return (
+                          <button key={n} type="button" onClick={() => setForm(p => ({ ...p, unwindDirection: n } as any))}
+                            title={label.replace("\n", " ")}
+                            className={`flex flex-col items-center gap-0.5 p-1.5 rounded-xl border-2 text-center transition-all ${sel ? "border-orange-500 bg-orange-50" : "border-gray-200 bg-white hover:border-orange-300"}`}>
+                            <span className={`text-[11px] font-black ${sel ? "text-orange-600" : "text-gray-700"}`}>#{n}</span>
+                            <span className={`text-[7px] font-medium leading-tight whitespace-pre-line ${sel ? "text-orange-500" : "text-gray-400"}`}>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {(form as any).unwindDirection > 0 && (
+                      <p className="mt-1.5 text-[10px] text-orange-600 font-semibold flex items-center gap-1">
+                        <Check size={10}/> Direction #{(form as any).unwindDirection} — {[
+                          "#1 Outside · Across · Top off first", "#2 Inside · Across · Top off first",
+                          "#3 Outside · Across · Bottom off first", "#4 Inside · Across · Bottom off first",
+                          "#5 Outside · With Roll · Right off first", "#6 Inside · With Roll · Right off first",
+                          "#7 Outside · With Roll · Left off first", "#8 Inside · With Roll · Left off first",
+                        ][((form as any).unwindDirection ?? 1) - 1]}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {/* Right: live diagram */}
+                <DimensionDiagram contentType={form.content} dims={dimValues} />
+              </div>
             </div>
           )}
+
 
           <div className="flex justify-end">
             <Button onClick={() => setModalTab("planning")}>Next: Planning <ChevronRight size={14} className="ml-1" /></Button>
@@ -826,18 +1375,6 @@ export default function GravureWorkOrderPage() {
                 onChange={e => { const m = PRINT_MACHINES.find(x => x.id === e.target.value); if (m) { f("machineId", m.id); f("machineName", m.name); } }}
                 options={[{ value: "", label: "-- Select Machine --" }, ...PRINT_MACHINES.map(m => ({ value: m.id, label: `${m.name} (${m.status})` }))]}
               />
-              {form.totalAmount > 0 && (
-                <div className="bg-green-50 border border-green-200 rounded-xl p-3">
-                  <p className="text-[10px] text-gray-400 uppercase font-semibold mb-0.5">Total Amount</p>
-                  <p className="font-bold text-green-800">₹{form.totalAmount.toLocaleString()}</p>
-                </div>
-              )}
-              {form.perMeterRate > 0 && (
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                  <p className="text-[10px] text-gray-400 uppercase font-semibold mb-0.5">Rate / Kg</p>
-                  <p className="font-bold text-blue-800">₹{form.perMeterRate.toFixed(2)}</p>
-                </div>
-              )}
             </div>
           </div>
 
@@ -897,30 +1434,51 @@ export default function GravureWorkOrderPage() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <SH label={`Ply Configuration (${form.secondaryLayers.length} plys)`} />
-              <button onClick={() => {
-                const layers = [...form.secondaryLayers];
-                layers.push({ id: Math.random().toString(), layerNo: layers.length + 1, plyType: "", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [] });
-                f("secondaryLayers", layers);
-              }} className="flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 px-3 py-1.5 rounded-lg border border-purple-200">
-                <Plus size={12} /> Add Ply
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Bulk add */}
+                {(() => {
+                  let inputRef: HTMLInputElement | null = null;
+                  const addBulk = (el: HTMLInputElement | null) => {
+                    const n = Math.min(10, Math.max(1, parseInt(el?.value ?? "1") || 1));
+                    const layers = [...form.secondaryLayers];
+                    for (let k = 0; k < n; k++) layers.push({ id: Math.random().toString(), layerNo: layers.length + 1, plyType: "", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [] });
+                    f("secondaryLayers", layers);
+                    if (el) el.value = "";
+                  };
+                  return (
+                    <div className="flex items-center gap-0 border border-purple-300 rounded-lg overflow-hidden bg-white">
+                      <span className="text-[10px] font-semibold text-purple-600 px-2 bg-purple-50 whitespace-nowrap border-r border-purple-200 py-1.5">Add</span>
+                      <input type="number" min={1} max={10} placeholder="1" ref={el => { inputRef = el; }}
+                        className="w-12 text-xs font-mono text-center border-none outline-none px-1 py-1.5 bg-white"
+                        onKeyDown={e => { if (e.key === "Enter") addBulk(e.target as HTMLInputElement); }} />
+                      <button onClick={() => addBulk(inputRef)}
+                        className="text-[10px] font-bold text-white bg-purple-600 hover:bg-purple-700 px-2 py-1.5 whitespace-nowrap transition">+ Plys</button>
+                    </div>
+                  );
+                })()}
+                <button onClick={() => {
+                  const layers = [...form.secondaryLayers];
+                  layers.push({ id: Math.random().toString(), layerNo: layers.length + 1, plyType: "", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [] });
+                  f("secondaryLayers", layers);
+                }} className="flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 px-3 py-1.5 rounded-lg border border-purple-200">
+                  <Plus size={12} /> Add Ply
+                </button>
+              </div>
             </div>
             {form.secondaryLayers.length > 0 && (
               <div className="space-y-3">
                 {form.secondaryLayers.map((l, index) => {
                   const thicknesses = FILM_SUBGROUPS.find(s => s.subGroup === l.itemSubGroup)?.thicknesses || [];
-                  const consumableDefs = getCategoryConsumables(form.categoryId || "", l.plyType);
                   return (
                     <div key={l.id} className="bg-white border-2 border-purple-50 rounded-2xl shadow-sm relative overflow-hidden">
                       <div className="flex items-center justify-between bg-purple-50 px-4 py-2 border-b border-purple-100">
                         <span className="text-xs font-bold text-purple-700 uppercase tracking-wider">
                           {l.layerNo === 1 ? "1st" : l.layerNo === 2 ? "2nd" : l.layerNo === 3 ? "3rd" : `${l.layerNo}th`} Ply
                         </span>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => f("secondaryLayers", form.secondaryLayers.filter((_, i) => i !== index))} className="text-red-400 hover:text-red-600"><X size={14} /></button>
-                        </div>
+                        <button onClick={() => f("secondaryLayers", form.secondaryLayers.filter((_, i) => i !== index))} className="text-red-400 hover:text-red-600"><X size={14} /></button>
                       </div>
                       <div className="p-3 space-y-3">
+                        {/* Ply Type */}
                         <div>
                           <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Ply Type *</label>
                           <select className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-purple-400"
@@ -932,6 +1490,7 @@ export default function GravureWorkOrderPage() {
                             <option value="Coating">Ply 4</option>
                           </select>
                         </div>
+                        {/* Film Substrate */}
                         {l.plyType && (
                           <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3 space-y-3">
                             <div>
@@ -941,17 +1500,15 @@ export default function GravureWorkOrderPage() {
                                 onChange={e => {
                                   const subGroup = e.target.value;
                                   const sg = FILM_SUBGROUPS.find(s => s.subGroup === subGroup);
-                                  const density = sg ? sg.density : 0;
                                   const layers = [...form.secondaryLayers];
-                                  const masterRate = parseFloat(FILM_ITEMS.find(fi => fi.subGroup === subGroup)?.estimationRate || "0");
-                                  layers[index] = { ...l, itemSubGroup: subGroup, density, thickness: 0, gsm: 0, filmRate: masterRate };
+                                  layers[index] = { ...l, itemSubGroup: subGroup, density: sg?.density ?? 0, thickness: 0, gsm: 0 };
                                   f("secondaryLayers", layers);
                                 }}>
                                 <option value="">Select Film Type</option>
                                 {FILM_SUBGROUPS.map(opt => <option key={opt.subGroup} value={opt.subGroup}>{opt.subGroup}</option>)}
                               </select>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                               <Input label="Density" type="number" value={l.density || ""} readOnly className="bg-gray-50 text-gray-400 text-xs" />
                               <div>
                                 <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Thickness (μ)</label>
@@ -968,72 +1525,197 @@ export default function GravureWorkOrderPage() {
                                 </select>
                               </div>
                               <Input label="Film GSM" type="number" value={l.gsm || ""} readOnly className="font-bold bg-purple-50 text-purple-800 border-purple-200 text-xs" />
-                              <div>
-                                <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Film Rate (₹/Kg)</label>
-                                <input
-                                  type="number" step={0.01} min={0}
-                                  className="w-full text-xs border border-orange-200 bg-orange-50 rounded-xl px-2 py-2 font-mono outline-none focus:ring-2 focus:ring-orange-400"
-                                  value={l.filmRate !== undefined ? l.filmRate : (parseFloat(FILM_ITEMS.find(fi => fi.subGroup === l.itemSubGroup)?.estimationRate || "0") || "")}
-                                  onChange={e => {
-                                    const layers = [...form.secondaryLayers];
-                                    layers[index] = { ...l, filmRate: Number(e.target.value) };
-                                    f("secondaryLayers", layers);
-                                  }}
-                                  placeholder="₹/Kg"
-                                />
-                              </div>
                             </div>
                           </div>
                         )}
-                        {consumableDefs.length > 0 && (
-                          <div className="space-y-3">
-                            {consumableDefs.map((pc: { id: string; fieldDisplayName: string; itemGroup: string; itemSubGroup: string; defaultValue: number; minValue?: number; maxValue?: number }, ciIdx: number) => {
-                              const ci = l.consumableItems[ciIdx] ?? { consumableId: pc.id, fieldDisplayName: pc.fieldDisplayName, itemGroup: pc.itemGroup, itemSubGroup: pc.itemSubGroup, itemId: "", itemName: "", gsm: pc.defaultValue, rate: 0 };
-                              const subGroups: string[] = (CATEGORY_GROUP_SUBGROUP as Record<string, Record<string, string[]>>)["Raw Material (RM)"]?.[pc.itemGroup] ?? [];
-                              const filteredItems = items.filter(i => i.group === pc.itemGroup && i.active && (!ci.itemSubGroup || i.subGroup === ci.itemSubGroup));
+                        {/* Consumable Items — free-form (same as Product Catalog) */}
+                        {l.plyType && (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-teal-700 uppercase tracking-widest">Consumable Items ({l.consumableItems.length})</span>
+                              <button onClick={() => addPlyConsumable(index)}
+                                className="flex items-center gap-1 text-[10px] font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 px-2.5 py-1 rounded-lg border border-teal-200 transition">
+                                <Plus size={10} /> Add Consumable
+                              </button>
+                            </div>
+                            {(() => {
+                              const groupSerials: number[] = [];
+                              const groupCounter: Record<string, number> = {};
+                              l.consumableItems.forEach(ci => {
+                                const g = ci.itemGroup || "Consumable";
+                                groupCounter[g] = (groupCounter[g] || 0) + 1;
+                                groupSerials.push(groupCounter[g]);
+                              });
+                              const CONSUMABLE_GROUPS = ["Ink", "Solvent", "Adhesive", "Hardner"];
+                              return l.consumableItems.map((ci, ciIdx) => {
+                                const subGroups = ci.itemGroup ? (CATEGORY_GROUP_SUBGROUP["Raw Material (RM)"]?.[ci.itemGroup] ?? []) : [];
+                                const filteredItems = items.filter(it => it.group === ci.itemGroup && it.active && (!ci.itemSubGroup || it.subGroup === ci.itemSubGroup));
+                                const ciLabel = ci.itemGroup || "Consumable";
+                                const ciSerial = groupSerials[ciIdx] ?? 1;
+                                // Ink calcs
+                                const liquidGSM = ci.itemGroup === "Ink" && ci.gsm > 0 && (ci.solidPct ?? 40) > 0
+                                  ? parseFloat((ci.gsm / ((ci.solidPct ?? 40) / 100)).toFixed(2)) : 0;
+                                // Hardener auto-calc
+                                const adhesiveCI = l.consumableItems.find(x => x.itemGroup === "Adhesive");
+                                const hardenerGSM = ci.itemGroup === "Hardner" && (ci.ncoPct ?? 0) > 0
+                                  ? parseFloat(((( adhesiveCI?.gsm ?? 0) * (adhesiveCI?.ohPct ?? 0)) / ci.ncoPct!).toFixed(3)) : null;
+                                const colCount = ci.itemGroup === "Ink" ? 6 : ci.itemGroup === "Adhesive" ? 5 : ci.itemGroup === "Hardner" ? 5 : 4;
+                                return (
+                                  <div key={ci.consumableId} className="bg-teal-50/40 border border-teal-100 rounded-xl p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <span className="text-[10px] font-bold text-teal-700 uppercase">{ciLabel} {ciSerial}</span>
+                                      <div className="flex items-center gap-1">
+                                        <button onClick={() => clonePlyConsumable(index, ciIdx)}
+                                          className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition">
+                                          Clone
+                                        </button>
+                                        <button onClick={() => removePlyConsumable(index, ciIdx)}
+                                          className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"><X size={12} /></button>
+                                      </div>
+                                    </div>
+                                    <div className={`grid grid-cols-2 gap-2 sm:grid-cols-${colCount}`}>
+                                      {/* Item Group */}
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item Group</label>
+                                        <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                          value={ci.itemGroup}
+                                          onChange={e => updatePlyConsumable(index, ciIdx, { itemGroup: e.target.value, itemSubGroup: "", itemId: "", itemName: "", gsm: 0, solidPct: undefined, ohPct: undefined, ncoPct: undefined })}>
+                                          <option value="">-- Group --</option>
+                                          {CONSUMABLE_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+                                        </select>
+                                      </div>
+                                      {/* Sub Group */}
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Sub Group</label>
+                                        <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                          value={ci.itemSubGroup}
+                                          onChange={e => updatePlyConsumable(index, ciIdx, { itemSubGroup: e.target.value, itemId: "", itemName: "" })}
+                                          disabled={!ci.itemGroup}>
+                                          <option value="">-- Sub Group --</option>
+                                          {subGroups.map(sg => <option key={sg} value={sg}>{sg}</option>)}
+                                        </select>
+                                      </div>
+                                      {/* Item Master */}
+                                      <div>
+                                        <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item (Master)</label>
+                                        <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
+                                          value={ci.itemId}
+                                          onChange={e => {
+                                            const it = filteredItems.find(x => x.id === e.target.value);
+                                            updatePlyConsumable(index, ciIdx, { itemId: it?.id ?? "", itemName: it?.name ?? "" });
+                                          }}
+                                          disabled={!ci.itemGroup}>
+                                          <option value="">-- Select Item --</option>
+                                          {filteredItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+                                        </select>
+                                      </div>
+                                      {/* Ink */}
+                                      {ci.itemGroup === "Ink" && (<>
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Dry Ink GSM</label>
+                                          <input type="number" step={0.1} min={0}
+                                            className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                            value={ci.gsm || ""}
+                                            onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
+                                        </div>
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">% Solid</label>
+                                          <input type="number" step={1} min={1} max={100}
+                                            className="w-full text-xs border border-indigo-200 rounded-lg px-2 py-1.5 bg-indigo-50 outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+                                            value={ci.solidPct ?? 40}
+                                            onChange={e => updatePlyConsumable(index, ciIdx, { solidPct: Number(e.target.value) || 40 })}
+                                            placeholder="40" />
+                                        </div>
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-purple-600 uppercase block mb-1">Liquid GSM</label>
+                                          <div className="w-full text-xs border border-purple-200 rounded-lg px-2 py-1.5 bg-purple-50 font-mono font-bold text-purple-700 min-h-[30px]">
+                                            {liquidGSM > 0 ? liquidGSM : "—"}
+                                          </div>
+                                        </div>
+                                      </>)}
+                                      {/* Solvent */}
+                                      {ci.itemGroup === "Solvent" && (
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Ratio (%)</label>
+                                          <input type="number" step={0.1} min={0} max={100}
+                                            className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                            value={ci.gsm || ""} placeholder="e.g. 30"
+                                            onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
+                                        </div>
+                                      )}
+                                      {/* Adhesive */}
+                                      {ci.itemGroup === "Adhesive" && (<>
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Adhesive GSM</label>
+                                          <input type="number" step={0.1} min={0}
+                                            className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                            value={ci.gsm || ""} placeholder="e.g. 4.5"
+                                            onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
+                                        </div>
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-orange-600 uppercase block mb-1">OH %</label>
+                                          <input type="number" step={0.1} min={0}
+                                            className="w-full text-xs border border-orange-200 rounded-lg px-2 py-1.5 bg-orange-50 outline-none focus:ring-2 focus:ring-orange-400 font-mono"
+                                            value={ci.ohPct ?? ""} placeholder="e.g. 2.5"
+                                            onChange={e => updatePlyConsumable(index, ciIdx, { ohPct: Number(e.target.value) })} />
+                                        </div>
+                                      </>)}
+                                      {/* Hardner */}
+                                      {ci.itemGroup === "Hardner" && (<>
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-rose-600 uppercase block mb-1">NCO %</label>
+                                          <input type="number" step={0.1} min={0}
+                                            className="w-full text-xs border border-rose-200 rounded-lg px-2 py-1.5 bg-rose-50 outline-none focus:ring-2 focus:ring-rose-400 font-mono"
+                                            value={ci.ncoPct ?? ""} placeholder="e.g. 12.5"
+                                            onChange={e => updatePlyConsumable(index, ciIdx, { ncoPct: Number(e.target.value) })} />
+                                        </div>
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-teal-600 uppercase block mb-1">Hardener GSM (Auto)</label>
+                                          <div className="w-full text-xs border border-teal-200 rounded-lg px-2 py-1.5 bg-teal-50 font-mono font-bold text-teal-700 min-h-[30px]">
+                                            {hardenerGSM !== null ? hardenerGSM : <span className="text-gray-400 font-normal">Set Adhesive GSM + OH% + NCO%</span>}
+                                          </div>
+                                        </div>
+                                      </>)}
+                                      {/* Other */}
+                                      {!["Ink","Solvent","Adhesive","Hardner"].includes(ci.itemGroup) && (
+                                        <div>
+                                          <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">GSM</label>
+                                          <input type="number" step={0.1} min={0}
+                                            className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
+                                            value={ci.gsm || ""}
+                                            onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              });
+                            })()}
+                            {l.consumableItems.length === 0 && (
+                              <p className="text-[10px] text-gray-400 italic text-center py-2">Click &quot;+ Add Consumable&quot; to add ink, solvent, adhesive, etc.</p>
+                            )}
+                            {/* Ply Summary Strip */}
+                            {l.consumableItems.length > 0 && (() => {
+                              const groupCount: Record<string, number> = {};
+                              l.consumableItems.forEach(ci => { const g = ci.itemGroup || "Other"; groupCount[g] = (groupCount[g] || 0) + 1; });
+                              const inks = l.consumableItems.filter(ci => ci.itemGroup === "Ink");
+                              const totalDryGSM = inks.reduce((s, ci) => s + (parseFloat(String(ci.gsm)) || 0), 0);
+                              const avgSolid = inks.length > 0 ? inks.reduce((s, ci) => s + (ci.solidPct ?? 40), 0) / inks.length : 0;
+                              const GROUP_COLOR: Record<string, string> = { Ink: "bg-blue-100 text-blue-700 border-blue-200", Solvent: "bg-teal-100 text-teal-700 border-teal-200", Adhesive: "bg-violet-100 text-violet-700 border-violet-200", Hardner: "bg-orange-100 text-orange-700 border-orange-200", Other: "bg-gray-100 text-gray-600 border-gray-200" };
                               return (
-                                <div key={pc.id} className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-bold text-gray-700 uppercase tracking-widest">{pc.fieldDisplayName}</span>
-                                    <span className="text-[9px] px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded font-semibold border border-teal-200">{pc.itemGroup}</span>
-                                  </div>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-                                    <div>
-                                      <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item Sub Group</label>
-                                      <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
-                                        value={ci.itemSubGroup} onChange={e => updatePlyConsumable(index, ciIdx, { itemSubGroup: e.target.value, itemId: "", itemName: "" })}>
-                                        <option value="">-- Sub Group --</option>
-                                        {subGroups.map(sg => <option key={sg} value={sg}>{sg}</option>)}
-                                      </select>
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Item</label>
-                                      <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400"
-                                        value={ci.itemId}
-                                        onChange={e => {
-                                          const it = filteredItems.find(x => x.id === e.target.value);
-                                          updatePlyConsumable(index, ciIdx, { itemId: it?.id ?? "", itemName: it?.name ?? "", rate: parseFloat(it?.estimationRate ?? "0") || 0 });
-                                        }}>
-                                        <option value="">-- Select Item --</option>
-                                        {filteredItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
-                                      </select>
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">GSM / Wet Wt.</label>
-                                      <input type="number" className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white outline-none focus:ring-2 focus:ring-teal-400 font-mono"
-                                        value={ci.gsm} step={0.1} onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Rate (₹/Kg)</label>
-                                      <input type="number" step={0.01} min={0}
-                                        className="w-full text-xs border border-orange-200 bg-orange-50 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 font-mono"
-                                        value={ci.rate || ""}
-                                        onChange={e => updatePlyConsumable(index, ciIdx, { rate: Number(e.target.value) })} placeholder="₹/Kg" />
-                                    </div>
-                                  </div>
+                                <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl mt-2">
+                                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Ply Summary:</span>
+                                  {Object.entries(groupCount).map(([g, cnt]) => (
+                                    <span key={g} className={`flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${GROUP_COLOR[g] ?? GROUP_COLOR.Other}`}>{g}: <strong>{cnt}</strong></span>
+                                  ))}
+                                  {inks.length > 0 && (<>
+                                    <span className="w-px h-3 bg-slate-300 mx-1" />
+                                    <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">Total Dry GSM: <strong>{totalDryGSM.toFixed(1)}</strong></span>
+                                    <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">Avg Solid: <strong>{avgSolid.toFixed(1)}%</strong></span>
+                                  </>)}
                                 </div>
                               );
-                            })}
+                            })()}
                           </div>
                         )}
                       </div>
@@ -1095,7 +1777,15 @@ export default function GravureWorkOrderPage() {
                   <div className="bg-gradient-to-r from-indigo-800 to-purple-800 p-3 flex items-center justify-between gap-3">
                     <div>
                       <p className="text-white font-bold text-xs uppercase tracking-wide">Select Production Plan</p>
-                      <p className="text-indigo-200 text-[10px] mt-0.5">{form.machineName} · {visiblePlans.length}/{allPlans.length} plans</p>
+                      <p className="text-indigo-200 text-[10px] mt-0.5">
+                        {form.machineName} · {visiblePlans.length}/{allPlans.length} plans
+                        {Object.keys(planColFilters).length > 0 && (
+                          <button onClick={() => setPlanColFilters({})}
+                            className="ml-2 px-1.5 py-0.5 bg-yellow-400 text-yellow-900 text-[9px] font-bold rounded-full hover:bg-yellow-300">
+                            ✕ {Object.keys(planColFilters).length} filter{Object.keys(planColFilters).length > 1 ? "s" : ""} active
+                          </button>
+                        )}
+                      </p>
                     </div>
                     <input value={planSearch} onChange={e => setPlanSearch(e.target.value)} placeholder="Search plans..."
                       className="bg-indigo-700 text-white placeholder-indigo-300 text-xs rounded-lg px-3 py-1.5 border border-indigo-500 outline-none focus:ring-2 focus:ring-indigo-400 w-36" />
@@ -1115,26 +1805,82 @@ export default function GravureWorkOrderPage() {
                       <thead className="bg-slate-800 text-slate-300">
                         <tr>
                           <th className="p-2 border border-slate-700 text-center">Select</th>
-                          {[
-                            { key: "machineName",     label: "Machine" },
-                            { key: "acUps",           label: "AC UPS" },
-                            { key: "printingWidth",   label: "Printing W (mm)" },
-                            { key: "sleeveCode",      label: "Sleeve" },
-                            { key: "sleeveWidthVal",  label: "Sleeve W (mm)" },
-                            { key: "sideWaste",       label: "Side Waste (mm)" },
-                            { key: "filmSize",        label: "Film Size (mm)" },
-                            { key: "deadMargin",      label: "Dead Margin (mm)" },
-                            { key: "totalWaste",      label: "Total Waste (mm)" },
-                            { key: "cylinderCode",    label: "Cylinder" },
-                            { key: "cylinderWidthVal",label: "Cyl W (mm)" },
-                            { key: "totalUPS",        label: "Total UPS" },
-                            { key: "totalRMT",        label: "Total RMT" },
-                          ].map(col => (
-                            <th key={col.key} className="p-2 border border-slate-700 text-center cursor-pointer select-none hover:bg-slate-700"
-                              onClick={() => togglePlanSort(col.key)}>
-                              {col.label}{planSort.key === col.key ? (planSort.dir === "asc" ? " ▲" : " ▼") : " ⇅"}
-                            </th>
-                          ))}
+                          <th className="p-2 border border-slate-700 text-center w-8">View</th>
+                          {([
+                            { key: "machineName",      label: "Machine" },
+                            { key: "acUps",            label: "AC UPS" },
+                            { key: "printingWidth",    label: "Printing W (mm)" },
+                            { key: "sleeveCode",       label: "Sleeve" },
+                            { key: "sleeveWidthVal",   label: "Sleeve W (mm)" },
+                            { key: "sideWaste",        label: "Side Waste (mm)" },
+                            { key: "filmSize",         label: "Film Size (mm)" },
+                            { key: "deadMargin",       label: "Dead Margin (mm)" },
+                            { key: "totalWaste",       label: "Total Waste (mm)" },
+                            { key: "cylinderCode",     label: "Cylinder" },
+                            { key: "cylinderWidthVal", label: "Cyl W (mm)" },
+                            { key: "cylExtra",         label: "Cyl Extra (mm)" },
+                            { key: "cylRepeatLength",  label: "Cyl Circ (mm)" },
+                            { key: "cylAreaSqInch",    label: "Cyl Area (sq.in)" },
+                            { key: "repeatUPS",        label: "Repeat UPS" },
+                            { key: "totalUPS",         label: "Total UPS" },
+                            { key: "reqRMT",           label: "Req. RMT" },
+                            { key: "totalRMT",         label: "Total RMT" },
+                            { key: "totalWt",          label: "Total Wt (Kg)" },
+                            { key: "totalTime",        label: "Total Time" },
+                          ] as { key: string; label: string }[]).map(col => {
+                            const isFiltered = !!(planColFilters[col.key]?.size);
+                            const isOpen     = planFilterOpen === col.key;
+                            const uniqueVals = Array.from(new Set(allPlans.map(r => String((r as any)[col.key] ?? "")))).sort((a, b) => isNaN(+a) ? a.localeCompare(b) : +a - +b);
+                            const fSearch    = planFilterSearch[col.key] ?? "";
+                            const visVals    = fSearch ? uniqueVals.filter(v => v.toLowerCase().includes(fSearch.toLowerCase())) : uniqueVals;
+                            const draft      = planFilterDraft[col.key] ?? new Set<string>();
+                            return (
+                              <th key={col.key} className="p-0 border border-slate-700 text-center relative">
+                                <div className="flex items-center justify-between px-2 py-2 gap-1 cursor-pointer hover:bg-slate-700 select-none"
+                                  onClick={() => togglePlanSort(col.key)}>
+                                  <span className="text-[10px]">{col.label}{planSort.key === col.key ? (planSort.dir === "asc" ? " ▲" : " ▼") : ""}</span>
+                                  <button
+                                    onClick={e => { e.stopPropagation(); isOpen ? setPlanFilterOpen(null) : openPlanFilter(col.key); }}
+                                    className={`flex-shrink-0 p-0.5 rounded transition-colors ${isFiltered ? "text-yellow-300" : "text-slate-400 hover:text-white"}`}
+                                    title="Filter">▼</button>
+                                </div>
+                                {isOpen && (
+                                  <div className="absolute top-full left-0 z-50 bg-white border border-gray-300 rounded-xl shadow-2xl min-w-[200px] text-gray-800"
+                                    onClick={e => e.stopPropagation()}>
+                                    <div className="p-2 border-b border-gray-100">
+                                      <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
+                                        <Search size={11} className="text-gray-400 flex-shrink-0" />
+                                        <input autoFocus value={fSearch}
+                                          onChange={e => setPlanFilterSearch(s => ({ ...s, [col.key]: e.target.value }))}
+                                          placeholder="Search…"
+                                          className="text-xs bg-transparent outline-none w-full text-gray-700" />
+                                        {fSearch && <button onClick={() => setPlanFilterSearch(s => ({ ...s, [col.key]: "" }))} className="text-gray-400"><X size={10} /></button>}
+                                      </div>
+                                    </div>
+                                    <div className="px-3 py-1.5 border-b border-gray-100 hover:bg-gray-50 cursor-pointer flex items-center gap-2"
+                                      onClick={() => togglePlanFilterAll(col.key, visVals)}>
+                                      <input type="checkbox" readOnly checked={draft.size === visVals.length && visVals.length > 0} className="accent-indigo-600 cursor-pointer" />
+                                      <span className="text-xs font-semibold text-gray-600">Select All</span>
+                                    </div>
+                                    <div className="max-h-48 overflow-y-auto">
+                                      {visVals.map(v => (
+                                        <div key={v} className="px-3 py-1.5 hover:bg-indigo-50 cursor-pointer flex items-center gap-2"
+                                          onClick={() => togglePlanFilterVal(col.key, v)}>
+                                          <input type="checkbox" readOnly checked={draft.has(v)} className="accent-indigo-600 cursor-pointer" />
+                                          <span className="text-xs text-gray-700">{v || "(blank)"}</span>
+                                        </div>
+                                      ))}
+                                      {visVals.length === 0 && <div className="px-3 py-2 text-xs text-gray-400">No matches</div>}
+                                    </div>
+                                    <div className="flex gap-2 p-2 border-t border-gray-100">
+                                      <button onClick={() => applyPlanFilter(col.key)} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-1.5 rounded-lg">OK</button>
+                                      <button onClick={() => clearPlanFilter(col.key)} className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium py-1.5 rounded-lg">Clear</button>
+                                    </div>
+                                  </div>
+                                )}
+                              </th>
+                            );
+                          })}
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-100">
@@ -1149,6 +1895,12 @@ export default function GravureWorkOrderPage() {
                                   {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                                 </div>
                               </td>
+                              <td className="p-2 border border-gray-100 text-center" onClick={e => e.stopPropagation()}>
+                                <button onClick={e => { e.stopPropagation(); setWoUpsPreview(plan); }}
+                                  className="p-1 text-indigo-400 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition" title="View UPS Layout">
+                                  <Eye size={13} />
+                                </button>
+                              </td>
                               <td className="p-2 border border-gray-100 font-medium text-gray-700">{plan.machineName}{p.isBest && <span className="ml-1.5 px-1.5 py-0.5 bg-green-500 text-white text-[9px] font-bold rounded-full">BEST</span>}{p.isSpecial && !p.isSpecialSleeve && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded-full">SPECIAL CYL</span>}{p.isSpecialSleeve && <span className="ml-1.5 px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-bold rounded-full">SPECIAL SLV</span>}</td>
                               <td className="p-2 border border-gray-100 text-center font-bold text-indigo-700">{plan.acUps}</td>
                               <td className="p-2 border border-gray-100 text-center font-mono">{p.printingWidth}</td>
@@ -1158,15 +1910,27 @@ export default function GravureWorkOrderPage() {
                               <td className="p-2 border border-gray-100 text-center text-indigo-700">{plan.filmSize}</td>
                               <td className={`p-2 border border-gray-100 text-center font-bold ${p.deadMargin < 0 ? "text-red-600" : "text-orange-600"}`}>{p.deadMargin}</td>
                               <td className={`p-2 border border-gray-100 text-center font-bold ${p.isBest ? "text-green-700" : p.totalWaste > 300 ? "text-red-600" : "text-amber-600"}`}>{p.totalWaste}</td>
-                              <td className="p-2 border border-gray-100"><span className={`font-semibold ${p.isSpecial ? "text-amber-600" : "text-violet-600"}`}>{p.cylinderCode}</span><br/><span className={`text-[9px] ${p.isSpecial ? "text-amber-500" : "text-gray-400"}`}>{p.cylinderName}</span></td>
+                              <td className="p-2 border border-gray-100 whitespace-nowrap"><span className={`font-semibold ${p.isSpecial ? "text-amber-600" : "text-violet-600"}`}>{p.cylinderCode}</span><br/><span className={`text-[9px] ${p.isSpecial ? "text-amber-500" : "text-gray-400"}`}>{p.cylinderName}</span></td>
                               <td className={`p-2 border border-gray-100 text-center font-bold ${p.isSpecial ? "text-amber-600" : "text-violet-700"}`}>{p.cylinderWidthVal}</td>
+                              <td className="p-2 border border-gray-100 text-center font-bold">
+                                {(() => {
+                                  const extra = Math.round(p.cylinderWidthVal - p.sleeveWidthVal - 100);
+                                  return extra > 0 ? <span className="text-orange-600">+{extra}</span> : <span className="text-gray-400">0</span>;
+                                })()}
+                              </td>
+                              <td className="p-2 border border-gray-100 text-center font-mono text-gray-500">{p.cylRepeatLength}</td>
+                              <td className="p-2 border border-gray-100 text-center font-mono text-indigo-600 font-semibold">{p.cylAreaSqInch}</td>
+                              <td className="p-2 border border-gray-100 text-center text-gray-600">{p.repeatUPS}</td>
                               <td className="p-2 border border-gray-100 text-center font-bold">{plan.totalUPS}</td>
+                              <td className="p-2 border border-gray-100 text-center text-gray-600">{p.reqRMT}</td>
                               <td className="p-2 border border-gray-100 text-center text-blue-600 font-semibold">{plan.totalRMT}</td>
+                              <td className="p-2 border border-gray-100 text-center font-semibold text-blue-600">{p.totalWt}</td>
+                              <td className="p-2 border border-gray-100 text-center text-gray-600">{p.totalTime} hr</td>
                             </tr>
                           );
                         })}
                         {visiblePlans.length === 0 && (
-                          <tr><td colSpan={9} className="p-4 text-center text-gray-400 text-xs">No plans match your search</td></tr>
+                          <tr><td colSpan={22} className="p-4 text-center text-gray-400 text-xs">No plans match your search</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -1200,54 +1964,105 @@ export default function GravureWorkOrderPage() {
                       <table className="min-w-full text-[10px] border-collapse">
                         <thead className="bg-indigo-700 text-white uppercase tracking-wider font-bold">
                           <tr>
-                            {["Layer","Type","Film / Material","Thick (μ)","Density","GSM","Width (mm)","Req.Mtr","Req.SQM","Req.Wt (Kg)","Waste Mtr","Waste Wt","Total Mtr","Total Wt (Kg)"].map(h => (
+                            {["Ply","Type","Film / Material","Group","GSM","Width (mm)","Req. Mtr","Req. SQM","Req. Wt (Kg)","Waste Mtr","Waste SQM","Waste Wt","Total Mtr","Total SQM","Total Wt (Kg)"].map(h => (
                               <th key={h} className="p-2 border border-indigo-600/30 text-center whitespace-nowrap">{h}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {form.secondaryLayers.map((l, idx) => {
-                            const WASTE_PCT = 0.03;
-                            const rmt = selectedPlan.totalRMT;
-                            const widthM = form.jobWidth / 1000;
-                            const reqSQM = parseFloat((rmt * widthM).toFixed(3));
-                            const reqWt  = l.gsm > 0 ? parseFloat((l.gsm * reqSQM / 1000).toFixed(4)) : 0;
-                            const wasteMtr = parseFloat((rmt * WASTE_PCT).toFixed(2));
-                            const wasteWt  = parseFloat((reqWt * WASTE_PCT).toFixed(4));
-                            const totalMtr = parseFloat((rmt + wasteMtr).toFixed(2));
-                            const totalWt  = parseFloat((reqWt + wasteWt).toFixed(4));
-                            return (
-                              <tr key={l.id} className="hover:bg-indigo-50/30">
-                                <td className="p-2 border border-gray-100 text-center font-black text-indigo-900 bg-indigo-50/20">{idx + 1}</td>
-                                <td className="p-2 border border-gray-100 text-center">
-                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${l.plyType === "Printing" ? "bg-indigo-50 text-indigo-700 border-indigo-200" : l.plyType === "Lamination" ? "bg-teal-50 text-teal-700 border-teal-200" : l.plyType === "Coating" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-blue-50 text-blue-700 border-blue-200"}`}>{l.plyType || "Film"}</span>
-                                </td>
-                                <td className="p-2 border border-gray-100 font-medium text-gray-700 min-w-[140px] whitespace-normal">{l.itemSubGroup || "—"}</td>
-                                <td className="p-2 border border-gray-100 text-center font-mono">{l.thickness || "—"}</td>
-                                <td className="p-2 border border-gray-100 text-center font-mono">{l.density || "—"}</td>
-                                <td className="p-2 border border-gray-100 text-center font-bold text-indigo-700">{l.gsm || "—"}</td>
-                                <td className="p-2 border border-gray-100 text-center font-mono">{form.jobWidth}</td>
-                                <td className="p-2 border border-gray-100 text-center font-mono">{rmt}</td>
-                                <td className="p-2 border border-gray-100 text-center font-mono">{reqSQM}</td>
-                                <td className="p-2 border border-gray-100 text-center font-bold text-blue-600">{reqWt}</td>
-                                <td className="p-2 border border-gray-100 text-center font-mono text-orange-600">{wasteMtr}</td>
-                                <td className="p-2 border border-gray-100 text-center font-mono text-orange-600">{wasteWt}</td>
-                                <td className="p-2 border border-gray-100 text-center font-mono text-gray-700">{totalMtr}</td>
-                                <td className="p-2 border border-gray-100 text-center font-black text-gray-900 bg-gray-50">{totalWt}</td>
-                              </tr>
-                            );
-                          })}
+                          {(() => {
+                            const rmt        = selectedPlan.totalRMT;
+                            const widthMm    = form.jobWidth || 0;
+                            const widthM     = widthMm / 1000;
+                            const wasteFrac  = (form.wastagePct ?? 1) / 100;
+                            const reqSQMBase = parseFloat((rmt * widthM).toFixed(3));
+                            const wasteMtrBase = parseFloat((rmt * wasteFrac).toFixed(2));
+                            const wasteSQMBase = parseFloat((wasteMtrBase * widthM).toFixed(3));
+                            const totalMtrBase = parseFloat((rmt + wasteMtrBase).toFixed(2));
+                            const totalSQMBase = parseFloat((reqSQMBase + wasteSQMBase).toFixed(3));
+
+                            // Build flat matLines: film + consumables per ply (matching estimation logic, no cost)
+                            type WOMatLine = { plyNo: number; plyType: string; name: string; group: string; gsm: number };
+                            const matLines: WOMatLine[] = [];
+                            form.secondaryLayers.forEach((l, idx) => {
+                              if (l.gsm > 0 || l.itemSubGroup) {
+                                matLines.push({ plyNo: idx + 1, plyType: l.plyType || "Film", name: l.itemSubGroup || "Film Substrate", group: "Film", gsm: l.gsm });
+                              }
+                              l.consumableItems.forEach(ci => {
+                                const effGsm = (ci.coveragePct ?? 100) < 100
+                                  ? parseFloat((ci.gsm * ((ci.coveragePct ?? 100) / 100)).toFixed(3))
+                                  : ci.gsm;
+                                const label = (ci.coveragePct ?? 100) < 100
+                                  ? `${ci.itemName || ci.fieldDisplayName} (${ci.coveragePct}% cov.)`
+                                  : (ci.itemName || ci.fieldDisplayName);
+                                matLines.push({ plyNo: idx + 1, plyType: l.plyType || "", name: label, group: ci.itemGroup, gsm: effGsm });
+                              });
+                            });
+
+                            const GROUP_CLS: Record<string, string> = {
+                              Film: "bg-blue-50 text-blue-700 border-blue-200",
+                              Ink: "bg-violet-50 text-violet-700 border-violet-200",
+                              Adhesive: "bg-teal-50 text-teal-700 border-teal-200",
+                              Solvent: "bg-orange-50 text-orange-700 border-orange-200",
+                              Hardner: "bg-pink-50 text-pink-700 border-pink-200",
+                            };
+                            const PLY_CLS: Record<string, string> = {
+                              Film: "bg-blue-50 text-blue-700 border-blue-200",
+                              Printing: "bg-indigo-50 text-indigo-700 border-indigo-200",
+                              Lamination: "bg-teal-50 text-teal-700 border-teal-200",
+                              Coating: "bg-amber-50 text-amber-700 border-amber-200",
+                            };
+
+                            return matLines.map((m, i) => {
+                              const reqWt   = m.gsm > 0 ? parseFloat((m.gsm * reqSQMBase / 1000).toFixed(4)) : 0;
+                              const wasteWt = m.gsm > 0 ? parseFloat((m.gsm * wasteSQMBase / 1000).toFixed(4)) : 0;
+                              const totalWt = parseFloat((reqWt + wasteWt).toFixed(4));
+                              return (
+                                <tr key={i} className={`hover:bg-indigo-50/30 ${i % 2 === 0 ? "bg-white" : "bg-gray-50/40"}`}>
+                                  <td className="p-2 border border-gray-100 text-center font-black text-indigo-900 bg-indigo-50/20">P{m.plyNo}</td>
+                                  <td className="p-2 border border-gray-100 text-center">
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${PLY_CLS[m.plyType] || "bg-gray-100 text-gray-600 border-gray-200"}`}>{m.plyType || "—"}</span>
+                                  </td>
+                                  <td className="p-2 border border-gray-100 font-medium text-gray-700 min-w-[140px] whitespace-normal">{m.name}</td>
+                                  <td className="p-2 border border-gray-100 text-center">
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${GROUP_CLS[m.group] || "bg-gray-100 text-gray-600 border-gray-200"}`}>{m.group}</span>
+                                  </td>
+                                  <td className="p-2 border border-gray-100 text-center font-bold text-indigo-700">{m.gsm > 0 ? `${m.gsm} g/m²` : "—"}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-mono">{widthMm}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-mono">{rmt.toLocaleString()}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-mono">{reqSQMBase.toLocaleString()}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-bold text-blue-600">{m.gsm > 0 ? reqWt : "—"}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-mono text-orange-500">{wasteMtrBase.toLocaleString()}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-mono text-orange-500">{wasteSQMBase.toLocaleString()}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-mono text-orange-500">{m.gsm > 0 ? wasteWt : "—"}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-mono text-gray-700">{totalMtrBase.toLocaleString()}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-mono text-gray-700">{totalSQMBase.toLocaleString()}</td>
+                                  <td className="p-2 border border-gray-100 text-center font-black text-gray-900 bg-gray-50">{m.gsm > 0 ? totalWt : "—"}</td>
+                                </tr>
+                              );
+                            });
+                          })()}
                         </tbody>
                         <tfoot className="bg-slate-50 border-t-2 border-indigo-200">
                           <tr className="font-bold">
-                            <td colSpan={13} className="p-3 text-right text-indigo-900 uppercase text-[10px]">Total Weight (Kg)</td>
+                            <td colSpan={14} className="p-3 text-right text-indigo-900 uppercase text-[10px]">Total Weight (Kg)</td>
                             <td className="p-3 text-center bg-indigo-100 text-indigo-900 text-xs">
-                              {form.secondaryLayers.reduce((sum, l) => {
+                              {(() => {
                                 const rmt = selectedPlan.totalRMT;
-                                const reqSQM = rmt * form.jobWidth / 1000;
-                                const reqWt = l.gsm > 0 ? l.gsm * reqSQM / 1000 : 0;
-                                return sum + parseFloat((reqWt * 1.03).toFixed(4));
-                              }, 0).toFixed(3)}
+                                const widthM = (form.jobWidth || 0) / 1000;
+                                const wasteFrac = (form.wastagePct ?? 1) / 100;
+                                const reqSQM = rmt * widthM;
+                                const wasteSQM = rmt * wasteFrac * widthM;
+                                const totalSQM = reqSQM + wasteSQM;
+                                return form.secondaryLayers.reduce((sum, l) => {
+                                  const filmWt = l.gsm > 0 ? l.gsm * totalSQM / 1000 : 0;
+                                  const ciWt = l.consumableItems.reduce((cs, ci) => {
+                                    const effGsm = (ci.coveragePct ?? 100) < 100 ? ci.gsm * ((ci.coveragePct ?? 100) / 100) : ci.gsm;
+                                    return cs + (effGsm > 0 ? effGsm * totalSQM / 1000 : 0);
+                                  }, 0);
+                                  return sum + filmWt + ciWt;
+                                }, 0).toFixed(3);
+                              })()}
                             </td>
                           </tr>
                         </tfoot>
@@ -1848,11 +2663,11 @@ export default function GravureWorkOrderPage() {
                           </div>
                         </td>
                         {/* Cylinder from Tool Master */}
-                        <td className="px-2 py-1.5 min-w-[200px]">
+                        <td className="px-2 py-1.5 min-w-[220px]">
                           <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400"
                             value={(ca as any).toolId ?? ""}
                             onChange={e => {
-                              const tool = CYLINDER_TOOLS_ALL.find(t => t.id === e.target.value);
+                              const tool = [...CYLINDER_TOOLS_ALL, ...extraCyls].find(t => t.id === e.target.value);
                               setCylinderAllocs(p => p.map((c, ci) => ci === i ? {
                                 ...c,
                                 toolId: tool?.id ?? "",
@@ -1861,8 +2676,94 @@ export default function GravureWorkOrderPage() {
                               } as any : c));
                             }}>
                             <option value="">{ca.cylinderNo || "-- Select Cylinder --"}</option>
-                            {CYLINDER_TOOLS_ALL.map(t => <option key={t.id} value={t.id}>{t.code} — {t.name} ({t.printWidth}mm)</option>)}
+                            {[...CYLINDER_TOOLS_ALL, ...extraCyls].map(t => {
+                              const rem = t.shelfLifeMeters ? t.shelfLifeMeters - (t.usedMeters ?? 0) : null;
+                              const lifeBadge = rem !== null ? ` [${rem.toLocaleString()}m left]` : "";
+                              return <option key={t.id} value={t.id}>{t.code} — {t.name} ({t.printWidth}mm){lifeBadge}</option>;
+                            })}
                           </select>
+                          {/* ── Cylinder Life Info + Check ── */}
+                          {(() => {
+                            const toolId = (ca as any).toolId;
+                            if (!toolId) return null;
+                            const tool = [...CYLINDER_TOOLS_ALL, ...extraCyls].find(t => t.id === toolId);
+                            if (!tool) return null;
+                            const remaining = tool.shelfLifeMeters ? tool.shelfLifeMeters - (tool.usedMeters ?? 0) : null;
+                            const reqRMT = selectedPlan?.reqRMT ?? 0;
+                            const lifeOk = remaining === null || reqRMT === 0 || remaining >= reqRMT;
+                            const isExhausted = remaining !== null && remaining <= 0;
+                            const pct = tool.shelfLifeMeters && remaining !== null ? Math.round((remaining / tool.shelfLifeMeters) * 100) : null;
+                            // Life bar color
+                            const barColor = isExhausted ? "bg-red-500" : pct !== null && pct < 20 ? "bg-orange-400" : "bg-green-400";
+                            return (
+                              <div className="mt-1.5 space-y-1">
+                                {/* Always-visible shelf life strip */}
+                                {tool.shelfLifeMeters && remaining !== null && (
+                                  <div className="rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-[10px]">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="font-semibold text-gray-600">Shelf Life</span>
+                                      <span className={`font-bold ${isExhausted ? "text-red-600" : pct !== null && pct < 20 ? "text-orange-600" : "text-green-700"}`}>
+                                        {remaining.toLocaleString()} m left
+                                        {pct !== null && <span className="font-normal text-gray-400 ml-1">({pct}%)</span>}
+                                      </span>
+                                    </div>
+                                    {/* Progress bar */}
+                                    <div className="w-full h-1.5 rounded-full bg-gray-200 overflow-hidden">
+                                      <div className={`h-full rounded-full ${barColor} transition-all`} style={{ width: `${Math.max(0, pct ?? 100)}%` }} />
+                                    </div>
+                                    <div className="flex justify-between mt-0.5 text-[9px] text-gray-400">
+                                      <span>Used: {(tool.usedMeters ?? 0).toLocaleString()} m</span>
+                                      <span>Total: {tool.shelfLifeMeters.toLocaleString()} m</span>
+                                    </div>
+                                    {reqRMT > 0 && (
+                                      <div className="mt-0.5 text-[9px] text-gray-500">
+                                        This job: <strong className="text-blue-600">{reqRMT.toLocaleString()} m</strong>
+                                        {!lifeOk && <span className="ml-1 text-red-500 font-bold">— insufficient!</span>}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {/* Actions only when life is insufficient */}
+                                {!lifeOk && (
+                                  <div className={`rounded-lg border px-2.5 py-1.5 text-[10px] space-y-1 ${isExhausted ? "bg-red-50 border-red-200" : "bg-amber-50 border-amber-200"}`}>
+                                    <p className={`font-bold ${isExhausted ? "text-red-700" : "text-amber-700"}`}>
+                                      {isExhausted ? "⛔ Life Exhausted" : "⚠ Low Cylinder Life"}
+                                    </p>
+                                    <div className="flex gap-1.5 flex-wrap">
+                                      <button
+                                        type="button"
+                                        onClick={() => setCylinderAllocs(p => p.map((c, ci) => ci === i ? {
+                                          ...c,
+                                          cylinderType: "Rechromed" as const,
+                                          status: "Under Chrome" as const,
+                                          remarks: `Sent for rework — ${remaining?.toLocaleString()} m remaining (${pct}% life)`,
+                                        } : c))}
+                                        className="px-2 py-1 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-lg text-[10px] transition">
+                                        Send for Rework
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setNewCylForm({
+                                            code: `${tool.code}-R`,
+                                            name: `${tool.name} (New)`,
+                                            printWidth: tool.printWidth,
+                                            repeatLength: tool.repeatLength,
+                                            shelfLifeMeters: "25000",
+                                            cylinderMaterial: tool.cylinderMaterial || "Steel",
+                                            surfaceFinish: tool.surfaceFinish || "Hard Chrome",
+                                          });
+                                          setNewCylModal({ rowIdx: i, fromTool: tool });
+                                        }}
+                                        className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-[10px] transition">
+                                        + New Cylinder
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="px-2 py-1.5"><input type="number" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 text-center" value={ca.circumference} onChange={e => setCylinderAllocs(p => p.map((c, ci) => ci === i ? { ...c, circumference: e.target.value } : c))} /></td>
                         <td className="px-2 py-1.5">
@@ -2073,14 +2974,12 @@ export default function GravureWorkOrderPage() {
         )}
         <div className="space-y-4">
           <div>
-            <SH label="Machine & Rate" />
+            <SH label="Machine" />
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <Select label="Printing Machine" value={form.machineId}
                 onChange={e => { const m = PRINT_MACHINES.find(x => x.id === e.target.value); if (m) { f("machineId", m.id); f("machineName", m.name); } }}
                 options={[{ value: "", label: "-- Select Machine --" }, ...PRINT_MACHINES.map(m => ({ value: m.id, label: `${m.name} (${m.status})` }))]}
               />
-              <Input label="Rate / Kg (₹)" type="number" value={form.perMeterRate || ""} onChange={e => f("perMeterRate", Number(e.target.value))} />
-              <Input label="Total Amount (₹)" type="number" value={form.totalAmount || ""} onChange={e => f("totalAmount", Number(e.target.value))} />
             </div>
           </div>
 
@@ -2212,6 +3111,268 @@ export default function GravureWorkOrderPage() {
         </Modal>
       )}
 
+      {/* ══ UPS LAYOUT DESIGN MODAL (plan selection eye icon) ══ */}
+      {woUpsPreview && (() => {
+        const plan       = woUpsPreview as any;
+        const isSleeve   = ((form as any).structureType || getStructureType(form.content || "")) === "Sleeve";
+        const jobW       = form.actualWidth || form.jobWidth || 0;
+        const shrink     = (form as any).widthShrinkage || 0;
+        const trim       = form.trimmingSize || 0;
+        const slvTransp  = isSleeve ? ((form as any).transparentArea || 0) : 0;
+        const slvSeam    = isSleeve ? ((form as any).seamingArea     || 0) : 0;
+        const sleeveFilmWidth = isSleeve ? (jobW * 2 + slvTransp + slvSeam) : 0;
+        const acUps      = plan.acUps as number;
+        const filmW      = plan.filmSize as number;
+        const content    = form.content || "";
+        const gusset     = (form as any).gusset          || 0;
+        const topSeal    = (form as any).topSeal         || 0;
+        const btmSeal    = (form as any).bottomSeal      || 0;
+        const sideSeal   = (form as any).sideSeal        || 0;
+        const ctrSeal    = (form as any).centerSealWidth || 0;
+        const sideGusset = (form as any).sideGusset      || 0;
+
+        // Effective repeat per content type
+        let effRepeat: number;
+        if (isSleeve) {
+          effRepeat = (plan.cylCirc as number) / (plan.repeatUPS as number);
+        } else if (content === "Pouch — 3 Side Seal" || content === "Pouch — Center Seal" || content === "Both Side Gusset Pouch") {
+          effRepeat = (form.jobHeight || 0) + topSeal + btmSeal + shrink;
+        } else if (content === "Standup Pouch" || content === "Zipper Pouch" || content === "3D Pouch / Flat Bottom") {
+          effRepeat = (form.jobHeight || 0) + topSeal + (gusset > 0 ? gusset / 2 : 0) + shrink;
+        } else {
+          effRepeat = (form.jobHeight || 0) + shrink;
+        }
+
+        // Lane width per content type
+        let diagLaneW: number;
+        if (isSleeve) {
+          diagLaneW = jobW * 2 + slvTransp + slvSeam;
+        } else if (content === "Pouch — 3 Side Seal" || content === "Standup Pouch" || content === "Zipper Pouch") {
+          diagLaneW = jobW + 2 * sideSeal;
+        } else if (content === "Pouch — Center Seal") {
+          diagLaneW = jobW * 2 + ctrSeal;
+        } else if (content === "Both Side Gusset Pouch" || content === "3D Pouch / Flat Bottom") {
+          diagLaneW = jobW + 2 * sideGusset;
+        } else {
+          diagLaneW = jobW;
+        }
+
+        const repeatUPS = plan.repeatUPS as number;
+        const cylCirc   = plan.cylCirc   as number;
+        const jobH      = form.jobHeight || 0;
+
+        const SVG_W = 730; const SVG_H = 415;
+        const RULER_LEFT = 36; const RULER_BTM = 22;
+        const drawW = 660 - RULER_LEFT; const drawH = 360 - RULER_BTM;
+        const sx = (mm: number) => mm * (drawW / (filmW || 1));
+        const sy = (mm: number) => mm * (drawH / (cylCirc || 1));
+        const trimPx = sx(trim);
+        const lanePx = isSleeve ? sx(sleeveFilmWidth) : sx(diagLaneW);
+        const repPx  = sy(effRepeat);
+        const C_TRIM = "#fed7aa"; const C_LANE = ["#dbeafe", "#bfdbfe"];
+        const C_DASH = "#6366f1";
+
+        return (
+          <Modal open onClose={() => setWoUpsPreview(null)} title="UPS Layout Design" size="xl">
+            <div className="space-y-4">
+              {/* Stats row */}
+              <div className="flex flex-wrap gap-2 text-xs">
+                {(() => {
+                  const dc = jobW * 2 + slvSeam + slvTransp;
+                  const cutWithShrink = jobH + shrink;
+                  const baseStats = [
+                    { l: "Film Width",                               v: `${filmW} mm`,  cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+                    { l: "AC UPS",                                   v: String(acUps),  cls: "bg-purple-50 text-purple-700 border-purple-200" },
+                    { l: isSleeve ? "Layflat" : "Job Width",        v: `${jobW} mm`,   cls: "bg-blue-50 text-blue-700 border-blue-200" },
+                  ];
+                  const typeStats = isSleeve ? [
+                    { l: "Design Circ",  v: (() => { const p=[`${jobW}×2`]; if(slvTransp>0)p.push(`+${slvTransp}`); if(slvSeam>0)p.push(`+${slvSeam}`); return `${p.join("")} = ${dc} mm`; })(), cls: "bg-blue-100 text-blue-800 border-blue-300" },
+                    { l: "Cut Length",   v: shrink > 0 ? `${jobH}+${shrink} = ${cutWithShrink} mm` : `${jobH} mm`, cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                    { l: "Repeat Count", v: `${repeatUPS}×`, cls: "bg-teal-50 text-teal-700 border-teal-200" },
+                    { l: "Cyl. Circ",    v: `${cutWithShrink}×${repeatUPS} = ${cylCirc} mm`, cls: "bg-emerald-50 text-emerald-800 border-emerald-300" },
+                  ] : [
+                    { l: "Length Shrink", v: shrink > 0 ? `+${shrink} mm` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                    { l: "Trimming",      v: trim > 0 ? `${trim}+${trim} mm` : "—", cls: "bg-orange-50 text-orange-700 border-orange-200" },
+                    { l: "Repeat UPS",    v: String(repeatUPS), cls: "bg-teal-50 text-teal-700 border-teal-200" },
+                    { l: "Cyl. Circ",     v: `${cylCirc} mm`,  cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+                  ];
+                  return [...baseStats, ...typeStats,
+                    { l: "Total Pieces", v: String(plan.totalUPS),   cls: "bg-green-50 text-green-700 border-green-200" },
+                    { l: "Cylinder",     v: plan.cylinderCode,        cls: "bg-violet-50 text-violet-700 border-violet-200" },
+                    { l: "Machine",      v: plan.machineName,         cls: "bg-gray-50 text-gray-700 border-gray-200" },
+                  ];
+                })().map(s => (
+                  <div key={s.l} className={`px-2.5 py-1.5 rounded-lg border font-medium ${s.cls}`}>
+                    <span className="opacity-60 text-[10px] uppercase tracking-wider block leading-none mb-0.5">{s.l}</span>
+                    <span className="font-bold">{s.v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* 2D Layout SVG */}
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3">
+                  Full Layout — {acUps} AC UPS × {repeatUPS} Repeat UPS = {plan.totalUPS} Total Pieces &nbsp;|&nbsp; Film {filmW}mm × Cyl. Circ {cylCirc}mm
+                </p>
+                <svg width={SVG_W} height={SVG_H} className="w-full" viewBox={`0 0 ${SVG_W} ${SVG_H}`}>
+                  <defs>
+                    <pattern id="wo-hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                      <line x1="0" y1="0" x2="0" y2="5" stroke="#f97316" strokeWidth="1.5" opacity="0.4"/>
+                    </pattern>
+                    <marker id="wo-dim-end" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+                      <path d="M0,0.5 L6,3.5 L0,6.5 Z" fill="#374151"/>
+                    </marker>
+                    <marker id="wo-dim-start" markerWidth="7" markerHeight="7" refX="1" refY="3.5" orient="auto-start-reverse">
+                      <path d="M0,0.5 L6,3.5 L0,6.5 Z" fill="#374151"/>
+                    </marker>
+                  </defs>
+                  {Array.from({ length: repeatUPS }, (_, ri) => {
+                    const ry = RULER_LEFT + ri * repPx;
+                    let cx = 0;
+                    const cells = [];
+                    if (trim > 0) cells.push(<rect key={`lt-${ri}`} x={cx} y={ry} width={trimPx} height={repPx} fill={C_TRIM} stroke="#f97316" strokeWidth={0.5} />);
+                    cx += trimPx;
+                    for (let li = 0; li < acUps; li++) {
+                      const bg = C_LANE[li % 2];
+                      const lsX = cx;
+                      cells.push(
+                        <g key={`l-${ri}-${li}`}>
+                          <rect x={cx} y={ry} width={lanePx} height={repPx} fill={bg} stroke="#6366f1" strokeWidth={0.4} />
+                          {lanePx > 30 && repPx > 18 && (() => {
+                            const ax1 = lsX + 5; const ax2 = lsX + lanePx - 5; const ay = ry + repPx / 2;
+                            return (
+                              <g>
+                                <line x1={ax1} y1={ay} x2={ax2} y2={ay} stroke="#1e40af" strokeWidth="1.3" markerStart="url(#wo-dim-start)" markerEnd="url(#wo-dim-end)" />
+                                <rect x={lsX + lanePx / 2 - 22} y={ay - 8} width={44} height={12} fill="rgba(255,255,255,0.85)" rx={2} />
+                                <text x={lsX + lanePx / 2} y={ay + 3} textAnchor="middle" fontSize={8} fill="#1e40af" fontWeight="700">{diagLaneW} mm</text>
+                              </g>
+                            );
+                          })()}
+                        </g>
+                      );
+                      cx += lanePx;
+                    }
+                    if (trim > 0) { cells.push(<rect key={`rt-${ri}`} x={cx} y={ry} width={trimPx} height={repPx} fill={C_TRIM} stroke="#f97316" strokeWidth={0.5} />); cx += trimPx; }
+                    const dashLine = ri < repeatUPS - 1 ? <line key={`dh-${ri}`} x1={0} y1={ry + repPx} x2={cx} y2={ry + repPx} stroke={C_DASH} strokeWidth={1} strokeDasharray="4 3" /> : null;
+                    const rulerLabel = repPx > 20 ? (
+                      <g key={`rl-${ri}`}>
+                        <line x1={15} y1={ry + 4} x2={15} y2={ry + repPx - 4} stroke="#374151" strokeWidth="1.3" markerStart="url(#wo-dim-start)" markerEnd="url(#wo-dim-end)" />
+                        <rect x={2} y={ry + repPx / 2 - 22} width={14} height={44} fill="white" />
+                        <text x={15} y={ry + repPx / 2} textAnchor="middle" fontSize={8} fill="#111827" fontWeight="700" transform={`rotate(-90, 15, ${ry + repPx / 2})`}>{effRepeat} mm</text>
+                      </g>
+                    ) : null;
+                    return [rulerLabel, ...cells, dashLine];
+                  })}
+                  {/* Bottom ruler */}
+                  {(() => {
+                    const ry = RULER_LEFT + repeatUPS * repPx + 4; let cx = 0; const ticks = [];
+                    ticks.push(<text key="t0" x={cx} y={ry+8} fontSize={7} fill="#9ca3af">0</text>);
+                    if (trim > 0) { cx += trimPx; ticks.push(<text key="tt" x={cx} y={ry+8} fontSize={7} fill="#f97316" textAnchor="middle">{trim}</text>); }
+                    for (let li = 0; li <= acUps; li++) {
+                      const xmm = trim + li * diagLaneW; const xpx = sx(xmm);
+                      ticks.push(<g key={`bt-${li}`}><line x1={xpx} y1={ry-2} x2={xpx} y2={ry+2} stroke="#9ca3af" strokeWidth={0.8} />{(li===0||li===acUps||li===Math.floor(acUps/2))&&<text x={xpx} y={ry+9} fontSize={7} fill="#6b7280" textAnchor="middle">{xmm}</text>}</g>);
+                    }
+                    ticks.push(<text key="total" x={sx(filmW)} y={ry+9} fontSize={7} fill="#6b7280" textAnchor="end">{filmW}mm</text>);
+                    return ticks;
+                  })()}
+                  {/* Bottom dim arrow */}
+                  {(() => {
+                    const arrowY = RULER_LEFT + repeatUPS*repPx + RULER_BTM + 14; const midX = drawW / 2;
+                    return (
+                      <g>
+                        <line x1={0} y1={arrowY} x2={drawW} y2={arrowY} stroke="#374151" strokeWidth="1.4" markerStart="url(#wo-dim-start)" markerEnd="url(#wo-dim-end)" />
+                        <line x1={0} y1={arrowY-6} x2={0} y2={arrowY+6} stroke="#374151" strokeWidth="1" />
+                        <line x1={drawW} y1={arrowY-6} x2={drawW} y2={arrowY+6} stroke="#374151" strokeWidth="1" />
+                        <rect x={midX-42} y={arrowY-7} width={84} height={13} fill="white" />
+                        <text x={midX} y={arrowY+4} textAnchor="middle" fontSize={10} fill="#111827" fontWeight="700">Total Film Width: {filmW} mm</text>
+                      </g>
+                    );
+                  })()}
+                  {/* Right dim arrow — Cyl Circ */}
+                  {(() => {
+                    const arrX = drawW + 34; const y1 = RULER_LEFT; const y2 = RULER_LEFT + repeatUPS * repPx; const midY = (y1 + y2) / 2;
+                    return (
+                      <g>
+                        <line x1={arrX} y1={y1} x2={arrX} y2={y2} stroke="#374151" strokeWidth="1.4" markerStart="url(#wo-dim-start)" markerEnd="url(#wo-dim-end)" />
+                        <line x1={arrX-6} y1={y1} x2={arrX+6} y2={y1} stroke="#374151" strokeWidth="1" />
+                        <line x1={arrX-6} y1={y2} x2={arrX+6} y2={y2} stroke="#374151" strokeWidth="1" />
+                        <rect x={arrX-6} y={midY-38} width={12} height={76} fill="white" />
+                        <text x={arrX} y={midY} textAnchor="middle" fontSize={10} fill="#111827" fontWeight="700" transform={`rotate(-90, ${arrX}, ${midY})`}>Cyl. Circ: {cylCirc} mm</text>
+                      </g>
+                    );
+                  })()}
+                </svg>
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 mt-3 pt-2 border-t border-gray-200">
+                  {[
+                    { color: "#dbeafe", border: "#6366f1", label: `Job cell — ${diagLaneW}mm wide × ${effRepeat}mm repeat length` },
+                    ...(trim > 0 ? [{ color: C_TRIM, border: "#f97316", label: `Trim both sides (${trim}mm each)` }] : []),
+                    ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: `Shrinkage +${shrink}mm on repeat length` }] : []),
+                  ].map(l => (
+                    <div key={l.label} className="flex items-center gap-1.5">
+                      <div className="w-4 h-4 rounded border-2 flex-shrink-0" style={{ background: l.color, borderColor: l.border }} />
+                      <span className="text-[11px] text-gray-600">{l.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* UPS-by-UPS Width breakdown */}
+              <div>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">UPS-by-UPS Breakdown — Width Direction</p>
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-gray-100">
+                      <tr>{["Position","Type","Width (mm)","Color"].map(h=><th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      {trim>0&&<tr><td className="px-3 py-1.5 text-gray-500">Left Bleed</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{background:"#fff7ed",color:"#c2410c"}}>Trim</span></td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">{trim}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{background:"#fed7aa",border:"1px solid #c2410c"}}/></td></tr>}
+                      {Array.from({length:acUps},(_,i)=>(
+                        <tr key={i}>
+                          <td className="px-3 py-1.5 text-gray-500">{i+1} UPS{isSleeve&&<span className="ml-1 text-[10px] text-gray-400">(LF×2+T+S)</span>}</td>
+                          <td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{background:"#e0e7ff",color:"#4338ca"}}>{isSleeve?"Sleeve Lane (LF×2+T+S)":diagLaneW!==jobW?"Pouch Lane (W+seals/gusset)":"Job Width"}</span></td>
+                          <td className="px-3 py-1.5 font-mono font-bold text-indigo-600">{isSleeve?sleeveFilmWidth:diagLaneW}</td>
+                          <td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{background:"#e0e7ff",border:"1px solid #6366f1"}}/></td>
+                        </tr>
+                      ))}
+                      {trim>0&&<tr><td className="px-3 py-1.5 text-gray-500">Right Bleed</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{background:"#fff7ed",color:"#c2410c"}}>Trim</span></td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">{trim}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{background:"#fed7aa",border:"1px solid #c2410c"}}/></td></tr>}
+                      {plan.deadMargin>0&&<tr><td className="px-3 py-1.5 text-gray-400 italic">Dead Margin</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-500">Waste</span></td><td className="px-3 py-1.5 font-mono text-gray-400">{plan.deadMargin}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded bg-gray-200 border border-gray-400"/></td></tr>}
+                      <tr className="bg-indigo-50 font-bold border-t-2 border-indigo-200"><td className="px-3 py-2 text-indigo-800" colSpan={2}>Total Film Width</td><td className="px-3 py-2 font-mono text-indigo-700">{filmW} mm</td><td/></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Repeat Height breakdown */}
+              <div>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Repeat UPS Breakdown — Repeat Length Direction</p>
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-gray-100">
+                      <tr>{["Component","Value","Note"].map(h=><th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 bg-white">
+                      <tr><td className="px-3 py-1.5 text-gray-600">Repeat Height</td><td className="px-3 py-1.5 font-mono font-bold text-indigo-700">{jobH} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">As entered</td></tr>
+                      {topSeal>0&&<tr><td className="px-3 py-1.5 text-gray-600">+ Top Seal</td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{topSeal} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">Top seal added to repeat</td></tr>}
+                      {btmSeal>0&&(content==="Pouch — 3 Side Seal"||content==="Pouch — Center Seal"||content==="Both Side Gusset Pouch")&&<tr><td className="px-3 py-1.5 text-gray-600">+ Bottom Seal</td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{btmSeal} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">Bottom seal added to repeat</td></tr>}
+                      {gusset>0&&(content==="Standup Pouch"||content==="Zipper Pouch"||content==="3D Pouch / Flat Bottom")&&<tr><td className="px-3 py-1.5 text-gray-600">+ Bottom Gusset / 2</td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{gusset/2} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">Bottom gusset folds into repeat</td></tr>}
+                      {shrink>0&&<tr><td className="px-3 py-1.5 text-gray-600">+ Shrinkage</td><td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">+{shrink} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">Applied to repeat length only</td></tr>}
+                      <tr className="bg-teal-50"><td className="px-3 py-1.5 font-bold text-teal-800">= Effective Repeat</td><td className="px-3 py-1.5 font-mono font-bold text-teal-700">{effRepeat} mm</td><td className="px-3 py-1.5 text-teal-600 text-[10px]">Used for cylinder circumference matching</td></tr>
+                      <tr><td className="px-3 py-1.5 text-gray-600">Cylinder Circumference</td><td className="px-3 py-1.5 font-mono font-bold text-emerald-700">{cylCirc} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">{plan.cylinderCode} — {plan.cylinderName}</td></tr>
+                      <tr className="bg-green-50 border-t-2 border-green-200"><td className="px-3 py-2 font-bold text-green-800">÷ Repeat UPS</td><td className="px-3 py-2 font-mono font-bold text-green-700 text-sm">{repeatUPS}×</td><td className="px-3 py-2 text-green-600 text-[10px]">{cylCirc} ÷ {effRepeat} = {repeatUPS} repeats per revolution</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button onClick={() => setWoUpsPreview(null)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl border border-gray-200 transition">Close</button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
+
       {/* ══ VIEW PLAN MODAL ═══════════════════════════════════════ */}
       {viewPlanWO && (
         <Modal open={!!viewPlanWO} onClose={() => setViewPlanWO(null)}
@@ -2242,6 +3403,84 @@ export default function GravureWorkOrderPage() {
           <div className="flex justify-between mt-4">
             <Button variant="secondary" onClick={() => setViewPlanWO(null)}>Close</Button>
             <Button icon={<BookMarked size={14} />} onClick={() => { setViewPlanWO(null); openSaveToCatalog(viewPlanWO); }}>Save to Catalog</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ NEW CYLINDER MASTER MODAL ════════════════════════════ */}
+      {newCylModal && (
+        <Modal open onClose={() => setNewCylModal(null)} title="Create New Cylinder Master" size="sm">
+          <div className="space-y-3">
+            <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2 text-xs text-indigo-700">
+              Creating a replacement cylinder for <strong>{newCylModal.fromTool.code}</strong>. Specs are pre-filled — update code and name, then save.
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Cylinder Code *</label>
+                <input className="mt-1 w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-indigo-400"
+                  value={newCylForm.code} onChange={e => setNewCylForm(p => ({ ...p, code: e.target.value }))} placeholder="e.g. CYL-P001-R" />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Cylinder Name *</label>
+                <input className="mt-1 w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-indigo-400"
+                  value={newCylForm.name} onChange={e => setNewCylForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Parle – Reprint – 8C" />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Print Width (mm)</label>
+                <input type="number" className="mt-1 w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+                  value={newCylForm.printWidth} onChange={e => setNewCylForm(p => ({ ...p, printWidth: e.target.value }))} />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Repeat Length (mm)</label>
+                <input type="number" className="mt-1 w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+                  value={newCylForm.repeatLength} onChange={e => setNewCylForm(p => ({ ...p, repeatLength: e.target.value }))} />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Shelf Life (meters)</label>
+                <input type="number" className="mt-1 w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+                  value={newCylForm.shelfLifeMeters} onChange={e => setNewCylForm(p => ({ ...p, shelfLifeMeters: e.target.value }))} />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Material</label>
+                <select className="mt-1 w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white outline-none focus:ring-2 focus:ring-indigo-400"
+                  value={newCylForm.cylinderMaterial} onChange={e => setNewCylForm(p => ({ ...p, cylinderMaterial: e.target.value }))}>
+                  <option>Steel</option><option>Aluminium</option><option>Copper</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setNewCylModal(null)}>Cancel</Button>
+              <Button onClick={() => {
+                if (!newCylForm.code.trim() || !newCylForm.name.trim()) { alert("Code and Name are required"); return; }
+                const newId = `EXTRA-CYL-${Date.now()}`;
+                const newTool = {
+                  ...newCylModal.fromTool,
+                  id: newId,
+                  code: newCylForm.code.trim(),
+                  name: newCylForm.name.trim(),
+                  printWidth: newCylForm.printWidth,
+                  repeatLength: newCylForm.repeatLength,
+                  shelfLifeMeters: parseInt(newCylForm.shelfLifeMeters) || 25000,
+                  usedMeters: 0,
+                  cylinderMaterial: newCylForm.cylinderMaterial,
+                  surfaceFinish: newCylForm.surfaceFinish,
+                  chromeStatus: "Plated" as const,
+                  status: "Active" as const,
+                };
+                setExtraCyls(p => [...p, newTool]);
+                const rowIdx = newCylModal.rowIdx;
+                setCylinderAllocs(p => p.map((c, ci) => ci === rowIdx ? {
+                  ...c,
+                  toolId: newId,
+                  cylinderNo: newCylForm.code.trim(),
+                  cylinderType: "New" as const,
+                  status: "Pending" as const,
+                  remarks: `New cylinder created — replaces ${newCylModal.fromTool.code}`,
+                  circumference: selectedPlan ? String(selectedPlan.cylCirc) : c.circumference,
+                } as any : c));
+                setNewCylModal(null);
+              }}>Save & Allocate</Button>
+            </div>
           </div>
         </Modal>
       )}

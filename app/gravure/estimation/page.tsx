@@ -3,14 +3,15 @@ import { useState, useMemo } from "react";
 import {
   ChevronRight, ChevronLeft, Plus, X, Save, FileText, Settings,
   Trash2, Edit, Search, Eye, Filter, Download, MoreHorizontal, Check,
-  Calculator, Pencil, ArrowRight, RefreshCw, Wrench
+  Calculator, Pencil, ArrowRight, RefreshCw, Wrench, Archive, Palette,
+  Eye as EyeIcon,
 } from "lucide-react";
 import {
   gravureEstimations as initData, customers, items, machines, processMasters,
   GravureEstimation, GravureEstimationMaterial, GravureEstimationProcess,
   SecondaryLayer, DryWeightRow, PlyConsumableItem,
   CATEGORY_GROUP_SUBGROUP,
-  tools as allTools, toolInventory,
+  tools as allTools, toolInventory, grnRecords,
 } from "@/data/dummyData";
 import { useCategories }     from "@/context/CategoriesContext";
 import { useEnquiries }      from "@/context/EnquiryContext";
@@ -44,6 +45,9 @@ const SLEEVE_TOOLS = allTools
   .sort((a, b) => parseFloat(a.printWidth) - parseFloat(b.printWidth));
 const CYLINDER_TOOLS = allTools
   .filter(t => t.toolType === "Cylinder" && AVAILABLE_TOOL_IDS.has(t.id))
+  .sort((a, b) => parseFloat(a.printWidth) - parseFloat(b.printWidth));
+const CYLINDER_TOOLS_ALL = allTools
+  .filter(t => t.toolType === "Cylinder")
   .sort((a, b) => parseFloat(a.printWidth) - parseFloat(b.printWidth));
 
 // ─── Blank form ───────────────────────────────────────────────
@@ -293,6 +297,26 @@ export default function GravureEstimationPage() {
   };
   const [cylAllocs, setCylAllocs] = useState<EstCylAlloc[]>([]);
 
+  // ── New states for features from product-catalog ────────────
+  type EstColorShade = {
+    colorNo: number; colorName: string; inkType: "Spot" | "Process" | "Special";
+    pantoneRef: string; labL: string; labA: string; labB: string;
+    shadeCardRef: string; status: "Pending" | "Standard Received" | "Approved" | "Rejected";
+    remarks: string; inkItemId?: string; inkGsm?: number;
+  };
+  type EstAttachment = { id: string; name: string; size: number; mimeType: string; url: string; label?: string };
+  const [colorShades, setColorShades] = useState<EstColorShade[]>([]);
+  const [attachments, setAttachments] = useState<EstAttachment[]>([]);
+  const [editingAttachLabel, setEditingAttachLabel] = useState<string | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<{ name: string; url: string; mimeType: string } | null>(null);
+  const [prepTab, setPrepTab] = useState<"shade" | "cylinder">("shade");
+  const [filmLotPickerOpen, setFilmLotPickerOpen] = useState<number | null>(null); // ply index
+  const [ciLotPickerOpen, setCiLotPickerOpen] = useState<{ plyIdx: number; ciIdx: number } | null>(null);
+  const [planColFilters, setPlanColFilters] = useState<Record<string, Set<string>>>({});
+  const [planFilterOpen, setPlanFilterOpen] = useState<string | null>(null);
+  const [planFilterSearch, setPlanFilterSearch] = useState<Record<string, string>>({});
+  const [planFilterDraft, setPlanFilterDraft] = useState<Record<string, Set<string>>>({});
+
   // Tab navigation states
   const [activeTab, setActiveTab] = useState<number>(1);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
@@ -350,10 +374,59 @@ export default function GravureEstimationPage() {
       const machineMinFilm = parseFloat((machine as any).minWebWidth) || 0;
       const machineMinCirc = parseFloat((machine as any).repeatLengthMin) || 0;
       const machineMaxCirc = parseFloat((machine as any).repeatLengthMax) || 9999;
-      const laneWidth   = form.actualWidth;
       const trim        = form.trimmingSize || 0;
       const shrink      = form.widthShrinkage || 0;
-      const effectiveRepeat = (form.jobHeight || 0) + shrink;
+      const sType       = (form as any).structureType || "Label";
+      const estContent  = (form as any).content || "";
+      const estGusset   = (form as any).gusset      || 0;
+      const estTopSeal  = (form as any).topSeal     || 0;
+      const estBtmSeal  = (form as any).bottomSeal  || 0;
+      const estSideSeal = (form as any).sideSeal    || 0;
+      const estCtrSeal  = (form as any).centerSealWidth || 0;
+      const estSideGus  = (form as any).sideGusset  || 0;
+      const baseW       = form.actualWidth || form.jobWidth || 0;
+
+      // Sleeve-specific
+      const sleeveTransp    = sType === "Sleeve" ? ((form as any).transparentArea || 0) : 0;
+      const sleeveSeam      = sType === "Sleeve" ? ((form as any).seamingArea   || 0) : 0;
+      const designCirc      = baseW * 2 + sleeveSeam + sleeveTransp; // width direction only
+      const sleeveCutLength = sType === "Sleeve" ? (form.jobHeight || 0) + shrink : 0;
+
+      // ── Lane width (film width per UPS lane) ──
+      //    Sleeve           → layflat×2 + transparentArea + seamingArea
+      //    3-Side / Standup / Zipper → W + 2×sideSeal
+      //    Center Seal      → W×2 + centerSealWidth
+      //    Both Gusset / 3D → W + 2×sideGusset
+      //    Label / other    → actualWidth as-is
+      let laneWidth: number;
+      if (sType === "Sleeve") {
+        laneWidth = baseW * 2 + sleeveTransp + sleeveSeam;
+      } else if (estContent === "Pouch — 3 Side Seal" || estContent === "Standup Pouch" || estContent === "Zipper Pouch") {
+        laneWidth = baseW + 2 * estSideSeal;
+      } else if (estContent === "Pouch — Center Seal") {
+        laneWidth = baseW * 2 + estCtrSeal;
+      } else if (estContent === "Both Side Gusset Pouch" || estContent === "3D Pouch / Flat Bottom") {
+        laneWidth = baseW + 2 * estSideGus;
+      } else {
+        laneWidth = baseW;
+      }
+      if (laneWidth <= 0) laneWidth = baseW > 0 ? baseW : 1;
+
+      // ── Effective repeat (cylinder circumference per repeat) ──
+      //    Sleeve → sleeveCutLength (= jobHeight + shrink)
+      //    Pouches → per-type seal/gusset formula
+      //    Label  → jobHeight + shrink
+      let effectiveRepeat: number;
+      if (sType === "Sleeve") {
+        effectiveRepeat = sleeveCutLength;
+      } else if (estContent === "Pouch — 3 Side Seal" || estContent === "Pouch — Center Seal" || estContent === "Both Side Gusset Pouch") {
+        effectiveRepeat = (form.jobHeight || 0) + estTopSeal + estBtmSeal + shrink;
+      } else if (estContent === "Standup Pouch" || estContent === "Zipper Pouch" || estContent === "3D Pouch / Flat Bottom") {
+        effectiveRepeat = (form.jobHeight || 0) + estTopSeal + (estGusset > 0 ? estGusset / 2 : 0) + shrink;
+      } else {
+        effectiveRepeat = (form.jobHeight || 0) + shrink;
+      }
+
       const costPerHour = parseFloat((machine as any).costPerHour) || 1350;
       const speed       = parseFloat((machine as any).speedMax) || 150;
 
@@ -363,6 +436,11 @@ export default function GravureEstimationPage() {
       };
       const isValidCircumference = (cylCirc: number) => {
         if (cylCirc < machineMinCirc || cylCirc > machineMaxCirc) return false;
+        if (sType === "Sleeve") {
+          if (sleeveCutLength <= 0) return false;
+          const rem = cylCirc % sleeveCutLength;
+          return rem < 1 || (sleeveCutLength - rem) < 1; // ±1mm for sleeve
+        }
         if (effectiveRepeat <= 0) return true;
         const rem = cylCirc % effectiveRepeat;
         return rem < 0.5 || (effectiveRepeat - rem) < 0.5;
@@ -494,7 +572,69 @@ export default function GravureEstimationPage() {
         }).flat();
       });
 
-      return [...loopA, ...loopB];
+      // ── LOOP S: Sleeve products — direct cylinder planning (no print sleeve needed) ──
+      //    Gravure sleeve printed flat. Cylinder circ = sleeveCutLength × N (length direction).
+      //    cuttingLength = jobHeight + lengthShrinkage
+      const loopS = sType === "Sleeve" ? (() => {
+        if (sleeveCutLength <= 0) return [];
+        const maxAcUps = Math.floor((machineMaxFilm - 2 * trim) / laneWidth);
+        if (maxAcUps === 0) return [];
+        const maxRepeatCount = Math.floor(machineMaxCirc / sleeveCutLength);
+        if (maxRepeatCount === 0) return [];
+        const plans: any[] = [];
+        for (let repeatCount = 1; repeatCount <= maxRepeatCount; repeatCount++) {
+          const cylinderCirc = sleeveCutLength * repeatCount;
+          if (cylinderCirc < machineMinCirc) continue;
+          if (cylinderCirc > machineMaxCirc) break;
+          // Real cylinders matching this circumference (±1mm)
+          const realCyls = CYLINDER_TOOLS_ALL.filter(t => {
+            const circ = parseFloat(t.repeatLength || "0") || 0;
+            return Math.abs(circ - cylinderCirc) < 1;
+          }).map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, repeatLength: c.repeatLength || String(cylinderCirc), isSpecial: false }));
+          const specialCyl = { id: `SPECIAL-CYL-SLEEVE-R${repeatCount}`, code: "SPL", name: `Special Order (${cylinderCirc}mm = ${sleeveCutLength}×${repeatCount})`, printWidth: "1500", repeatLength: String(cylinderCirc), isSpecial: true };
+          const cylList = realCyls.length > 0 ? realCyls : [specialCyl];
+          for (let acUps = 1; acUps <= maxAcUps; acUps++) {
+            const printingWidth = acUps * laneWidth;
+            const filmWidth = printingWidth + 2 * trim;
+            if (filmWidth > machineMaxFilm) break;
+            if (filmWidth < machineMinFilm) continue;
+            const deadMargin = parseFloat((machineMaxFilm - filmWidth).toFixed(1));
+            for (const cyl of cylList) {
+              const totalUPS  = acUps * repeatCount;
+              const reqRMT    = form.quantity > 0 ? Math.ceil(form.quantity / totalUPS) : 1;
+              const totalRMT  = Math.ceil(reqRMT * 1.01);
+              const totalWt   = parseFloat((totalRMT * (laneWidth / 1000) * totalPlyGSM / 1000).toFixed(3));
+              const totalTime = parseFloat((totalRMT / (speed * 60)).toFixed(2));
+              const planCost  = parseFloat((totalTime * costPerHour).toFixed(2));
+              const cylAreaSqMm   = parseFloat(cyl.printWidth) * cylinderCirc;
+              const cylAreaSqInch = parseFloat((cylAreaSqMm / 645.16).toFixed(2));
+              const rate          = form.cylinderRatePerSqInch ?? 0;
+              const cylCostByArea = parseFloat((cylAreaSqInch * rate * form.noOfColors).toFixed(2));
+              const cylCost       = rate > 0 ? cylCostByArea : form.noOfColors * form.cylinderCostPerColor;
+              const grandTotal    = parseFloat((planCost + costs.processCost + cylCost).toFixed(2));
+              const unitPrice     = form.quantity > 0 ? parseFloat((grandTotal / form.quantity).toFixed(4)) : 0;
+              plans.push({
+                planId: `SLEEVE-${machine.id}-R${repeatCount}-${acUps}UPS-${cyl.id}`,
+                machineId: machine.id, machineName: machine.name,
+                filmSize: filmWidth, acUps, printingWidth,
+                sleeveId: "SPECIAL-SLV", sleeveName: "No Print Sleeve Required", sleeveCode: "—", sleeveWidthVal: filmWidth,
+                cylinderId: cyl.id, cylinderName: cyl.name, cylinderCode: cyl.code,
+                cylinderWidthVal: parseFloat(cyl.printWidth) || 0, cylRepeatLength: cylinderCirc,
+                cylAreaSqMm, cylAreaSqInch, cylCostByArea,
+                usedWidth: printingWidth, sideWaste: 0, deadMargin, totalWaste: deadMargin,
+                cylCirc: cylinderCirc, repeatUPS: repeatCount, totalUPS,
+                reqRMT, totalRMT, totalWt, totalTime, planCost, grandTotal, unitPrice,
+                isSpecial: cyl.isSpecial, isSpecialSleeve: false, isDoctorBlade: false, isBest: false,
+                designCirc, sleeveCutLength, repeatCount,
+              });
+            }
+          }
+        }
+        return plans;
+      })() : [];
+
+      // Route: Sleeve → loopS only. Label / Pouch → loopA + loopB.
+      return sType === "Sleeve" ? loopS : [...loopA, ...loopB];
     });
 
     if (rawPlans.length === 0) return rawPlans;
@@ -505,7 +645,7 @@ export default function GravureEstimationPage() {
       b.acUps       !== a.acUps       ? b.acUps        - a.acUps       : 0
     );
     return sorted.map((p, idx) => ({ ...p, isBest: !p.isSpecial && idx === 0 }));
-  }, [form.machineId, form.jobHeight, form.actualWidth, form.trimmingSize, form.widthShrinkage, form.quantity, form.noOfColors, form.cylinderCostPerColor, form.cylinderRatePerSqInch, totalPlyGSM, costs.processCost]);
+  }, [form.machineId, form.jobHeight, form.actualWidth, form.trimmingSize, form.widthShrinkage, form.quantity, form.noOfColors, form.cylinderCostPerColor, form.cylinderRatePerSqInch, totalPlyGSM, costs.processCost, (form as any).structureType, (form as any).content, (form as any).gusset, (form as any).topSeal, (form as any).bottomSeal, (form as any).sideSeal, (form as any).centerSealWidth, (form as any).sideGusset, (form as any).seamingArea, (form as any).transparentArea]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedPlan = useMemo(() => allPlans.find(p => p.planId === selectedPlanId), [allPlans, selectedPlanId]);
 
@@ -523,6 +663,12 @@ export default function GravureEstimationPage() {
         String(p.cylinderWidthVal).includes(q)
       );
     }
+    // Apply column filters (Excel-style)
+    Object.entries(planColFilters).forEach(([key, vals]) => {
+      if (vals.size > 0) {
+        rows = rows.filter(r => vals.has(String((r as any)[key] ?? "")));
+      }
+    });
     if (planSort.key) {
       rows = [...rows].sort((a, b) => {
         const av = (a as Record<string, unknown>)[planSort.key] as number;
@@ -531,12 +677,88 @@ export default function GravureEstimationPage() {
       });
     }
     return rows;
-  }, [allPlans, planSearch, planSort]);
+  }, [allPlans, planSearch, planSort, planColFilters]);
 
   const togglePlanSort = (key: string) =>
     setPlanSort(s => s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" });
 
   const f = (k: keyof typeof blank, v: unknown) => setForm(p => ({ ...p, [k]: v }));
+
+  // ── Derive structureType from content string (same as product-catalog) ──
+  const getStructureType = (content: string): "Label" | "Sleeve" | "Pouch" => {
+    if (!content) return "Label";
+    const c = content.toLowerCase();
+    if (c.includes("sleeve")) return "Sleeve";
+    if (c.includes("pouch") || c.includes("standup") || c.includes("zipper") || c.includes("3d") || c.includes("flat bottom") || c.includes("gusset") || c.includes("center seal") || c.includes("side seal")) return "Pouch";
+    return "Label";
+  };
+
+  // ── Attachment helpers ──────────────────────────────────────
+  const addAttachments = (files: FileList | null) => {
+    if (!files) return;
+    const newItems: EstAttachment[] = Array.from(files).map((file, i) => ({
+      id: Math.random().toString(36).slice(2),
+      name: file.name, size: file.size, mimeType: file.type,
+      url: URL.createObjectURL(file),
+      label: attachments.length === 0 && i === 0 ? "Master File" : undefined,
+    }));
+    setAttachments(p => [...p, ...newItems]);
+  };
+  const removeAttachment = (id: string) => {
+    setAttachments(p => { const item = p.find(x => x.id === id); if (item) URL.revokeObjectURL(item.url); return p.filter(x => x.id !== id); });
+  };
+
+  // ── Init color shades from noOfColors ──────────────────────
+  const initEstPrepData = () => {
+    const n = form.noOfColors || 0;
+    if (n > 0) {
+      setColorShades(Array.from({ length: n }, (_, i) => ({
+        colorNo: i + 1,
+        colorName: `Color ${i + 1}`,
+        inkType: "Spot" as const,
+        pantoneRef: "",
+        labL: "", labA: "", labB: "",
+        shadeCardRef: "",
+        status: "Pending" as const,
+        remarks: "",
+        inkItemId: "",
+      })));
+    }
+  };
+
+  // ── Plan column filter helpers ──────────────────────────────
+  const openPlanFilter = (key: string) => {
+    setPlanFilterDraft(d => ({ ...d, [key]: new Set(planColFilters[key] ?? []) }));
+    setPlanFilterSearch(s => ({ ...s, [key]: "" }));
+    setPlanFilterOpen(key);
+  };
+  const applyPlanFilter = (key: string) => {
+    const draft = planFilterDraft[key];
+    if (!draft || draft.size === 0) {
+      setPlanColFilters(p => { const n = { ...p }; delete n[key]; return n; });
+    } else {
+      setPlanColFilters(p => ({ ...p, [key]: draft }));
+    }
+    setPlanFilterOpen(null);
+  };
+  const clearPlanFilter = (key: string) => {
+    setPlanColFilters(p => { const n = { ...p }; delete n[key]; return n; });
+    setPlanFilterOpen(null);
+  };
+  const togglePlanFilterVal = (key: string, val: string) => {
+    setPlanFilterDraft(d => {
+      const s = new Set(d[key] ?? []);
+      s.has(val) ? s.delete(val) : s.add(val);
+      return { ...d, [key]: s };
+    });
+  };
+  const togglePlanFilterAll = (key: string, allVals: string[]) => {
+    setPlanFilterDraft(d => {
+      const s = d[key] ?? new Set<string>();
+      const newS = s.size === allVals.length ? new Set<string>() : new Set(allVals);
+      return { ...d, [key]: newS };
+    });
+  };
 
   const openAdd = () => {
     setEditing(null);
@@ -544,6 +766,11 @@ export default function GravureEstimationPage() {
     setActiveTab(1); setExtraQtys([]); setActiveQtyIdx(0);
     setLoadedFromCatalog("");
     setCylAllocs([]);
+    setColorShades([]);
+    setAttachments([]);
+    setPrepTab("shade");
+    setPlanColFilters({});
+    setPlanFilterOpen(null);
     setSelectedPlanId(null); setIsPlanApplied(false);
     setPreviewCode(generateCode(UNIT_CODE.Gravure, MODULE_CODE.Estimation, data.map(d => d.estimationNo)));
     setModal(true);
@@ -555,6 +782,11 @@ export default function GravureEstimationPage() {
     setActiveTab(1); setExtraQtys([]); setActiveQtyIdx(0);
     setLoadedFromCatalog("");
     setCylAllocs([]);
+    setColorShades([]);
+    setAttachments([]);
+    setPrepTab("shade");
+    setPlanColFilters({});
+    setPlanFilterOpen(null);
     setSelectedPlanId(null); setIsPlanApplied(false);
     setModal(true);
   };
@@ -571,6 +803,7 @@ export default function GravureEstimationPage() {
       categoryId:   cat.categoryId,
       categoryName: cat.categoryName,
       content:      cat.content,
+      structureType: (cat as any).structureType || getStructureType(cat.content),
       // Dimensions
       jobWidth:     cat.jobWidth,
       jobHeight:    cat.jobHeight,
@@ -597,6 +830,21 @@ export default function GravureEstimationPage() {
         layerNo: i + 1,
       })),
       processes: (cat.processes || []).map(pr => ({ ...pr })),
+      // Substrate, unit, remarks from catalog
+      substrateName: cat.substrate || "",
+      unit:          cat.standardUnit || "Meter",
+      remarks:       cat.remarks     || "",
+      perMeterRate:  cat.perMeterRate || 0,
+      sellingPrice:  cat.perMeterRate || 0,
+      // ── Pouch seal/gusset fields from catalog ──
+      topSeal:         (cat as any).topSeal         ?? undefined,
+      bottomSeal:      (cat as any).bottomSeal      ?? undefined,
+      sideSeal:        (cat as any).sideSeal        ?? undefined,
+      centerSealWidth: (cat as any).centerSealWidth ?? undefined,
+      sideGusset:      (cat as any).sideGusset      ?? undefined,
+      gusset:          (cat as any).gusset          ?? undefined,
+      seamingArea:     (cat as any).seamingArea     ?? undefined,
+      transparentArea: (cat as any).transparentArea ?? undefined,
       // ── Product Identity fields from catalog ──
       packSize:      (cat as any).packSize      ?? undefined,
       brandName:     (cat as any).brandName     ?? undefined,
@@ -606,9 +854,12 @@ export default function GravureEstimationPage() {
       addressType:   (cat as any).addressType   ?? undefined,
       artworkName:   (cat as any).artworkName   ?? undefined,
       specialSpecs:  (cat as any).specialSpecs  ?? undefined,
-      finalRollOD:   (cat as any).finalRollOD   ?? undefined,
-      rollUnit:      (cat as any).rollUnit      ?? undefined,
+      finalRollOD:     (cat as any).finalRollOD     ?? undefined,
+      rollUnit:        (cat as any).rollUnit        ?? undefined,
       unwindDirection: (cat as any).unwindDirection ?? undefined,
+      salesPerson:     (cat as any).salesPerson     ?? "",
+      salesType:       (cat as any).salesType       ?? "Local",
+      concernPerson:   (cat as any).concernPerson   ?? "",
     }));
     // Populate dimension inputs so the dimension box shows with values
     const cfg = CONTENT_TYPE_CONFIG[cat.content];
@@ -618,7 +869,14 @@ export default function GravureEstimationPage() {
       else dims.width = cat.jobWidth;
       if (cfg.fields.includes("cutHeight")) dims.cutHeight = cat.jobHeight;
       else dims.height = cat.jobHeight;
-      if (cfg.fields.includes("gusset")) dims.gusset = (cat as any).gusset || 0;
+      if (cfg.fields.includes("gusset"))          dims.gusset          = (cat as any).gusset          || 0;
+      if (cfg.fields.includes("topSeal"))          dims.topSeal         = (cat as any).topSeal         || 0;
+      if (cfg.fields.includes("bottomSeal"))       dims.bottomSeal      = (cat as any).bottomSeal      || 0;
+      if (cfg.fields.includes("sideSeal"))         dims.sideSeal        = (cat as any).sideSeal        || 0;
+      if (cfg.fields.includes("centerSealWidth"))  dims.centerSealWidth = (cat as any).centerSealWidth || 0;
+      if (cfg.fields.includes("sideGusset"))       dims.sideGusset      = (cat as any).sideGusset      || 0;
+      if (cfg.fields.includes("seamingArea"))      dims.seamingArea     = (cat as any).seamingArea     || 0;
+      if (cfg.fields.includes("transparentArea"))  dims.transparentArea = (cat as any).transparentArea || 0;
       dims.trimming = cat.trimmingSize || 0;
       dims.widthShrinkage = (cat as any).widthShrinkage || 0;
       setDimValues(dims);
@@ -965,13 +1223,16 @@ export default function GravureEstimationPage() {
       </div>
 
       {/* ══ ADD / EDIT MODAL ══════════════════════════════════════ */}
-      <Modal open={modalOpen} onClose={() => setModal(false)} title={editing ? "Edit Estimation" : "New Gravure Estimation"} size="xl">
-        <div className="flex bg-gray-100 p-1.5 rounded-xl mb-4 sm:mb-6 shadow-inner gap-1 overflow-x-auto">
-           <button onClick={() => setActiveTab(1)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all whitespace-nowrap flex-shrink-0 ${activeTab === 1 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}><span className="hidden sm:inline">1. Basic Info</span><span className="sm:hidden">① Info</span></button>
-           <button onClick={() => setActiveTab(2)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all whitespace-nowrap flex-shrink-0 ${activeTab === 2 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}><span className="hidden sm:inline">2. View Plan (Production)</span><span className="sm:hidden">② Plan</span></button>
-           <button onClick={() => setActiveTab(3)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all whitespace-nowrap flex-shrink-0 ${activeTab === 3 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}><span className="hidden sm:inline">3. Cost Estimation</span><span className="sm:hidden">③ Cost</span></button>
-        </div>
-
+      <Modal open={modalOpen} onClose={() => setModal(false)} title={editing ? "Edit Estimation" : "New Gravure Estimation"} size="xl"
+        subHeader={
+          <div className="flex bg-gray-100 p-1.5 rounded-xl mb-3 shadow-inner gap-1 overflow-x-auto">
+            <button onClick={() => setActiveTab(1)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all whitespace-nowrap flex-shrink-0 ${activeTab === 1 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}><span className="hidden sm:inline">1. Basic Info</span><span className="sm:hidden">① Info</span></button>
+            <button onClick={() => setActiveTab(2)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all whitespace-nowrap flex-shrink-0 ${activeTab === 2 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}><span className="hidden sm:inline">2. View Plan (Production)</span><span className="sm:hidden">② Plan</span></button>
+            <button onClick={() => { setActiveTab(3); if (colorShades.length === 0) initEstPrepData(); }} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all whitespace-nowrap flex-shrink-0 ${activeTab === 3 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}><span className="hidden sm:inline">3. Production Prep</span><span className="sm:hidden">③ Prep</span></button>
+            <button onClick={() => setActiveTab(4)} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all whitespace-nowrap flex-shrink-0 ${activeTab === 4 ? 'bg-white shadow text-purple-700' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}><span className="hidden sm:inline">4. Cost Estimation</span><span className="sm:hidden">④ Cost</span></button>
+          </div>
+        }
+      >
         <div>
           {/* TAB 1: BASIC INFO */}
           {activeTab === 1 && (
@@ -1016,8 +1277,23 @@ export default function GravureEstimationPage() {
                  <FileText size={13} /> {loadedFromCatalog ? "Change Catalog" : "Pick from Catalog"}
                </button>
                {loadedFromCatalog && (
-                 <button onClick={() => setLoadedFromCatalog("")}
-                   className="text-teal-400 hover:text-teal-600 p-1 rounded-lg hover:bg-teal-100 transition">
+                 <button onClick={() => {
+                   setLoadedFromCatalog("");
+                   setForm({ ...blank });
+                   setDimValues({});
+                   setActiveTab(1);
+                   setExtraQtys([]);
+                   setActiveQtyIdx(0);
+                   setCylAllocs([]);
+                   setColorShades([]);
+                   setAttachments([]);
+                   setPrepTab("shade");
+                   setPlanColFilters({});
+                   setPlanFilterOpen(null);
+                   setSelectedPlanId(null);
+                   setIsPlanApplied(false);
+                 }}
+                   className="text-teal-400 hover:text-red-500 p-1 rounded-lg hover:bg-red-50 transition">
                    <X size={14} />
                  </button>
                )}
@@ -1134,7 +1410,7 @@ export default function GravureEstimationPage() {
                  <Select
                    label="Select Product Type *"
                    value={form.content || ""}
-                   onChange={e => f("content", e.target.value)}
+                   onChange={e => { f("content", e.target.value); setForm(p => ({ ...p, content: e.target.value, structureType: getStructureType(e.target.value) } as any)); }}
                    options={[...(!form.categoryId ? [] : [{ value: "", label: "-- Select Product Type --" }]), ...(categories.find(c => c.id === form.categoryId)?.contents || []).map(ctx => ({ value: ctx, label: ctx }))]}
                    disabled={!form.categoryId || !(categories.find(c => c.id === form.categoryId)?.contents?.length)}
                  />
@@ -1314,24 +1590,123 @@ export default function GravureEstimationPage() {
                             dims={dimValues}
                             onChange={patch => {
                               patchDim(patch);
-                              if ("width"       in patch && patch.width       !== undefined) setForm(p => ({ ...p, jobWidth:  patch.width!,       width: patch.width!,       actualWidth:  patch.width! }));
-                              if ("layflatWidth" in patch && patch.layflatWidth !== undefined) setForm(p => ({ ...p, jobWidth:  patch.layflatWidth!, width: patch.layflatWidth!, actualWidth:  patch.layflatWidth! }));
-                              if ("height"      in patch && patch.height      !== undefined) setForm(p => ({ ...p, jobHeight: patch.height!,      actualHeight: patch.height! }));
-                              if ("cutHeight"   in patch && patch.cutHeight   !== undefined) setForm(p => ({ ...p, jobHeight: patch.cutHeight!,   actualHeight: patch.cutHeight! }));
+                              if ("width"           in patch && patch.width           !== undefined) setForm(p => ({ ...p, jobWidth:  patch.width!,       width: patch.width!,       actualWidth:  patch.width! }));
+                              if ("layflatWidth"    in patch && patch.layflatWidth    !== undefined) setForm(p => ({ ...p, jobWidth:  patch.layflatWidth!, width: patch.layflatWidth!, actualWidth:  patch.layflatWidth! }));
+                              if ("height"          in patch && patch.height          !== undefined) setForm(p => ({ ...p, jobHeight: patch.height!,      actualHeight: patch.height! }));
+                              if ("cutHeight"       in patch && patch.cutHeight       !== undefined) setForm(p => ({ ...p, jobHeight: patch.cutHeight!,   actualHeight: patch.cutHeight! }));
+                              if ("gusset"          in patch && patch.gusset          !== undefined) setForm(p => ({ ...p, gusset:          patch.gusset }          as any));
+                              if ("seamingArea"     in patch && patch.seamingArea     !== undefined) setForm(p => ({ ...p, seamingArea:     patch.seamingArea }     as any));
+                              if ("transparentArea" in patch && patch.transparentArea !== undefined) setForm(p => ({ ...p, transparentArea: patch.transparentArea } as any));
+                              if ("topSeal"         in patch && patch.topSeal         !== undefined) setForm(p => ({ ...p, topSeal:         patch.topSeal }         as any));
+                              if ("bottomSeal"      in patch && patch.bottomSeal      !== undefined) setForm(p => ({ ...p, bottomSeal:      patch.bottomSeal }      as any));
+                              if ("sideSeal"        in patch && patch.sideSeal        !== undefined) setForm(p => ({ ...p, sideSeal:        patch.sideSeal }        as any));
+                              if ("centerSealWidth" in patch && patch.centerSealWidth !== undefined) setForm(p => ({ ...p, centerSealWidth: patch.centerSealWidth } as any));
+                              if ("sideGusset"      in patch && patch.sideGusset      !== undefined) setForm(p => ({ ...p, sideGusset:      patch.sideGusset }      as any));
                             }}
                           />
                         </div>
                         <div>
-                          <label className="text-[10px] font-semibold text-rose-500 uppercase block mb-1">
-                            Repeat Length Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— optional</span>
-                          </label>
-                          <input
-                            type="number" min={0} max={1.5} step={0.1} placeholder="e.g. 1"
-                            value={(form as any).widthShrinkage || ""}
-                            onChange={e => { const v = Math.min(1.5, Math.max(0, Number(e.target.value) || 0)); patchDim({ widthShrinkage: v }); f("widthShrinkage" as any, v || undefined); }}
-                            className="w-full text-sm border border-rose-200 rounded-xl px-3 py-2 bg-rose-50 focus:bg-white outline-none focus:ring-2 focus:ring-rose-400 font-mono"
-                          />
+                          {(() => {
+                            const st = (form as any).structureType || "";
+                            const isSl = st === "Sleeve";
+                            return (
+                              <>
+                                <label className="text-[10px] font-semibold text-rose-500 uppercase block mb-1">
+                                  {isSl
+                                    ? <>Length Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— applied to cutting length per sleeve</span></>
+                                    : <>Repeat Length Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— optional</span></>}
+                                </label>
+                                <input
+                                  type="number" min={0} max={isSl ? 10 : 1.5} step={0.1}
+                                  placeholder={isSl ? "e.g. 3" : "e.g. 1"}
+                                  value={(form as any).widthShrinkage || ""}
+                                  onChange={e => { const v = Math.min(isSl ? 10 : 1.5, Math.max(0, Number(e.target.value) || 0)); patchDim({ widthShrinkage: v }); f("widthShrinkage" as any, v || undefined); }}
+                                  className="w-full text-sm border border-rose-200 rounded-xl px-3 py-2 bg-rose-50 focus:bg-white outline-none focus:ring-2 focus:ring-rose-400 font-mono"
+                                />
+                              </>
+                            );
+                          })()}
                         </div>
+                        {/* Sleeve planning info badge */}
+                        {((form as any).structureType || "") === "Sleeve" && (form.actualWidth || 0) > 0 && (
+                          <div className="col-span-full flex flex-wrap items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-[10px]">
+                            <div className="flex items-center gap-1.5 text-blue-700 font-bold uppercase tracking-wide">
+                              Sleeve Planning
+                            </div>
+                            <div className="px-3 py-1.5 bg-white border border-blue-200 rounded-lg font-bold text-blue-700">
+                              Layflat = {form.actualWidth} mm
+                            </div>
+                            {(() => {
+                              const lf = form.actualWidth || 0;
+                              const sh = (form as any).widthShrinkage || 0;
+                              const sa = (form as any).seamingArea     || 0;
+                              const ta = (form as any).transparentArea || 0;
+                              const dc = lf * 2 + sa + ta;
+                              const parts: string[] = [`${lf}×2`];
+                              if (ta > 0) parts.push(`+${ta}`);
+                              if (sa > 0) parts.push(`+${sa}`);
+                              return (
+                                <>
+                                  <div className="flex flex-col px-3 py-1.5 bg-blue-600 text-white rounded-lg font-bold text-[10px] leading-tight">
+                                    <span>Design Circ (per sleeve)</span>
+                                    <span className="text-xs font-black">{parts.join("")} = {dc} mm</span>
+                                  </div>
+                                  <div className="px-3 py-1.5 bg-white border border-blue-200 rounded-lg text-blue-600">
+                                    Cutting Length = {form.jobHeight} mm
+                                  </div>
+                                  <div className="flex flex-col px-3 py-1.5 bg-amber-50 border border-amber-300 rounded-lg text-amber-700 font-bold ml-auto text-[10px] leading-tight">
+                                    <span>Cylinder Circ</span>
+                                    <span>{sh > 0 ? `(${form.jobHeight}+${sh})` : `${form.jobHeight}`}mm × N (N=1,2,3…)</span>
+                                    <span className="font-normal text-amber-600">Length shrinkage +{sh}mm per sleeve</span>
+                                  </div>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        )}
+                        {/* Pouch Specs bar — Lane + Repeat */}
+                        {((form as any).structureType || getStructureType(form.content || "")) === "Pouch" && (form.jobWidth || 0) > 0 && (
+                          <div className="col-span-full flex flex-wrap items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-xl text-[10px]">
+                            <div className="flex items-center gap-1.5 text-orange-700 font-bold uppercase tracking-wide">
+                              📦 Pouch Specs
+                            </div>
+                            {(() => {
+                              const estContent   = form.content || "";
+                              const jobW         = form.actualWidth || form.jobWidth || 0;
+                              const jobH         = form.jobHeight || 0;
+                              const topSeal      = (form as any).topSeal      || 0;
+                              const bottomSeal   = (form as any).bottomSeal   || 0;
+                              const sideSeal     = (form as any).sideSeal     || 0;
+                              const ctrSeal      = (form as any).centerSealWidth || 0;
+                              const sideGusset   = (form as any).sideGusset   || 0;
+                              const gusset       = (form as any).gusset       || 0;
+                              const shrink       = form.widthShrinkage || 0;
+                              let lane = jobW, repeat = jobH + shrink;
+                              if (estContent === "Pouch — 3 Side Seal" || estContent === "Standup Pouch" || estContent === "Zipper Pouch") {
+                                lane = jobW + 2 * sideSeal;
+                              } else if (estContent === "Pouch — Center Seal") {
+                                lane = jobW * 2 + ctrSeal;
+                              } else if (estContent === "Both Side Gusset Pouch" || estContent === "3D Pouch / Flat Bottom") {
+                                lane = jobW + 2 * sideGusset;
+                              }
+                              if (estContent === "Pouch — 3 Side Seal" || estContent === "Pouch — Center Seal" || estContent === "Both Side Gusset Pouch") {
+                                repeat = jobH + topSeal + bottomSeal + shrink;
+                              } else if (estContent === "Standup Pouch" || estContent === "Zipper Pouch" || estContent === "3D Pouch / Flat Bottom") {
+                                repeat = jobH + topSeal + (gusset > 0 ? gusset / 2 : 0) + shrink;
+                              }
+                              return (
+                                <div className="ml-auto flex gap-2 flex-wrap">
+                                  <div className="px-3 py-1.5 bg-white border border-orange-200 rounded-lg font-bold text-orange-700">
+                                    Lane = {lane} mm
+                                  </div>
+                                  <div className="px-3 py-1.5 bg-white border border-orange-200 rounded-lg text-orange-600">
+                                    Repeat = {repeat} mm
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
                         {/* Colors inside Dimension Setup */}
                         <div className="border-t border-indigo-100 pt-3">
                           <p className="text-[10px] font-semibold text-purple-500 uppercase tracking-widest mb-2">Colors &amp; Print</p>
@@ -1396,17 +1771,77 @@ export default function GravureEstimationPage() {
 
                         {/* ── Unwind Direction (Pifa 1–8) ── */}
                         <div className="border-t border-indigo-100 pt-3">
-                          <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-widest mb-2">Unwind Direction</p>
-                          <div className="grid grid-cols-4 gap-2">
+                          <div className="flex items-center gap-2 mb-3">
+                            <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-widest">Unwind Direction (Pifa)</p>
+                            <span className="text-[9px] text-gray-400">As per AJSW Printing &amp; Winding Chart</span>
+                          </div>
+                          <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1.5">Printed ACROSS the Roll</p>
+                          <div className="grid grid-cols-4 gap-2 mb-3">
                             {([
-                              { n: 1, label: "Outside · Across\nTop off first", svg: (<svg width="70" height="60" viewBox="0 0 70 60"><rect x="6" y="14" width="38" height="32" rx="2" fill="#dbeafe" stroke="#3b82f6" strokeWidth="1.2"/><text x="25" y="30" textAnchor="middle" dominantBaseline="middle" fontSize="6" fontWeight="700" fill="#1d4ed8">PRINT</text><text x="25" y="38" textAnchor="middle" dominantBaseline="middle" fontSize="5" fill="#3b82f6">READS</text><line x1="6" y1="14" x2="44" y2="14" stroke="#f97316" strokeWidth="1.5" strokeDasharray="3,2"/><polygon points="25,6 21,14 29,14" fill="#f97316"/><ellipse cx="53" cy="30" rx="7" ry="16" fill="#94a3b8" stroke="#475569" strokeWidth="1.2"/><ellipse cx="53" cy="30" rx="3" ry="7" fill="#cbd5e1" stroke="#475569" strokeWidth="0.8"/><line x1="44" y1="14" x2="47" y2="14" stroke="#475569" strokeWidth="1"/><line x1="44" y1="46" x2="47" y2="46" stroke="#475569" strokeWidth="1"/><text x="25" y="55" textAnchor="middle" fontSize="5" fill="#6b7280">OUTSIDE</text></svg>) },
-                              { n: 2, label: "Outside · Across\nBottom off first", svg: (<svg width="70" height="60" viewBox="0 0 70 60"><rect x="6" y="14" width="38" height="32" rx="2" fill="#dbeafe" stroke="#3b82f6" strokeWidth="1.2"/><text x="25" y="30" textAnchor="middle" dominantBaseline="middle" fontSize="6" fontWeight="700" fill="#1d4ed8" transform="rotate(180,25,30)">PRINT</text><text x="25" y="38" textAnchor="middle" dominantBaseline="middle" fontSize="5" fill="#3b82f6" transform="rotate(180,25,38)">READS</text><line x1="6" y1="46" x2="44" y2="46" stroke="#f97316" strokeWidth="1.5" strokeDasharray="3,2"/><polygon points="25,54 21,46 29,46" fill="#f97316"/><ellipse cx="53" cy="30" rx="7" ry="16" fill="#94a3b8" stroke="#475569" strokeWidth="1.2"/><ellipse cx="53" cy="30" rx="3" ry="7" fill="#cbd5e1" stroke="#475569" strokeWidth="0.8"/><line x1="44" y1="14" x2="47" y2="14" stroke="#475569" strokeWidth="1"/><line x1="44" y1="46" x2="47" y2="46" stroke="#475569" strokeWidth="1"/><text x="25" y="8" textAnchor="middle" fontSize="5" fill="#6b7280">OUTSIDE</text></svg>) },
-                              { n: 3, label: "Outside · With Roll\nRight off first", svg: (<svg width="70" height="60" viewBox="0 0 70 60"><rect x="19" y="6" width="32" height="38" rx="2" fill="#dbeafe" stroke="#3b82f6" strokeWidth="1.2"/><text x="35" y="25" textAnchor="middle" dominantBaseline="middle" fontSize="6" fontWeight="700" fill="#1d4ed8" transform="rotate(-90,35,25)">PRINT</text><text x="35" y="33" textAnchor="middle" dominantBaseline="middle" fontSize="5" fill="#3b82f6" transform="rotate(-90,35,33)">READS</text><line x1="51" y1="6" x2="51" y2="44" stroke="#f97316" strokeWidth="1.5" strokeDasharray="3,2"/><polygon points="59,25 51,21 51,29" fill="#f97316"/><ellipse cx="35" cy="51" rx="16" ry="6" fill="#94a3b8" stroke="#475569" strokeWidth="1.2"/><ellipse cx="35" cy="51" rx="7" ry="3" fill="#cbd5e1" stroke="#475569" strokeWidth="0.8"/><line x1="19" y1="44" x2="19" y2="47" stroke="#475569" strokeWidth="1"/><line x1="51" y1="44" x2="51" y2="47" stroke="#475569" strokeWidth="1"/><text x="8" y="25" textAnchor="middle" fontSize="5" fill="#6b7280" transform="rotate(-90,8,25)">OUTSIDE</text></svg>) },
-                              { n: 4, label: "Outside · With Roll\nLeft off first", svg: (<svg width="70" height="60" viewBox="0 0 70 60"><rect x="19" y="6" width="32" height="38" rx="2" fill="#dbeafe" stroke="#3b82f6" strokeWidth="1.2"/><text x="35" y="25" textAnchor="middle" dominantBaseline="middle" fontSize="6" fontWeight="700" fill="#1d4ed8" transform="rotate(90,35,25)">PRINT</text><text x="35" y="33" textAnchor="middle" dominantBaseline="middle" fontSize="5" fill="#3b82f6" transform="rotate(90,35,33)">READS</text><line x1="19" y1="6" x2="19" y2="44" stroke="#f97316" strokeWidth="1.5" strokeDasharray="3,2"/><polygon points="11,25 19,21 19,29" fill="#f97316"/><ellipse cx="35" cy="51" rx="16" ry="6" fill="#94a3b8" stroke="#475569" strokeWidth="1.2"/><ellipse cx="35" cy="51" rx="7" ry="3" fill="#cbd5e1" stroke="#475569" strokeWidth="0.8"/><line x1="19" y1="44" x2="19" y2="47" stroke="#475569" strokeWidth="1"/><line x1="51" y1="44" x2="51" y2="47" stroke="#475569" strokeWidth="1"/><text x="62" y="25" textAnchor="middle" fontSize="5" fill="#6b7280" transform="rotate(90,62,25)">OUTSIDE</text></svg>) },
-                              { n: 5, label: "Inside · Across\nTop off first", svg: (<svg width="70" height="60" viewBox="0 0 70 60"><rect x="26" y="14" width="38" height="32" rx="2" fill="#dcfce7" stroke="#16a34a" strokeWidth="1.2"/><text x="45" y="30" textAnchor="middle" dominantBaseline="middle" fontSize="6" fontWeight="700" fill="#15803d">PRINT</text><text x="45" y="38" textAnchor="middle" dominantBaseline="middle" fontSize="5" fill="#16a34a">READS</text><line x1="26" y1="14" x2="64" y2="14" stroke="#f97316" strokeWidth="1.5" strokeDasharray="3,2"/><polygon points="45,6 41,14 49,14" fill="#f97316"/><ellipse cx="17" cy="30" rx="7" ry="16" fill="#94a3b8" stroke="#475569" strokeWidth="1.2"/><ellipse cx="17" cy="30" rx="3" ry="7" fill="#cbd5e1" stroke="#475569" strokeWidth="0.8"/><line x1="26" y1="14" x2="23" y2="14" stroke="#475569" strokeWidth="1"/><line x1="26" y1="46" x2="23" y2="46" stroke="#475569" strokeWidth="1"/><text x="45" y="55" textAnchor="middle" fontSize="5" fill="#6b7280">INSIDE</text></svg>) },
-                              { n: 6, label: "Inside · Across\nBottom off first", svg: (<svg width="70" height="60" viewBox="0 0 70 60"><rect x="26" y="14" width="38" height="32" rx="2" fill="#dcfce7" stroke="#16a34a" strokeWidth="1.2"/><text x="45" y="30" textAnchor="middle" dominantBaseline="middle" fontSize="6" fontWeight="700" fill="#15803d" transform="rotate(180,45,30)">PRINT</text><text x="45" y="38" textAnchor="middle" dominantBaseline="middle" fontSize="5" fill="#16a34a" transform="rotate(180,45,38)">READS</text><line x1="26" y1="46" x2="64" y2="46" stroke="#f97316" strokeWidth="1.5" strokeDasharray="3,2"/><polygon points="45,54 41,46 49,46" fill="#f97316"/><ellipse cx="17" cy="30" rx="7" ry="16" fill="#94a3b8" stroke="#475569" strokeWidth="1.2"/><ellipse cx="17" cy="30" rx="3" ry="7" fill="#cbd5e1" stroke="#475569" strokeWidth="0.8"/><line x1="26" y1="14" x2="23" y2="14" stroke="#475569" strokeWidth="1"/><line x1="26" y1="46" x2="23" y2="46" stroke="#475569" strokeWidth="1"/><text x="45" y="8" textAnchor="middle" fontSize="5" fill="#6b7280">INSIDE</text></svg>) },
-                              { n: 7, label: "Inside · With Roll\nRight off first", svg: (<svg width="70" height="60" viewBox="0 0 70 60"><rect x="19" y="16" width="32" height="38" rx="2" fill="#dcfce7" stroke="#16a34a" strokeWidth="1.2"/><text x="35" y="35" textAnchor="middle" dominantBaseline="middle" fontSize="6" fontWeight="700" fill="#15803d" transform="rotate(-90,35,35)">PRINT</text><text x="35" y="43" textAnchor="middle" dominantBaseline="middle" fontSize="5" fill="#16a34a" transform="rotate(-90,35,43)">READS</text><line x1="51" y1="16" x2="51" y2="54" stroke="#f97316" strokeWidth="1.5" strokeDasharray="3,2"/><polygon points="59,35 51,31 51,39" fill="#f97316"/><ellipse cx="35" cy="9" rx="16" ry="6" fill="#94a3b8" stroke="#475569" strokeWidth="1.2"/><ellipse cx="35" cy="9" rx="7" ry="3" fill="#cbd5e1" stroke="#475569" strokeWidth="0.8"/><line x1="19" y1="16" x2="19" y2="13" stroke="#475569" strokeWidth="1"/><line x1="51" y1="16" x2="51" y2="13" stroke="#475569" strokeWidth="1"/><text x="8" y="35" textAnchor="middle" fontSize="5" fill="#6b7280" transform="rotate(-90,8,35)">INSIDE</text></svg>) },
-                              { n: 8, label: "Inside · With Roll\nLeft off first", svg: (<svg width="70" height="60" viewBox="0 0 70 60"><rect x="19" y="16" width="32" height="38" rx="2" fill="#dcfce7" stroke="#16a34a" strokeWidth="1.2"/><text x="35" y="35" textAnchor="middle" dominantBaseline="middle" fontSize="6" fontWeight="700" fill="#15803d" transform="rotate(90,35,35)">PRINT</text><text x="35" y="43" textAnchor="middle" dominantBaseline="middle" fontSize="5" fill="#16a34a" transform="rotate(90,35,43)">READS</text><line x1="19" y1="16" x2="19" y2="54" stroke="#f97316" strokeWidth="1.5" strokeDasharray="3,2"/><polygon points="11,35 19,31 19,39" fill="#f97316"/><ellipse cx="35" cy="9" rx="16" ry="6" fill="#94a3b8" stroke="#475569" strokeWidth="1.2"/><ellipse cx="35" cy="9" rx="7" ry="3" fill="#cbd5e1" stroke="#475569" strokeWidth="0.8"/><line x1="19" y1="16" x2="19" y2="13" stroke="#475569" strokeWidth="1"/><line x1="51" y1="16" x2="51" y2="13" stroke="#475569" strokeWidth="1"/><text x="62" y="35" textAnchor="middle" fontSize="5" fill="#6b7280" transform="rotate(90,62,35)">INSIDE</text></svg>) },
+                              { n: 1, label: "Outside · Across\nTop off first",
+                                svg: (
+                                  <svg width="84" height="72" viewBox="0 0 84 72">
+                                    <path d="M4,10 Q10,8 16,10 Q22,12 28,10 Q34,8 40,10 L40,52 L4,52 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="4" y1="50" x2="40" y2="50" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="22" y="23" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111">PRINTING</text>
+                                    <text x="22" y="33" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222">READS</text>
+                                    <text x="22" y="42" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222">This Way</text>
+                                    <circle cx="64" cy="34" r="16" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="64" cy="34" r="5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="40" y1="10" x2="49" y2="19" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="40" y1="52" x2="49" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="22" y1="10" x2="32" y2="2" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="34,0 26,4 30,12" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 2, label: "Inside · Across\nTop off first",
+                                svg: (
+                                  <svg width="84" height="72" viewBox="0 0 84 72">
+                                    <path d="M4,10 Q10,8 16,10 Q22,12 28,10 Q34,8 40,10 L40,52 L4,52 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="4" y1="50" x2="40" y2="50" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="22" y="23" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(180,22,23)">PRINTING</text>
+                                    <text x="22" y="33" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222" transform="rotate(180,22,33)">READS</text>
+                                    <text x="22" y="42" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222" transform="rotate(180,22,42)">This Way</text>
+                                    <circle cx="64" cy="34" r="16" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="64" cy="34" r="5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="40" y1="10" x2="49" y2="19" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="40" y1="52" x2="49" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="22" y1="10" x2="32" y2="2" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="34,0 26,4 30,12" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 3, label: "Outside · Across\nBottom off first",
+                                svg: (
+                                  <svg width="84" height="72" viewBox="0 0 84 72">
+                                    <path d="M4,10 Q10,8 16,10 Q22,12 28,10 Q34,8 40,10 L40,52 L4,52 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="4" y1="50" x2="40" y2="50" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="22" y="23" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111">PRINTING</text>
+                                    <text x="22" y="33" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222">READS</text>
+                                    <text x="22" y="42" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222">This Way</text>
+                                    <circle cx="64" cy="34" r="16" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="64" cy="34" r="5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="40" y1="10" x2="49" y2="19" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="40" y1="52" x2="49" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="22" y1="52" x2="32" y2="62" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="34,64 24,60 30,52" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 4, label: "Inside · Across\nBottom off first",
+                                svg: (
+                                  <svg width="84" height="72" viewBox="0 0 84 72">
+                                    <path d="M4,10 Q10,8 16,10 Q22,12 28,10 Q34,8 40,10 L40,52 L4,52 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="4" y1="50" x2="40" y2="50" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="22" y="23" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(180,22,23)">PRINTING</text>
+                                    <text x="22" y="33" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222" transform="rotate(180,22,33)">READS</text>
+                                    <text x="22" y="42" textAnchor="middle" fontFamily="serif" fontSize="6.5" fontStyle="italic" fill="#222" transform="rotate(180,22,42)">This Way</text>
+                                    <circle cx="64" cy="34" r="16" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="64" cy="34" r="5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="40" y1="10" x2="49" y2="19" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="40" y1="52" x2="49" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="22" y1="52" x2="32" y2="62" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="34,64 24,60 30,52" fill="#111"/>
+                                  </svg>
+                                )},
                             ] as { n: number; label: string; svg: React.ReactNode }[]).map(({ n, label, svg }) => {
                               const sel = ((form as any).unwindDirection ?? 0) === n;
                               return (
@@ -1414,7 +1849,83 @@ export default function GravureEstimationPage() {
                                   title={label.replace("\n", " ")}
                                   className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border-2 transition-all ${sel ? "border-orange-500 bg-orange-50 shadow-sm" : "border-gray-200 bg-white hover:border-orange-300 hover:bg-orange-50/40"}`}>
                                   {svg}
-                                  <span className={`text-[11px] font-black leading-none ${sel ? "text-orange-600" : "text-gray-600"}`}>Pifa {n}</span>
+                                  <span className={`text-[11px] font-black leading-none ${sel ? "text-orange-600" : "text-gray-700"}`}>#{n}</span>
+                                  <span className={`text-[7.5px] font-medium text-center leading-tight whitespace-pre-line ${sel ? "text-orange-500" : "text-gray-400"}`}>{label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1.5 mt-1">Printed WITH the Roll</p>
+                          <div className="grid grid-cols-4 gap-2">
+                            {([
+                              { n: 5, label: "Outside · With Roll\nRight off first",
+                                svg: (
+                                  <svg width="84" height="80" viewBox="0 0 84 80">
+                                    <path d="M10,4 L52,4 L52,56 Q50,62 48,56 Q46,50 44,56 Q42,62 40,56 L10,56 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="10" y1="4" x2="10" y2="56" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="31" y="30" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(-90,31,30)">PRINTING</text>
+                                    <text x="31" y="41" textAnchor="middle" fontFamily="serif" fontSize="6" fontStyle="italic" fill="#222" transform="rotate(-90,31,41)">READS This Way</text>
+                                    <circle cx="67" cy="63" r="14" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="67" cy="63" r="4.5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="52" y1="56" x2="54" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="4" x2="53" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="30" x2="64" y2="22" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="66,20 56,20 60,28" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 6, label: "Inside · With Roll\nRight off first",
+                                svg: (
+                                  <svg width="84" height="80" viewBox="0 0 84 80">
+                                    <path d="M10,4 L52,4 L52,56 Q50,62 48,56 Q46,50 44,56 Q42,62 40,56 L10,56 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="10" y1="4" x2="10" y2="56" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="31" y="30" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(90,31,30)">PRINTING</text>
+                                    <text x="31" y="41" textAnchor="middle" fontFamily="serif" fontSize="6" fontStyle="italic" fill="#222" transform="rotate(90,31,41)">READS This Way</text>
+                                    <circle cx="67" cy="63" r="14" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="67" cy="63" r="4.5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="52" y1="56" x2="54" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="4" x2="53" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="30" x2="64" y2="22" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="66,20 56,20 60,28" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 7, label: "Outside · With Roll\nLeft off first",
+                                svg: (
+                                  <svg width="84" height="80" viewBox="0 0 84 80">
+                                    <path d="M10,4 L52,4 L52,56 Q50,62 48,56 Q46,50 44,56 Q42,62 40,56 L10,56 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="10" y1="4" x2="10" y2="56" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="31" y="30" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(90,31,30)">PRINTING</text>
+                                    <text x="31" y="41" textAnchor="middle" fontFamily="serif" fontSize="6" fontStyle="italic" fill="#222" transform="rotate(90,31,41)">READS This Way</text>
+                                    <circle cx="67" cy="63" r="14" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="67" cy="63" r="4.5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="52" y1="56" x2="54" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="4" x2="53" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="10" y1="30" x2="0" y2="22" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="0,20 10,18 8,28" fill="#111"/>
+                                  </svg>
+                                )},
+                              { n: 8, label: "Inside · With Roll\nLeft off first",
+                                svg: (
+                                  <svg width="84" height="80" viewBox="0 0 84 80">
+                                    <path d="M10,4 L52,4 L52,56 Q50,62 48,56 Q46,50 44,56 Q42,62 40,56 L10,56 Z" fill="white" stroke="#111" strokeWidth="1.2"/>
+                                    <line x1="10" y1="4" x2="10" y2="56" stroke="#444" strokeWidth="0.8"/>
+                                    <text x="31" y="30" textAnchor="middle" fontFamily="serif" fontSize="7.5" fontStyle="italic" fontWeight="bold" fill="#111" transform="rotate(-90,31,30)">PRINTING</text>
+                                    <text x="31" y="41" textAnchor="middle" fontFamily="serif" fontSize="6" fontStyle="italic" fill="#222" transform="rotate(-90,31,41)">READS This Way</text>
+                                    <circle cx="67" cy="63" r="14" fill="#d8d8d8" stroke="#111" strokeWidth="1.3"/>
+                                    <circle cx="67" cy="63" r="4.5" fill="#aaa" stroke="#555" strokeWidth="1"/>
+                                    <line x1="52" y1="56" x2="54" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="52" y1="4" x2="53" y2="50" stroke="#111" strokeWidth="1.1"/>
+                                    <line x1="10" y1="30" x2="0" y2="22" stroke="#111" strokeWidth="2.2"/>
+                                    <polygon points="0,20 10,18 8,28" fill="#111"/>
+                                  </svg>
+                                )},
+                            ] as { n: number; label: string; svg: React.ReactNode }[]).map(({ n, label, svg }) => {
+                              const sel = ((form as any).unwindDirection ?? 0) === n;
+                              return (
+                                <button key={n} type="button" onClick={() => f("unwindDirection" as any, n)}
+                                  title={label.replace("\n", " ")}
+                                  className={`flex flex-col items-center gap-1 p-1.5 rounded-xl border-2 transition-all ${sel ? "border-orange-500 bg-orange-50 shadow-sm" : "border-gray-200 bg-white hover:border-orange-300 hover:bg-orange-50/40"}`}>
+                                  {svg}
+                                  <span className={`text-[11px] font-black leading-none ${sel ? "text-orange-600" : "text-gray-700"}`}>#{n}</span>
                                   <span className={`text-[7.5px] font-medium text-center leading-tight whitespace-pre-line ${sel ? "text-orange-500" : "text-gray-400"}`}>{label}</span>
                                 </button>
                               );
@@ -1422,7 +1933,16 @@ export default function GravureEstimationPage() {
                           </div>
                           {(form as any).unwindDirection > 0 && (
                             <p className="mt-1.5 text-[10px] text-orange-600 font-semibold flex items-center gap-1">
-                              <Check size={10}/> Pifa {(form as any).unwindDirection} selected
+                              <Check size={10}/> Direction #{(form as any).unwindDirection} selected — {[
+                                "#1 Outside · Across · Top off first",
+                                "#2 Inside · Across · Top off first",
+                                "#3 Outside · Across · Bottom off first",
+                                "#4 Inside · Across · Bottom off first",
+                                "#5 Outside · With Roll · Right off first",
+                                "#6 Inside · With Roll · Right off first",
+                                "#7 Outside · With Roll · Left off first",
+                                "#8 Inside · With Roll · Left off first",
+                              ][((form as any).unwindDirection ?? 1) - 1]}
                             </p>
                           )}
                         </div>
@@ -1563,10 +2083,27 @@ export default function GravureEstimationPage() {
                                 <Input label="Film GSM" type="number" value={l.gsm || ""} readOnly className="font-bold bg-purple-50 text-purple-800 border-purple-200 text-xs" />
                                 <div>
                                   <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Film Rate (₹/Kg)</label>
-                                  <input type="number" step={0.01} min={0} placeholder="₹/Kg"
-                                    className="w-full text-xs border border-orange-200 bg-orange-50 rounded-xl px-2 py-2 font-mono outline-none focus:ring-2 focus:ring-orange-400"
-                                    value={l.filmRate !== undefined ? l.filmRate : (parseFloat(FILM_ITEMS.find(fi => fi.subGroup === l.itemSubGroup)?.estimationRate || "0") || "")}
-                                    onChange={e => { const layers = [...form.secondaryLayers]; layers[index] = { ...l, filmRate: Number(e.target.value) }; f("secondaryLayers", layers); }} />
+                                  <div className="flex gap-1 items-stretch">
+                                    <input type="number" step={0.01} min={0} placeholder="₹/Kg"
+                                      className="flex-1 min-w-0 text-xs border border-orange-200 bg-orange-50 rounded-xl px-2 py-2 font-mono outline-none focus:ring-2 focus:ring-orange-400"
+                                      value={l.filmRate !== undefined ? l.filmRate : (parseFloat(FILM_ITEMS.find(fi => fi.subGroup === l.itemSubGroup)?.estimationRate || "0") || "")}
+                                      onChange={e => { const layers = [...form.secondaryLayers]; layers[index] = { ...l, filmRate: Number(e.target.value) }; f("secondaryLayers", layers); }} />
+                                    {/* Stock lots picker button — only if lots exist for this film */}
+                                    {(() => {
+                                      const lots = grnRecords.flatMap(g => g.lines
+                                        .filter(line => line.itemGroup === "Film" && line.subGroup === l.itemSubGroup)
+                                        .map(line => ({ grnNo: g.grnNo, grnDate: g.grnDate, supplier: g.supplier, batchNo: line.batchNo, rate: line.rate, qty: line.receivedQty, unit: line.stockUnit }))
+                                      );
+                                      if (lots.length === 0) return null;
+                                      return (
+                                        <button type="button"
+                                          onClick={() => setFilmLotPickerOpen(filmLotPickerOpen === index ? null : index)}
+                                          className={`px-2.5 rounded-xl border text-[10px] font-bold transition whitespace-nowrap flex items-center gap-1 ${filmLotPickerOpen === index ? "bg-orange-600 text-white border-orange-600" : "bg-orange-100 text-orange-700 border-orange-300 hover:bg-orange-200"}`}>
+                                          <Archive size={11} /> Lots ({lots.length})
+                                        </button>
+                                      );
+                                    })()}
+                                  </div>
                                 </div>
                               </div>
                             </div>
@@ -1601,7 +2138,7 @@ export default function GravureEstimationPage() {
 
                                   // Ink-specific calculations
                                   const dryGSM   = ci.itemGroup === "Ink" ? (ci.gsm || 0) : 0;
-                                  const solid    = ci.itemGroup === "Ink" ? ((items.find(x => x.id === ci.itemId) as any)?.solidPct ?? 40) : 40;
+                                  const solid    = ci.itemGroup === "Ink" ? (ci.solidPct ?? ((items.find(x => x.id === ci.itemId) as any)?.solidPct ?? 40)) : 40;
                                   const liquidGSM = dryGSM > 0 && solid > 0 ? parseFloat((dryGSM / (solid / 100)).toFixed(2)) : 0;
 
                                   // Adhesive OH%
@@ -1667,10 +2204,27 @@ export default function GravureEstimationPage() {
                                         </div>
                                         <div>
                                           <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">Rate (₹/Kg)</label>
-                                          <input type="number" step={0.01} min={0} placeholder="₹/Kg"
-                                            className="w-full text-xs border border-orange-200 bg-orange-50 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 font-mono"
-                                            value={ci.rate || ""}
-                                            onChange={e => updatePlyConsumable(index, ciIdx, { rate: Number(e.target.value) })} />
+                                          <div className="flex gap-1 items-stretch">
+                                            <input type="number" step={0.01} min={0} placeholder="₹/Kg"
+                                              className="flex-1 min-w-0 text-xs border border-orange-200 bg-orange-50 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 font-mono"
+                                              value={ci.rate || ""}
+                                              onChange={e => updatePlyConsumable(index, ciIdx, { rate: Number(e.target.value) })} />
+                                            {(() => {
+                                              const ciLots = grnRecords.flatMap(g => g.lines
+                                                .filter(line => line.itemGroup === ci.itemGroup && line.subGroup === ci.itemSubGroup)
+                                                .map(line => ({ grnNo: g.grnNo, grnDate: g.grnDate, supplier: g.supplier, batchNo: line.batchNo, rate: line.rate, qty: line.receivedQty, unit: line.stockUnit, itemName: line.itemName }))
+                                              );
+                                              if (ciLots.length === 0) return null;
+                                              const isOpen = ciLotPickerOpen?.plyIdx === index && ciLotPickerOpen?.ciIdx === ciIdx;
+                                              return (
+                                                <button type="button"
+                                                  onClick={() => setCiLotPickerOpen(isOpen ? null : { plyIdx: index, ciIdx })}
+                                                  className={`px-2 rounded-lg border text-[10px] font-bold transition whitespace-nowrap flex items-center gap-1 ${isOpen ? "bg-orange-600 text-white border-orange-600" : "bg-orange-100 text-orange-700 border-orange-300 hover:bg-orange-200"}`}>
+                                                  <Archive size={10} /> Lots ({ciLots.length})
+                                                </button>
+                                              );
+                                            })()}
+                                          </div>
                                         </div>
                                       </div>
 
@@ -1686,8 +2240,11 @@ export default function GravureEstimationPage() {
                                           </div>
                                           <div>
                                             <label className="text-[10px] font-semibold text-gray-500 uppercase block mb-1">% Solid</label>
-                                            <input type="number" readOnly value={solid}
-                                              className="w-full text-xs border border-gray-200 bg-gray-50 rounded-lg px-2 py-1.5 font-mono text-gray-500" />
+                                            <input type="number" step={1} min={1} max={100}
+                                              className="w-full text-xs border border-indigo-200 rounded-lg px-2 py-1.5 bg-indigo-50 outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+                                              value={solid}
+                                              onChange={e => updatePlyConsumable(index, ciIdx, { solidPct: Number(e.target.value) || 40 })}
+                                              placeholder="40" />
                                           </div>
                                           <div>
                                             <label className="text-[10px] font-semibold text-indigo-600 uppercase block mb-1">Liquid GSM</label>
@@ -1765,7 +2322,7 @@ export default function GravureEstimationPage() {
                                 l.consumableItems.forEach(ci => { const g = ci.itemGroup || "Other"; groupCount[g] = (groupCount[g] || 0) + 1; });
                                 const inks = l.consumableItems.filter(ci => ci.itemGroup === "Ink");
                                 const totalDryGSM = inks.reduce((s, ci) => s + (parseFloat(String(ci.gsm)) || 0), 0);
-                                const avgSolid = inks.length > 0 ? inks.reduce((s, ci) => { const it = items.find(x => x.id === ci.itemId); return s + ((it as any)?.solidPct ?? 35); }, 0) / inks.length : 0;
+                                const avgSolid = inks.length > 0 ? inks.reduce((s, ci) => { const it = items.find(x => x.id === ci.itemId); return s + (ci.solidPct ?? (it as any)?.solidPct ?? 35); }, 0) / inks.length : 0;
                                 const GROUP_COLOR: Record<string, string> = { Ink: "bg-blue-100 text-blue-700 border-blue-200", Solvent: "bg-teal-100 text-teal-700 border-teal-200", Adhesive: "bg-violet-100 text-violet-700 border-violet-200", Hardner: "bg-orange-100 text-orange-700 border-orange-200", Other: "bg-gray-100 text-gray-600 border-gray-200" };
                                 return (
                                   <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl mt-2">
@@ -1811,6 +2368,101 @@ export default function GravureEstimationPage() {
             </div>
                </div>
              </div>
+
+            {/* ── Attachments ── */}
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] font-bold text-orange-600 uppercase tracking-widest">
+                  Attachments {attachments.length > 0 && `(${attachments.length})`}
+                </span>
+                <label className="flex items-center gap-1.5 text-[11px] font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2.5 py-1 rounded-lg cursor-pointer transition">
+                  <Plus size={11} /> Add Files
+                  <input type="file" multiple accept="*" className="hidden"
+                    onChange={e => addAttachments(e.target.files)} />
+                </label>
+              </div>
+              {attachments.length === 0 && (
+                <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-orange-200 rounded-xl py-6 cursor-pointer bg-orange-50/40 hover:bg-orange-50 transition"
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); addAttachments(e.dataTransfer.files); }}>
+                  <Archive size={22} className="text-orange-300" />
+                  <span className="text-xs text-orange-400 font-medium">Drag &amp; drop any file — JPG, PDF, AI, PSD, PNG, etc.</span>
+                  <span className="text-[10px] text-orange-300">or click <strong>Add Files</strong> above</span>
+                  <input type="file" multiple accept="*" className="hidden"
+                    onChange={e => addAttachments(e.target.files)} />
+                </label>
+              )}
+              {attachments.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2"
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); addAttachments(e.dataTransfer.files); }}>
+                  {attachments.map((att, attIdx) => {
+                    const isImg  = att.mimeType.startsWith("image/");
+                    const ext    = att.name.split(".").pop()?.toUpperCase() ?? "FILE";
+                    const sizeKb = (att.size / 1024).toFixed(0);
+                    const isMaster = attIdx === 0;
+                    const label  = att.label ?? (isMaster ? "Master File" : "");
+                    const badgeColor = isMaster
+                      ? "bg-amber-400 text-white border-amber-500"
+                      : "bg-indigo-100 text-indigo-700 border-indigo-300";
+                    const isEditingLabel = editingAttachLabel === att.id;
+                    return (
+                      <div key={att.id} className={`relative group rounded-xl overflow-hidden bg-white shadow-sm ${isMaster ? "border-2 border-amber-400 ring-1 ring-amber-300" : label ? "border-2 border-indigo-300" : "border border-gray-200"}`}>
+                        {isEditingLabel ? (
+                          <div className="absolute top-1.5 left-1.5 z-20 flex items-center gap-1">
+                            <input autoFocus
+                              className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border border-indigo-400 bg-white text-indigo-700 outline-none w-28 shadow"
+                              defaultValue={label}
+                              onBlur={e => { const v = e.target.value.trim(); setAttachments(p => p.map(a => a.id === att.id ? { ...a, label: v || undefined } : a)); setEditingAttachLabel(null); }}
+                              onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditingAttachLabel(null); }}
+                            />
+                          </div>
+                        ) : label ? (
+                          <button onClick={() => setEditingAttachLabel(att.id)} title="Click to rename"
+                            className={`absolute top-1.5 left-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide border shadow hover:opacity-80 transition ${badgeColor}`}>
+                            {isMaster && "★ "}{label}
+                          </button>
+                        ) : (
+                          <button onClick={() => setEditingAttachLabel(att.id)} title="Add label"
+                            className="absolute top-1.5 left-1.5 z-10 opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold border border-dashed border-gray-400 text-gray-500 bg-white/90 shadow transition">
+                            + Name
+                          </button>
+                        )}
+                        {isImg ? (
+                          <img src={att.url} alt={att.name} className="w-full h-20 object-cover" />
+                        ) : (
+                          <div className="w-full h-20 flex flex-col items-center justify-center bg-gray-50 gap-1">
+                            <span className="text-2xl font-black text-gray-300">{ext}</span>
+                          </div>
+                        )}
+                        <div className="px-2 py-1.5 border-t border-gray-100">
+                          <p className="text-[10px] font-semibold text-gray-700 truncate" title={att.name}>{att.name}</p>
+                          <p className="text-[9px] text-gray-400">{sizeKb} KB</p>
+                        </div>
+                        <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => setPreviewAttachment({ name: att.name, url: att.url, mimeType: att.mimeType })}
+                            className="p-1 rounded-md bg-white/90 text-indigo-600 hover:bg-indigo-50 shadow" title="Preview">
+                            <EyeIcon size={11} />
+                          </button>
+                          <a href={att.url} download={att.name} target="_blank" rel="noreferrer"
+                            className="p-1 rounded-md bg-white/90 text-blue-600 hover:bg-blue-50 shadow text-[10px]" title="Download">↓</a>
+                          <button onClick={() => removeAttachment(att.id)}
+                            className="p-1 rounded-md bg-white/90 text-red-500 hover:bg-red-50 shadow" title="Remove">
+                            <X size={10} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <label className="flex flex-col items-center justify-center gap-1 border-2 border-dashed border-gray-200 rounded-xl h-full min-h-[80px] cursor-pointer hover:border-orange-300 hover:bg-orange-50/30 transition">
+                    <Plus size={16} className="text-gray-300" />
+                    <span className="text-[10px] text-gray-300">Add more</span>
+                    <input type="file" multiple accept="*" className="hidden"
+                      onChange={e => addAttachments(e.target.files)} />
+                  </label>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1964,6 +2616,28 @@ export default function GravureEstimationPage() {
 
             {/* ── Applied Plan Summary (shown when plan is applied and panel is open) ── */}
             {showPlan && isPlanApplied && selectedPlan && (
+              <>
+              {/* Cylinder life warning */}
+              {(() => {
+                const cylTool = CYLINDER_TOOLS_ALL.find(t => t.id === (selectedPlan as any).cylinderId);
+                if (!cylTool?.shelfLifeMeters) return null;
+                const remaining = cylTool.shelfLifeMeters - (cylTool.usedMeters ?? 0);
+                const reqRMT = selectedPlan.reqRMT ?? 0;
+                if (reqRMT === 0 || remaining >= reqRMT) return null;
+                const pct = Math.round((remaining / cylTool.shelfLifeMeters) * 100);
+                return (
+                  <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-start gap-3">
+                    <span className="text-amber-500 text-base flex-shrink-0">⚠</span>
+                    <div className="flex-1">
+                      <p className="text-xs font-bold text-amber-800">Cylinder Life Warning — {cylTool.code}</p>
+                      <p className="text-[11px] text-amber-700 mt-0.5">
+                        Remaining life: <strong>{remaining.toLocaleString()} m</strong> ({pct}% of {cylTool.shelfLifeMeters.toLocaleString()} m total) · This job requires <strong>{reqRMT.toLocaleString()} m</strong>.
+                        The cylinder may not last the full run. Consider sending for rechrome before production.
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-start justify-between gap-4">
                 <div className="flex-1 space-y-2">
                   <div className="flex items-center gap-2">
@@ -1987,6 +2661,7 @@ export default function GravureEstimationPage() {
                   Change Plan
                 </button>
               </div>
+              </>
             )}
 
             {/* ── Production Plan Selection Table ── */}
@@ -1996,7 +2671,15 @@ export default function GravureEstimationPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-bold text-gray-800">Production Plan Selection</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">{form.machineId ? `Machine: ${form.machineName}` : `Showing all ${PRINT_MACHINES.length} gravure machines`} · {visiblePlans.length}/{allPlans.length} plans</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">
+                        {form.machineId ? `Machine: ${form.machineName}` : `Showing all ${PRINT_MACHINES.length} gravure machines`} · {visiblePlans.length}/{allPlans.length} plans
+                        {Object.keys(planColFilters).length > 0 && (
+                          <button onClick={() => setPlanColFilters({})}
+                            className="ml-2 px-1.5 py-0.5 bg-yellow-400 text-yellow-900 text-[9px] font-bold rounded-full hover:bg-yellow-300">
+                            ✕ {Object.keys(planColFilters).length} filter{Object.keys(planColFilters).length > 1 ? "s" : ""} active
+                          </button>
+                        )}
+                      </p>
                     </div>
                     {selectedPlanId && (
                       <Button onClick={() => setIsPlanApplied(true)} icon={<Check size={13} />}>Apply Selected Plan</Button>
@@ -2016,53 +2699,91 @@ export default function GravureEstimationPage() {
                 </div>
 
                 {/* Desktop table */}
-                <div className="hidden sm:block overflow-x-auto">
-                  <table className="min-w-full text-xs whitespace-nowrap">
-                    <thead className="bg-gray-50 border-b border-gray-200">
+                <div className="hidden sm:block overflow-x-auto" onClick={() => planFilterOpen && setPlanFilterOpen(null)}>
+                  <table className="min-w-full text-xs whitespace-nowrap border-collapse">
+                    <thead className="bg-slate-800 text-slate-300">
                       <tr>
-                        <th className="px-3 py-2.5 w-8" />
+                        <th className="p-2 border border-slate-700 text-center w-8" />
+                        <th className="p-2 border border-slate-700 text-center w-8">Layout</th>
                         {([
-                          { label: "Machine",           key: "" },
-                          { label: "AC UPS",            key: "acUps" },
-                          { label: "Printing W (mm)",   key: "printingWidth" },
-                          { label: "Sleeve",            key: "" },
-                          { label: "Sleeve W (mm)",     key: "sleeveWidthVal",   waste: true },
-                          { label: "Side Waste (mm)",   key: "sideWaste",        waste: true },
-                          { label: "Film Size (mm)",    key: "filmSize" },
-                          { label: "Dead Margin (mm)",  key: "deadMargin",       waste: true },
-                          { label: "Total Waste (mm)",  key: "totalWaste",       waste: true },
-                          { label: "Cylinder",          key: "" },
-                          { label: "Cylinder W (mm)",   key: "cylinderWidthVal" },
-                          { label: "Cyl Extra (mm)",    key: "cylExtra" },
-                          { label: "Cyl Circ (mm)",     key: "cylRepeatLength" },
-                          { label: "Cyl Area (sq.in)",  key: "cylAreaSqInch" },
-                          { label: "Rate (₹/sq.in)",    key: "" },
-                          { label: "Cyl Cost (₹)",      key: "cylCostByArea" },
-                          { label: "Repeat UPS",        key: "repeatUPS" },
-                          { label: "Total UPS",         key: "totalUPS" },
-                          { label: "Req. RMT",          key: "reqRMT" },
-                          { label: "Total RMT",         key: "totalRMT" },
-                          { label: "Total Wt (Kg)",     key: "totalWt" },
-                          { label: "Total Time",        key: "totalTime" },
-                          { label: "Plan Cost",         key: "planCost" },
-                          { label: "Grand Total",       key: "grandTotal" },
-                          { label: "Unit Price",        key: "unitPrice" },
-                        ] as { label: string; key: string; waste?: boolean }[]).map(col => (
-                          <th
-                            key={col.label}
-                            onClick={() => col.key && togglePlanSort(col.key)}
-                            className={`px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider select-none ${col.waste && (form.sleeveWidth ?? 0) > 0 ? "text-orange-600 bg-orange-50" : "text-gray-500"} ${col.key ? "cursor-pointer hover:text-gray-800" : ""}`}
-                          >
-                            <span className="inline-flex items-center gap-1">
-                              {col.label}
-                              {col.key && (
-                                <span className="text-[9px] text-gray-400">
-                                  {planSort.key === col.key ? (planSort.dir === "asc" ? "▲" : "▼") : "⇅"}
-                                </span>
+                          { key: "machineName",      label: "Machine" },
+                          { key: "acUps",            label: "AC UPS" },
+                          { key: "printingWidth",    label: "Printing W (mm)" },
+                          { key: "sleeveCode",       label: "Sleeve" },
+                          { key: "sleeveWidthVal",   label: "Sleeve W (mm)" },
+                          { key: "sideWaste",        label: "Side Waste (mm)" },
+                          { key: "filmSize",         label: "Film Size (mm)" },
+                          { key: "deadMargin",       label: "Dead Margin (mm)" },
+                          { key: "totalWaste",       label: "Total Waste (mm)" },
+                          { key: "cylinderCode",     label: "Cylinder" },
+                          { key: "cylinderWidthVal", label: "Cyl W (mm)" },
+                          { key: "cylExtra",         label: "Cyl Extra (mm)" },
+                          { key: "cylRepeatLength",  label: "Cyl Circ (mm)" },
+                          { key: "cylAreaSqInch",    label: "Cyl Area (sq.in)" },
+                          { key: "cylCostByArea",    label: "Cyl Cost (₹)" },
+                          { key: "repeatUPS",        label: "Repeat UPS" },
+                          { key: "totalUPS",         label: "Total UPS" },
+                          { key: "reqRMT",           label: "Req. RMT" },
+                          { key: "totalRMT",         label: "Total RMT" },
+                          { key: "totalWt",          label: "Total Wt (Kg)" },
+                          { key: "totalTime",        label: "Total Time" },
+                          { key: "planCost",         label: "Plan Cost" },
+                          { key: "grandTotal",       label: "Grand Total" },
+                          { key: "unitPrice",        label: "Unit Price" },
+                        ]).map(col => {
+                          const isFiltered = !!(planColFilters[col.key]?.size);
+                          const isOpen     = planFilterOpen === col.key;
+                          const uniqueVals = Array.from(new Set(allPlans.map(r => String((r as any)[col.key] ?? "")))).sort((a, b) => isNaN(+a) ? a.localeCompare(b) : +a - +b);
+                          const fSearch    = planFilterSearch[col.key] ?? "";
+                          const visVals    = fSearch ? uniqueVals.filter(v => v.toLowerCase().includes(fSearch.toLowerCase())) : uniqueVals;
+                          const draft      = planFilterDraft[col.key] ?? new Set<string>();
+                          return (
+                            <th key={col.key} className="p-0 border border-slate-700 text-center relative">
+                              <div className="flex items-center justify-between px-2 py-2 gap-1 cursor-pointer hover:bg-slate-700 select-none"
+                                onClick={() => togglePlanSort(col.key)}>
+                                <span className="text-[10px]">{col.label}{planSort.key === col.key ? (planSort.dir === "asc" ? " ▲" : " ▼") : ""}</span>
+                                <button
+                                  onClick={e => { e.stopPropagation(); isOpen ? setPlanFilterOpen(null) : openPlanFilter(col.key); }}
+                                  className={`flex-shrink-0 p-0.5 rounded transition-colors ${isFiltered ? "text-yellow-300" : "text-slate-400 hover:text-white"}`}
+                                  title="Filter">▼</button>
+                              </div>
+                              {isOpen && (
+                                <div className="absolute top-full left-0 z-50 bg-white border border-gray-300 rounded-xl shadow-2xl min-w-[200px] text-gray-800"
+                                  onClick={e => e.stopPropagation()}>
+                                  <div className="p-2 border-b border-gray-100">
+                                    <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1">
+                                      <Search size={11} className="text-gray-400 flex-shrink-0" />
+                                      <input autoFocus value={fSearch}
+                                        onChange={e => setPlanFilterSearch(s => ({ ...s, [col.key]: e.target.value }))}
+                                        placeholder="Search…"
+                                        className="text-xs bg-transparent outline-none w-full text-gray-700" />
+                                      {fSearch && <button onClick={() => setPlanFilterSearch(s => ({ ...s, [col.key]: "" }))} className="text-gray-400"><X size={10} /></button>}
+                                    </div>
+                                  </div>
+                                  <div className="px-3 py-1.5 border-b border-gray-100 hover:bg-gray-50 cursor-pointer flex items-center gap-2"
+                                    onClick={() => togglePlanFilterAll(col.key, visVals)}>
+                                    <input type="checkbox" readOnly checked={draft.size === visVals.length && visVals.length > 0} className="accent-indigo-600 cursor-pointer" />
+                                    <span className="text-xs font-semibold text-gray-600">Select All</span>
+                                  </div>
+                                  <div className="max-h-48 overflow-y-auto">
+                                    {visVals.map(v => (
+                                      <div key={v} className="px-3 py-1.5 hover:bg-indigo-50 cursor-pointer flex items-center gap-2"
+                                        onClick={() => togglePlanFilterVal(col.key, v)}>
+                                        <input type="checkbox" readOnly checked={draft.has(v)} className="accent-indigo-600 cursor-pointer" />
+                                        <span className="text-xs text-gray-700">{v || "(blank)"}</span>
+                                      </div>
+                                    ))}
+                                    {visVals.length === 0 && <div className="px-3 py-2 text-xs text-gray-400">No matches</div>}
+                                  </div>
+                                  <div className="flex gap-2 p-2 border-t border-gray-100">
+                                    <button onClick={() => applyPlanFilter(col.key)} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-1.5 rounded-lg">OK</button>
+                                    <button onClick={() => clearPlanFilter(col.key)} className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium py-1.5 rounded-lg">Clear</button>
+                                  </div>
+                                </div>
                               )}
-                            </span>
-                          </th>
-                        ))}
+                            </th>
+                          );
+                        })}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -2122,7 +2843,6 @@ export default function GravureEstimationPage() {
                             </td>
                             <td className="px-3 py-2.5 text-center font-mono text-gray-500">{plan.cylRepeatLength}</td>
                             <td className="px-3 py-2.5 text-center font-mono text-indigo-600 font-semibold">{plan.cylAreaSqInch}</td>
-                            <td className="px-3 py-2.5 text-center text-gray-400 text-[10px]">₹{form.cylinderRatePerSqInch ?? 0}</td>
                             <td className={`px-3 py-2.5 text-center font-bold ${plan.isBest ? "text-green-700" : "text-violet-800"}`}>₹{plan.cylCostByArea.toLocaleString()}</td>
                             <td className="px-3 py-2.5 text-center text-gray-600">{plan.repeatUPS}</td>
                             <td className="px-3 py-2.5 text-center font-bold text-gray-800">{plan.totalUPS}</td>
@@ -2212,210 +2932,13 @@ export default function GravureEstimationPage() {
               </div>
             )}
 
-            {/* ── Cylinder Planning Section ─────────────────────────────── */}
-            {(() => {
-              const sp = selectedPlan as any;
-              const pCode = (() => {
-                const _m = loadedFromCatalog.match(/(\d+)$/);
-                return _m ? `P${_m[1].padStart(4, "0")}` : "";
-              })();
-              const statusCounts = cylAllocs.reduce((acc, c) => {
-                acc[c.status] = (acc[c.status] || 0) + 1;
-                return acc;
-              }, {} as Record<string, number>);
-              const createdCount = cylAllocs.filter(c => c.createdInMaster).length;
-              return (
-              <div className="mt-4">
-                <div className="flex items-center justify-between mb-2">
-                  <SectionHeader label="Cylinder Planning" />
-                  {cylAllocs.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-300 text-[11px] font-bold rounded-lg transition"
-                        onClick={refreshEstFromCylinderMaster}>
-                        <RefreshCw size={11} /> Refresh from Master
-                      </button>
-                      <button
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition"
-                        onClick={() => openEstCylinderMaster(selectedPlan)}>
-                        <Wrench size={11} /> Create Cylinder in Master
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Init button if no allocs yet */}
-                {cylAllocs.length === 0 && form.noOfColors > 0 && (
-                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs">
-                    <span className="text-amber-700">
-                      {loadedFromCatalog
-                        ? "No cylinder data from catalog. Initialize to plan cylinders."
-                        : "Plan cylinders for this estimation (direct entry)."}
-                    </span>
-                    <button
-                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition"
-                      onClick={() => {
-                        const n = form.noOfColors || 0;
-                        setCylAllocs(Array.from({ length: n }, (_, i) => ({
-                          colorNo:       i + 1,
-                          colorName:     `Color ${i + 1}`,
-                          cylinderNo:    "",
-                          circumference: sp ? String(sp.cylCirc ?? form.jobHeight ?? "") : String(form.jobHeight || ""),
-                          printWidth:    sp ? String(sp.cylinderWidthVal ?? sp.printingWidth ?? "") : String(form.actualWidth || form.jobWidth || ""),
-                          repeatUPS:     sp ? (sp.repeatUPS as number) : 1,
-                          cylinderType:  "New" as const,
-                          status:        "Pending" as const,
-                          remarks:       "",
-                          createdInMaster: false,
-                          repeatUse:     false,
-                        })));
-                      }}>
-                      + Initialize {form.noOfColors} Color Cylinders
-                    </button>
-                  </div>
-                )}
-
-                {cylAllocs.length > 0 && (
-                  <>
-                    {/* Info banner */}
-                    <div className="mb-2 flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-[11px] text-blue-800">
-                      <Wrench size={12} className="text-blue-500 mt-0.5 flex-shrink-0" />
-                      <span>
-                        All colors share <strong>same cylinder</strong> — same Circ, Width & Repeat UPS.
-                        Check <strong>Repeat?</strong> for colors that reuse an existing cylinder — they won't be sent to master.
-                        {loadedFromCatalog && <> Loaded from catalog: <strong className="text-teal-700">{loadedFromCatalog}</strong>{pCode && <> · <span className="font-mono text-indigo-700">{pCode}</span></>}.</>}
-                      </span>
-                    </div>
-
-                    {/* Status summary */}
-                    <div className="flex items-center gap-2 mb-2 flex-wrap text-[11px]">
-                      <span className="font-semibold text-gray-500 uppercase text-[10px]">Status:</span>
-                      {Object.entries(statusCounts).map(([st, cnt]) => (
-                        <span key={st} className={`px-2 py-0.5 rounded-full border font-bold ${
-                          st === "Available" ? "bg-green-50 text-green-700 border-green-200"
-                          : st === "Ordered"  ? "bg-purple-50 text-purple-700 border-purple-200"
-                          : "bg-gray-100 text-gray-600 border-gray-200"}`}>
-                          {cnt} {st}
-                        </span>
-                      ))}
-                      {createdCount > 0 && (
-                        <span className="ml-auto text-green-600 font-bold text-[10px]">✓ {createdCount} cylinder{createdCount > 1 ? "s" : ""} created in master</span>
-                      )}
-                    </div>
-
-                    {/* Grid */}
-                    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-                      <table className="min-w-full text-[11px] border-collapse">
-                        <thead className="bg-amber-700 text-white uppercase tracking-wider">
-                          <tr>{["#", "Repeat?", "Product Code", "Color Name", "Cylinder Code", "Width (mm)", "Circ. (mm)", "Repeat UPS", "Type", "Status", "Remarks", "Action"].map(h => (
-                            <th key={h} className="px-2 py-2 border border-amber-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
-                          ))}</tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {cylAllocs.map((ca, i) => (
-                            <tr key={i} className={`hover:bg-amber-50/20 ${ca.repeatUse ? "bg-gray-50 opacity-60" : ca.createdInMaster ? "bg-green-50/30" : ""}`}>
-                              <td className="px-2 py-1.5 text-center font-black text-amber-700">{ca.colorNo}</td>
-                              {/* Repeat? */}
-                              <td className="px-2 py-1.5 text-center">
-                                <label className="flex flex-col items-center gap-0.5 cursor-pointer select-none">
-                                  <input type="checkbox" checked={!!ca.repeatUse}
-                                    onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, repeatUse: e.target.checked } : c))}
-                                    className="w-4 h-4 accent-orange-500 cursor-pointer" />
-                                  {ca.repeatUse && <span className="text-[9px] text-orange-600 font-bold leading-none">Skip</span>}
-                                </label>
-                              </td>
-                              {/* Product Code */}
-                              <td className="px-2 py-1.5 text-center">
-                                {pCode
-                                  ? <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold font-mono whitespace-nowrap">{pCode}</span>
-                                  : <span className="text-gray-400 text-[10px]">Direct</span>}
-                              </td>
-                              {/* Color Name */}
-                              <td className="px-2 py-1.5">
-                                <input className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400 bg-gray-50"
-                                  value={ca.colorName}
-                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, colorName: e.target.value } : c))} />
-                              </td>
-                              {/* Cylinder Code */}
-                              <td className="px-2 py-1.5">
-                                <input className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 bg-white"
-                                  placeholder="e.g. CUC-001"
-                                  value={ca.cylinderNo}
-                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderNo: e.target.value } : c))} />
-                              </td>
-                              {/* Width */}
-                              <td className="px-2 py-1.5">
-                                <input type="number" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 text-center"
-                                  value={ca.printWidth}
-                                  onChange={e => setCylAllocs(p => p.map(c => ({ ...c, printWidth: e.target.value })))} />
-                              </td>
-                              {/* Circumference */}
-                              <td className="px-2 py-1.5">
-                                <input type="number" className="w-20 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 text-center bg-indigo-50/40"
-                                  value={ca.circumference}
-                                  onChange={e => setCylAllocs(p => p.map(c => ({ ...c, circumference: e.target.value })))} />
-                              </td>
-                              {/* Repeat UPS */}
-                              <td className="px-2 py-1.5 text-center">
-                                <span className="px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-full text-[10px] font-bold">{ca.repeatUPS}×</span>
-                              </td>
-                              {/* Type */}
-                              <td className="px-2 py-1.5">
-                                <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400"
-                                  value={ca.cylinderType}
-                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderType: e.target.value as EstCylAlloc["cylinderType"] } : c))}>
-                                  <option value="New">New</option>
-                                  <option value="Existing">Existing</option>
-                                  <option value="Repeat">Repeat Cylinder</option>
-                                  <option value="Rechromed">Rechromed</option>
-                                </select>
-                              </td>
-                              {/* Status */}
-                              <td className="px-2 py-1.5">
-                                <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400"
-                                  value={ca.status}
-                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as EstCylAlloc["status"] } : c))}>
-                                  <option value="Pending">Pending</option>
-                                  <option value="Ordered">Ordered</option>
-                                  <option value="Available">Available</option>
-                                  <option value="In Use">In Use</option>
-                                  <option value="Under Chrome">Under Chrome</option>
-                                </select>
-                              </td>
-                              {/* Remarks */}
-                              <td className="px-2 py-1.5">
-                                <input placeholder="Notes…" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400"
-                                  value={ca.remarks}
-                                  onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} />
-                              </td>
-                              {/* Action */}
-                              <td className="px-2 py-1.5 text-center">
-                                {ca.createdInMaster
-                                  ? <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 border border-green-300 rounded-full text-[10px] font-bold whitespace-nowrap"><Check size={10}/> Created</span>
-                                  : <button onClick={() => openEstCylinderMaster(selectedPlan)}
-                                      className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded-lg transition whitespace-nowrap">
-                                      + Create
-                                    </button>}
-                              </td>
-                            </tr>
-                          ))}
-                          {cylAllocs.length === 0 && (
-                            <tr><td colSpan={12} className="p-6 text-center text-gray-400 text-xs">No cylinders configured yet.</td></tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )}
-              </div>
-              );
-            })()}
+            {/* Cylinder Planning is in Tab 3 → Production Prep */}
 
           </div>
         )}
 
-        {/* TAB 3: COST ESTIMATION */}
-          {activeTab === 3 && (
+        {/* TAB 4: COST ESTIMATION */}
+          {activeTab === 4 && (
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
               {/* ── Section 3: Multiple Quantity Costing ──────────────────── */}
               <div>
@@ -2879,6 +3402,365 @@ export default function GravureEstimationPage() {
             </div>
           )}
 
+          {/* TAB 3: PRODUCTION PREP */}
+          {activeTab === 3 && (
+            <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+              {/* Sub-tab bar */}
+              <div className="flex overflow-x-auto bg-gray-100 p-1 rounded-xl gap-1">
+                {([{ key: "shade", label: "Color Shade & LAB" }, { key: "cylinder", label: "Cylinder Master" }] as const).map(t => (
+                  <button key={t.key} onClick={() => setPrepTab(t.key)}
+                    className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap ${prepTab === t.key ? "bg-white shadow text-purple-700" : "text-gray-500 hover:text-gray-700"}`}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* ── Color Shade & LAB sub-tab ── */}
+              {prepTab === "shade" && (
+                <div className="space-y-3">
+                  <div className="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 flex items-start gap-2">
+                    <Palette size={14} className="text-purple-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-purple-800">Color Shade &amp; LAB Standard</p>
+                      <p className="text-xs text-purple-700 mt-0.5">Enter client-approved color standards with CIE LAB values for production color matching.</p>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+                    <table className="min-w-full text-[11px] border-collapse">
+                      <thead className="bg-purple-700 text-white uppercase tracking-wider">
+                        <tr>
+                          {["#", "Ink Item (Master)", "Color Name", "Type", "Pantone Ref"].map(h => (
+                            <th key={h} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">{h}</th>
+                          ))}
+                          <th colSpan={3} className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold bg-indigo-700">Standard L* A* B*</th>
+                          <th className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold">Remarks</th>
+                          <th className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold bg-green-800">Ink GSM</th>
+                          <th className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold bg-green-800">Rate ₹/Kg</th>
+                          <th className="px-2 py-2 border border-purple-600/30 text-center whitespace-nowrap font-semibold bg-green-800">Ink Cost ₹</th>
+                        </tr>
+                        <tr className="bg-purple-800 text-purple-200 text-[9px]">
+                          {["", "", "", "", ""].map((_, i) => <th key={i} className="border border-purple-700/30" />)}
+                          {["L*", "A*", "B*"].map(h => <th key={`s-${h}`} className="px-2 py-1 border border-purple-700/30 text-center bg-indigo-800/60">{h}</th>)}
+                          <th className="border border-purple-700/30" />
+                          <th className="px-2 py-1 border border-purple-700/30 text-center bg-green-900/40">gsm</th>
+                          <th className="px-2 py-1 border border-purple-700/30 text-center bg-green-900/40">₹</th>
+                          <th className="px-2 py-1 border border-purple-700/30 text-center bg-green-900/40">total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {colorShades.map((cs, i) => {
+                          const COLOR_LAB: Record<string, { l: string; a: string; b: string }> = {
+                            "Red":     { l: "41.0",  a: "54.2",  b: "38.1"  },
+                            "Yellow":  { l: "89.3",  a: "-6.1",  b: "80.4"  },
+                            "Blue":    { l: "25.1",  a: "23.4",  b: "-52.8" },
+                            "Black":   { l: "16.0",  a: "0.1",   b: "0.0"   },
+                            "White":   { l: "95.2",  a: "-1.0",  b: "2.3"   },
+                            "Green":   { l: "46.3",  a: "-50.2", b: "30.1"  },
+                            "Cyan":    { l: "60.1",  a: "-38.2", b: "-31.4" },
+                            "Magenta": { l: "48.2",  a: "72.1",  b: "-10.3" },
+                            "Orange":  { l: "65.4",  a: "43.1",  b: "65.2"  },
+                            "Violet":  { l: "30.2",  a: "40.1",  b: "-42.3" },
+                          };
+                          const PROCESS_COLOURS = new Set(["Cyan","Magenta","Yellow","Black"]);
+                          return (
+                            <tr key={i} className="hover:bg-purple-50/20">
+                              <td className="px-2 py-1.5 text-center font-black text-purple-700">{cs.colorNo}</td>
+                              <td className="px-2 py-1.5 min-w-[160px]">
+                                <select className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400"
+                                  value={cs.inkItemId ?? ""}
+                                  onChange={e => {
+                                    const ink = INK_ITEMS.find(x => x.id === e.target.value);
+                                    const lab = ink?.colour ? (COLOR_LAB[ink.colour] ?? null) : null;
+                                    const autoType: EstColorShade["inkType"] = ink?.colour && PROCESS_COLOURS.has(ink.colour) ? "Process" : "Spot";
+                                    setColorShades(p => p.map((c, ci) => ci === i ? {
+                                      ...c,
+                                      inkItemId: ink?.id ?? "",
+                                      colorName: ink?.colour || ink?.name || c.colorName,
+                                      pantoneRef: (ink as any)?.pantoneNo || c.pantoneRef,
+                                      inkType: ink ? autoType : c.inkType,
+                                      ...(lab ? { labL: lab.l, labA: lab.a, labB: lab.b } : {}),
+                                    } : c));
+                                  }}>
+                                  <option value="">-- Select Ink --</option>
+                                  {INK_ITEMS.map(ink => <option key={ink.id} value={ink.id}>{ink.name}{(ink as any).colour ? ` (${(ink as any).colour})` : ""}</option>)}
+                                </select>
+                              </td>
+                              <td className="px-2 py-1.5"><input className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.colorName} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, colorName: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5">
+                                <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-purple-400" value={cs.inkType} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, inkType: e.target.value as EstColorShade["inkType"] } : c))}>
+                                  <option value="Spot">Spot</option>
+                                  <option value="Process">Process</option>
+                                  <option value="Special">Special</option>
+                                </select>
+                              </td>
+                              <td className="px-2 py-1.5"><input placeholder="PMS 485 C" className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.pantoneRef} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, pantoneRef: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="L*" className="w-20 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labL} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, labL: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="a*" className="w-20 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labA} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, labA: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5 bg-indigo-50/40"><input type="number" step={0.01} placeholder="b*" className="w-20 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 bg-white" value={cs.labB} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, labB: e.target.value } : c))} /></td>
+                              <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-32 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-purple-400" value={cs.remarks} onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
+                              {/* ── Cost columns ── */}
+                              {(() => {
+                                const ink = cs.inkItemId ? INK_ITEMS.find(x => x.id === cs.inkItemId) : null;
+                                const inkRate = ink ? parseFloat(ink.estimationRate) || 0 : 0;
+                                const gsm = cs.inkGsm ?? 0;
+                                const areaM2 = form.quantity > 0 && form.jobWidth > 0 ? parseFloat((form.quantity * (form.jobWidth / 1000)).toFixed(2)) : 0;
+                                const inkCost = gsm > 0 && inkRate > 0 && areaM2 > 0 ? parseFloat((gsm * areaM2 / 1000 * inkRate).toFixed(2)) : 0;
+                                return (
+                                  <>
+                                    <td className="px-2 py-1.5 bg-green-50/40">
+                                      <input type="number" min={0} step={0.1} placeholder="2.0"
+                                        className="w-16 text-xs border border-green-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-green-400 text-center bg-white"
+                                        value={cs.inkGsm ?? ""}
+                                        onChange={e => setColorShades(p => p.map((c, ci) => ci === i ? { ...c, inkGsm: parseFloat(e.target.value) || 0 } : c))} />
+                                    </td>
+                                    <td className="px-2 py-1.5 bg-green-50/40 text-center font-mono text-[11px] text-green-800">
+                                      {inkRate > 0 ? `₹${inkRate.toLocaleString("en-IN")}` : <span className="text-gray-300">—</span>}
+                                    </td>
+                                    <td className="px-2 py-1.5 bg-green-50/60 text-center">
+                                      {inkCost > 0
+                                        ? <span className="px-2 py-0.5 bg-green-100 text-green-800 border border-green-300 rounded-lg text-[11px] font-bold font-mono whitespace-nowrap">₹{inkCost.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+                                        : <span className="text-gray-300 text-[10px]">—</span>}
+                                    </td>
+                                  </>
+                                );
+                              })()}
+                            </tr>
+                          );
+                        })}
+                        {colorShades.length === 0 && (
+                          <tr><td colSpan={12} className="p-6 text-center text-gray-400 text-xs">No colors. Set No. of Colors in Basic Info tab first, then come back here.</td></tr>
+                        )}
+                        {colorShades.length > 0 && (() => {
+                          const areaM2 = form.quantity > 0 && form.jobWidth > 0 ? parseFloat((form.quantity * (form.jobWidth / 1000)).toFixed(2)) : 0;
+                          const totalInkCost = colorShades.reduce((sum, cs) => {
+                            const ink = cs.inkItemId ? INK_ITEMS.find(x => x.id === cs.inkItemId) : null;
+                            const inkRate = ink ? parseFloat(ink.estimationRate) || 0 : 0;
+                            const gsm = cs.inkGsm ?? 0;
+                            return sum + (gsm > 0 && inkRate > 0 && areaM2 > 0 ? gsm * areaM2 / 1000 * inkRate : 0);
+                          }, 0);
+                          if (totalInkCost <= 0) return null;
+                          return (
+                            <tr className="bg-green-700 text-white font-bold text-[11px]">
+                              <td colSpan={9} className="px-3 py-2 text-right uppercase tracking-wider">Total Ink Cost</td>
+                              <td className="px-2 py-2" /><td className="px-2 py-2" />
+                              <td className="px-2 py-2 text-center">
+                                <span className="px-2 py-0.5 bg-white/20 rounded-lg font-mono">₹{totalInkCost.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+                              </td>
+                            </tr>
+                          );
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                  {colorShades.length > 0 && (() => {
+                    const areaM2 = form.quantity > 0 && form.jobWidth > 0 ? parseFloat((form.quantity * (form.jobWidth / 1000)).toFixed(2)) : 0;
+                    const totalInkCost = colorShades.reduce((sum, cs) => {
+                      const ink = cs.inkItemId ? INK_ITEMS.find(x => x.id === cs.inkItemId) : null;
+                      const inkRate = ink ? parseFloat(ink.estimationRate) || 0 : 0;
+                      const gsm = cs.inkGsm ?? 0;
+                      return sum + (gsm > 0 && inkRate > 0 && areaM2 > 0 ? gsm * areaM2 / 1000 * inkRate : 0);
+                    }, 0);
+                    const costedColors = colorShades.filter(cs => {
+                      const ink = cs.inkItemId ? INK_ITEMS.find(x => x.id === cs.inkItemId) : null;
+                      return ink && (cs.inkGsm ?? 0) > 0;
+                    }).length;
+                    return (
+                      <div className="flex gap-3 flex-wrap items-center">
+                        {totalInkCost > 0 && (
+                          <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-xl text-xs">
+                            <span className="text-green-600 font-semibold">Total Ink Cost:</span>
+                            <span className="font-black text-green-800 font-mono text-sm">₹{totalInkCost.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+                            <span className="text-green-500 text-[10px]">({costedColors}/{colorShades.length} colors costed)</span>
+                          </div>
+                        )}
+                        {(["Pending", "Standard Received", "Approved", "Rejected"] as const).map(s => {
+                          const cnt = colorShades.filter(c => c.status === s).length;
+                          return cnt > 0 ? (
+                            <span key={s} className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${s === "Approved" ? "bg-green-50 text-green-700 border-green-200" : s === "Standard Received" ? "bg-blue-50 text-blue-700 border-blue-200" : s === "Rejected" ? "bg-red-50 text-red-700 border-red-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
+                              {cnt} {s}
+                            </span>
+                          ) : null;
+                        })}
+                      </div>
+                    );
+                  })()}
+                  {form.noOfColors > 0 && colorShades.length === 0 && (
+                    <button onClick={initEstPrepData}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl transition">
+                      + Initialize {form.noOfColors} Color Shades
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* ── Cylinder Master sub-tab ── */}
+              {prepTab === "cylinder" && (() => {
+                const sp = selectedPlan as any;
+                const pCode = (() => {
+                  const _m = loadedFromCatalog.match(/(\d+)$/);
+                  return _m ? `P${_m[1].padStart(4, "0")}` : "";
+                })();
+                const statusCounts = cylAllocs.reduce((acc, c) => {
+                  acc[c.status] = (acc[c.status] || 0) + 1;
+                  return acc;
+                }, {} as Record<string, number>);
+                const createdCount = cylAllocs.filter(c => c.createdInMaster).length;
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-bold text-amber-700 uppercase tracking-widest">Cylinder Planning</p>
+                      {cylAllocs.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <button className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-300 text-[11px] font-bold rounded-lg transition"
+                            onClick={refreshEstFromCylinderMaster}>
+                            <RefreshCw size={11} /> Refresh from Master
+                          </button>
+                          <button className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition"
+                            onClick={() => openEstCylinderMaster(selectedPlan)}>
+                            <Wrench size={11} /> Create Cylinder in Master
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {cylAllocs.length === 0 && form.noOfColors > 0 && (
+                      <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs">
+                        <span className="text-amber-700">Initialize cylinders to plan allocation.</span>
+                        <button className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold rounded-lg transition"
+                          onClick={() => {
+                            const n = form.noOfColors || 0;
+                            setCylAllocs(Array.from({ length: n }, (_, i) => ({
+                              colorNo: i + 1, colorName: `Color ${i + 1}`,
+                              cylinderNo: "", circumference: sp ? String(sp.cylCirc ?? form.jobHeight ?? "") : String(form.jobHeight || ""),
+                              printWidth: sp ? String(sp.cylinderWidthVal ?? sp.printingWidth ?? "") : String(form.actualWidth || form.jobWidth || ""),
+                              repeatUPS: sp ? (sp.repeatUPS as number) : 1,
+                              cylinderType: "New" as const, status: "Pending" as const,
+                              remarks: "", createdInMaster: false, repeatUse: false,
+                            })));
+                          }}>
+                          + Initialize {form.noOfColors} Color Cylinders
+                        </button>
+                      </div>
+                    )}
+                    {cylAllocs.length > 0 && (
+                      <>
+                        <div className="mb-2 flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-[11px] text-blue-800">
+                          <Wrench size={12} className="text-blue-500 mt-0.5 flex-shrink-0" />
+                          <span>All colors share <strong>same cylinder</strong> — same Circ, Width &amp; Repeat UPS. Check <strong>Repeat?</strong> for colors reusing an existing cylinder.</span>
+                        </div>
+                        <div className="flex items-center gap-2 mb-2 flex-wrap text-[11px]">
+                          <span className="font-semibold text-gray-500 uppercase text-[10px]">Status:</span>
+                          {Object.entries(statusCounts).map(([st, cnt]) => (
+                            <span key={st} className={`px-2 py-0.5 rounded-full border font-bold ${st === "Available" ? "bg-green-50 text-green-700 border-green-200" : st === "Ordered" ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-gray-100 text-gray-600 border-gray-200"}`}>
+                              {cnt} {st}
+                            </span>
+                          ))}
+                          {createdCount > 0 && <span className="ml-auto text-green-600 font-bold text-[10px]">✓ {createdCount} cylinder{createdCount > 1 ? "s" : ""} created in master</span>}
+                        </div>
+                        <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+                          <table className="min-w-full text-[11px] border-collapse">
+                            <thead className="bg-amber-700 text-white uppercase tracking-wider">
+                              <tr>{["#", "Repeat?", "Product Code", "Color Name", "Cylinder Code", "Width (mm)", "Circ. (mm)", "Repeat UPS", "Type", "Status", "Remarks", "Cyl. Cost ₹", "Action"].map(h => (
+                                <th key={h} className={`px-2 py-2 border border-amber-600/30 text-center whitespace-nowrap font-semibold ${h === "Cyl. Cost ₹" ? "bg-green-800" : ""}`}>{h}</th>
+                              ))}</tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {cylAllocs.map((ca, i) => (
+                                <tr key={i} className={`hover:bg-amber-50/20 ${ca.repeatUse ? "bg-gray-50 opacity-60" : ca.createdInMaster ? "bg-green-50/30" : ""}`}>
+                                  <td className="px-2 py-1.5 text-center font-black text-amber-700">{ca.colorNo}</td>
+                                  <td className="px-2 py-1.5 text-center">
+                                    <label className="flex flex-col items-center gap-0.5 cursor-pointer select-none">
+                                      <input type="checkbox" checked={!!ca.repeatUse}
+                                        onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, repeatUse: e.target.checked } : c))}
+                                        className="w-4 h-4 accent-orange-500 cursor-pointer" />
+                                      {ca.repeatUse && <span className="text-[9px] text-orange-600 font-bold leading-none">Skip</span>}
+                                    </label>
+                                  </td>
+                                  <td className="px-2 py-1.5 text-center">
+                                    {pCode ? <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-bold font-mono whitespace-nowrap">{pCode}</span> : <span className="text-gray-400 text-[10px]">Direct</span>}
+                                  </td>
+                                  <td className="px-2 py-1.5"><input className="w-24 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400 bg-gray-50" value={ca.colorName} onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, colorName: e.target.value } : c))} /></td>
+                                  <td className="px-2 py-1.5"><input className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 bg-white" placeholder="e.g. CUC-001" value={ca.cylinderNo} onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderNo: e.target.value } : c))} /></td>
+                                  <td className="px-2 py-1.5"><input type="number" className="w-20 text-xs border border-gray-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-amber-400 text-center" value={ca.printWidth} onChange={e => setCylAllocs(p => p.map(c => ({ ...c, printWidth: e.target.value })))} /></td>
+                                  <td className="px-2 py-1.5"><input type="number" className="w-20 text-xs border border-indigo-200 rounded-lg px-2 py-1 font-mono outline-none focus:ring-2 focus:ring-indigo-400 text-center bg-indigo-50/40" value={ca.circumference} onChange={e => setCylAllocs(p => p.map(c => ({ ...c, circumference: e.target.value })))} /></td>
+                                  <td className="px-2 py-1.5 text-center"><span className="px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-full text-[10px] font-bold">{ca.repeatUPS}×</span></td>
+                                  <td className="px-2 py-1.5">
+                                    <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400" value={ca.cylinderType} onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, cylinderType: e.target.value as EstCylAlloc["cylinderType"] } : c))}>
+                                      <option value="New">New</option><option value="Existing">Existing</option><option value="Repeat">Repeat Cylinder</option><option value="Rechromed">Rechromed</option>
+                                    </select>
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <select className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white outline-none focus:ring-2 focus:ring-amber-400" value={ca.status} onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, status: e.target.value as EstCylAlloc["status"] } : c))}>
+                                      <option value="Pending">Pending</option><option value="Ordered">Ordered</option><option value="Available">Available</option><option value="In Use">In Use</option><option value="Under Chrome">Under Chrome</option>
+                                    </select>
+                                  </td>
+                                  <td className="px-2 py-1.5"><input placeholder="Notes…" className="w-28 text-xs border border-gray-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-amber-400" value={ca.remarks} onChange={e => setCylAllocs(p => p.map((c, ci) => ci === i ? { ...c, remarks: e.target.value } : c))} /></td>
+                                  <td className="px-2 py-1.5 text-center bg-green-50/40">
+                                    {ca.repeatUse
+                                      ? <span className="text-gray-400 text-[10px]">Skip</span>
+                                      : <span className="px-2 py-0.5 bg-green-100 text-green-800 border border-green-200 rounded-lg text-[10px] font-bold font-mono whitespace-nowrap">₹{(form.cylinderCostPerColor || 0).toLocaleString("en-IN")}</span>}
+                                  </td>
+                                  <td className="px-2 py-1.5 text-center">
+                                    {ca.createdInMaster
+                                      ? <span className="flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 border border-green-300 rounded-full text-[10px] font-bold whitespace-nowrap"><Check size={10}/> Created</span>
+                                      : <button onClick={() => openEstCylinderMaster(selectedPlan)} className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded-lg transition whitespace-nowrap">+ Create</button>}
+                                  </td>
+                                </tr>
+                              ))}
+                              {cylAllocs.length === 0 && <tr><td colSpan={13} className="p-6 text-center text-gray-400 text-xs">No cylinders configured yet.</td></tr>}
+                              {cylAllocs.length > 0 && (() => {
+                                const billableCyls = cylAllocs.filter(c => !c.repeatUse).length;
+                                const totalCylCost = billableCyls * (form.cylinderCostPerColor || 0);
+                                return (
+                                  <tr className="bg-green-700 text-white font-bold text-[11px]">
+                                    <td colSpan={11} className="px-3 py-2 text-right uppercase tracking-wider">
+                                      Total Cylinder Cost ({billableCyls} new × ₹{(form.cylinderCostPerColor || 0).toLocaleString("en-IN")})
+                                    </td>
+                                    <td className="px-2 py-2 text-center">
+                                      <span className="px-2 py-0.5 bg-white/20 rounded-lg font-mono">₹{totalCylCost.toLocaleString("en-IN")}</span>
+                                    </td>
+                                    <td className="px-2 py-2" />
+                                  </tr>
+                                );
+                              })()}
+                            </tbody>
+                          </table>
+                        </div>
+                        {/* Cylinder cost summary card */}
+                        {(() => {
+                          const billableCyls = cylAllocs.filter(c => !c.repeatUse).length;
+                          const repeatCyls   = cylAllocs.filter(c => !!c.repeatUse).length;
+                          const totalCylCost = billableCyls * (form.cylinderCostPerColor || 0);
+                          const createdCount2 = cylAllocs.filter(c => c.createdInMaster).length;
+                          return (
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-1">
+                              <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 text-center">
+                                <p className="text-[10px] text-amber-500 uppercase font-semibold">New Cylinders</p>
+                                <p className="text-lg font-black text-amber-800">{billableCyls}</p>
+                              </div>
+                              <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-center">
+                                <p className="text-[10px] text-gray-400 uppercase font-semibold">Repeat (Skip)</p>
+                                <p className="text-lg font-black text-gray-500">{repeatCyls}</p>
+                              </div>
+                              <div className="bg-green-50 border border-green-200 rounded-xl px-3 py-2.5 text-center">
+                                <p className="text-[10px] text-green-500 uppercase font-semibold">Created in Master</p>
+                                <p className="text-lg font-black text-green-700">{createdCount2}</p>
+                              </div>
+                              <div className="bg-green-100 border border-green-300 rounded-xl px-3 py-2.5 text-center">
+                                <p className="text-[10px] text-green-600 uppercase font-semibold">Total Cylinder Cost</p>
+                                <p className="text-lg font-black text-green-900 font-mono">₹{totalCylCost.toLocaleString("en-IN")}</p>
+                                <p className="text-[9px] text-green-600">@ ₹{(form.cylinderCostPerColor || 0).toLocaleString("en-IN")}/color</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
         </div>
 
         <div className="flex justify-between items-center mt-6 pt-6 border-t border-gray-200">
@@ -2887,8 +3769,8 @@ export default function GravureEstimationPage() {
           </div>
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setModal(false)}>Cancel</Button>
-            {activeTab < 3 ? (
-              <Button onClick={() => setActiveTab(activeTab + 1)}>Next</Button>
+            {activeTab < 4 ? (
+              <Button onClick={() => { setActiveTab(activeTab + 1); if (activeTab + 1 === 3 && colorShades.length === 0) initEstPrepData(); }}>Next</Button>
             ) : (
               <>
                 <Button icon={<Calculator size={14} />} onClick={save}>
@@ -2899,6 +3781,235 @@ export default function GravureEstimationPage() {
           </div>
         </div>
       </Modal>
+
+      {/* ══ FILM LOT PICKER MODAL ════════════════════════════════ */}
+      {filmLotPickerOpen !== null && (() => {
+        const plyIndex = filmLotPickerOpen;
+        const l = form.secondaryLayers[plyIndex];
+        if (!l) return null;
+        const masterRate = parseFloat(FILM_ITEMS.find(fi => fi.subGroup === l.itemSubGroup)?.estimationRate || "0");
+        const currentRate = l.filmRate !== undefined ? l.filmRate : masterRate;
+        const lots = grnRecords.flatMap(g => g.lines
+          .filter(line => line.itemGroup === "Film" && line.subGroup === l.itemSubGroup)
+          .map(line => ({ grnNo: g.grnNo, grnDate: g.grnDate, supplier: g.supplier, batchNo: line.batchNo, rate: line.rate, qty: line.receivedQty, unit: line.stockUnit }))
+        );
+        return (
+          <>
+            {/* Backdrop */}
+            <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm" onClick={() => setFilmLotPickerOpen(null)} />
+            {/* Panel */}
+            <div className="fixed z-[61] inset-x-4 bottom-0 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-[560px] bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[80vh] overflow-hidden">
+              {/* Header */}
+              <div className="bg-gradient-to-r from-orange-600 to-orange-500 px-4 py-3 flex items-center justify-between flex-shrink-0">
+                <div>
+                  <p className="text-white font-black text-sm uppercase tracking-wide">{l.itemSubGroup}</p>
+                  <p className="text-orange-100 text-[10px] mt-0.5">Select a purchase lot to use its rate in cost estimation</p>
+                </div>
+                <button onClick={() => setFilmLotPickerOpen(null)} className="text-white/70 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition"><X size={16}/></button>
+              </div>
+
+              {/* Rate comparison banner */}
+              <div className="grid grid-cols-2 gap-px bg-gray-200 flex-shrink-0">
+                <div className="bg-blue-50 px-4 py-2.5 text-center">
+                  <p className="text-[9px] text-blue-400 uppercase font-bold tracking-wider">Master (Estimation) Rate</p>
+                  <p className="text-xl font-black text-blue-700 font-mono">₹{masterRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-blue-400">/Kg</span></p>
+                </div>
+                <div className="bg-orange-50 px-4 py-2.5 text-center">
+                  <p className="text-[9px] text-orange-400 uppercase font-bold tracking-wider">Currently Applied Rate</p>
+                  <p className="text-xl font-black text-orange-700 font-mono">₹{currentRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-orange-400">/Kg</span></p>
+                </div>
+              </div>
+
+              {/* Lots list */}
+              <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+                {lots.map((lot, li) => {
+                  const diff = masterRate > 0 ? lot.rate - masterRate : 0;
+                  const diffPct = masterRate > 0 ? ((diff / masterRate) * 100) : 0;
+                  const isSelected = currentRate === lot.rate;
+                  const cheaper = diff < 0;
+                  return (
+                    <div key={li} className={`flex items-stretch gap-0 transition ${isSelected ? "bg-orange-50 ring-2 ring-inset ring-orange-400" : "hover:bg-gray-50"}`}>
+                      {/* Left: color indicator */}
+                      <div className={`w-1 flex-shrink-0 ${cheaper ? "bg-green-400" : diff > 0 ? "bg-red-400" : "bg-gray-300"}`} />
+                      <div className="flex-1 px-4 py-3 min-w-0">
+                        {/* Top row */}
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="font-black text-gray-900 font-mono text-base">₹{lot.rate.toLocaleString("en-IN")}/Kg</span>
+                          {/* vs master diff badge */}
+                          {diff !== 0 && (
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${cheaper ? "bg-green-100 text-green-700 border border-green-200" : "bg-red-100 text-red-700 border border-red-200"}`}>
+                              {cheaper ? "▼" : "▲"} ₹{Math.abs(diff).toLocaleString("en-IN")}/Kg ({diffPct > 0 ? "+" : ""}{diffPct.toFixed(1)}% vs master)
+                            </span>
+                          )}
+                          {diff === 0 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200">= Same as master</span>}
+                          {isSelected && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-200 text-orange-800 border border-orange-300">✓ Applied</span>}
+                        </div>
+                        {/* Info rows */}
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-gray-500">
+                          <span><span className="text-gray-400">GRN:</span> <span className="font-semibold text-gray-700">{lot.grnNo}</span> · {lot.grnDate}</span>
+                          <span><span className="text-gray-400">Supplier:</span> <span className="font-semibold text-gray-700 truncate">{lot.supplier}</span></span>
+                          <span className="truncate"><span className="text-gray-400">Batch:</span> <span className="font-mono text-gray-600">{lot.batchNo}</span></span>
+                          <span><span className="text-gray-400">In Stock:</span> <span className="font-semibold text-gray-700">{lot.qty.toLocaleString("en-IN")} {lot.unit}</span></span>
+                        </div>
+                      </div>
+                      {/* Right: apply button */}
+                      <div className="flex items-center pr-3">
+                        <button type="button"
+                          onClick={() => { const layers = [...form.secondaryLayers]; layers[plyIndex] = { ...l, filmRate: lot.rate }; f("secondaryLayers", layers); setFilmLotPickerOpen(null); }}
+                          className={`px-3 py-2 rounded-xl text-[11px] font-bold transition ${isSelected ? "bg-orange-100 text-orange-700 border border-orange-300 cursor-default" : "bg-orange-600 hover:bg-orange-700 text-white shadow-sm"}`}>
+                          {isSelected ? "Applied" : "Apply"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {lots.length === 0 && (
+                  <div className="p-8 text-center text-gray-400 text-sm">No stock lots found for {l.itemSubGroup}</div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex-shrink-0 px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3">
+                <button type="button"
+                  onClick={() => { const masterR = masterRate; const layers = [...form.secondaryLayers]; layers[plyIndex] = { ...l, filmRate: masterR }; f("secondaryLayers", layers); setFilmLotPickerOpen(null); }}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-[11px] font-bold transition">
+                  <RefreshCw size={11} /> Reset to Master Rate (₹{masterRate.toLocaleString("en-IN")})
+                </button>
+                <button onClick={() => setFilmLotPickerOpen(null)}
+                  className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl text-[11px] font-bold transition">Close</button>
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* ══ CONSUMABLE ITEM LOT PICKER MODAL ════════════════════ */}
+      {ciLotPickerOpen !== null && (() => {
+        const { plyIdx, ciIdx } = ciLotPickerOpen;
+        const l = form.secondaryLayers[plyIdx];
+        const ci = l?.consumableItems[ciIdx];
+        if (!ci) return null;
+        const masterItem = ALL_MAT_ITEMS.find(x => x.id === ci.itemId);
+        const masterRate = parseFloat(masterItem?.estimationRate ?? "0") || 0;
+        const currentRate = ci.rate || 0;
+        const lots = grnRecords.flatMap(g => g.lines
+          .filter(line => line.itemGroup === ci.itemGroup && line.subGroup === ci.itemSubGroup)
+          .map(line => ({ grnNo: g.grnNo, grnDate: g.grnDate, supplier: g.supplier, batchNo: line.batchNo, rate: line.rate, qty: line.receivedQty, unit: line.stockUnit, itemName: line.itemName }))
+        );
+        const groupColor: Record<string, string> = { Ink: "from-blue-600 to-blue-500", Solvent: "from-purple-600 to-purple-500", Adhesive: "from-violet-600 to-violet-500", Hardner: "from-pink-600 to-pink-500" };
+        const gradClass = groupColor[ci.itemGroup] ?? "from-orange-600 to-orange-500";
+        return (
+          <>
+            <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm" onClick={() => setCiLotPickerOpen(null)} />
+            <div className="fixed z-[61] inset-x-4 bottom-0 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-[580px] bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col max-h-[85vh] sm:max-h-[80vh] overflow-hidden">
+              {/* Header */}
+              <div className={`bg-gradient-to-r ${gradClass} px-4 py-3 flex items-center justify-between flex-shrink-0`}>
+                <div>
+                  <p className="text-white font-black text-sm">{ci.itemSubGroup || ci.itemGroup} — Stock Lots</p>
+                  <p className="text-white/80 text-[10px] mt-0.5">{ci.itemName || "Select an item first"} · {ci.itemGroup}</p>
+                </div>
+                <button onClick={() => setCiLotPickerOpen(null)} className="text-white/70 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition"><X size={16}/></button>
+              </div>
+              {/* Rate comparison banner */}
+              <div className="grid grid-cols-2 gap-px bg-gray-200 flex-shrink-0">
+                <div className="bg-blue-50 px-4 py-2.5 text-center">
+                  <p className="text-[9px] text-blue-400 uppercase font-bold tracking-wider">Master (Estimation) Rate</p>
+                  <p className="text-xl font-black text-blue-700 font-mono">{masterRate > 0 ? <>₹{masterRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-blue-400">/Kg</span></> : <span className="text-sm text-blue-300">—</span>}</p>
+                </div>
+                <div className="bg-orange-50 px-4 py-2.5 text-center">
+                  <p className="text-[9px] text-orange-400 uppercase font-bold tracking-wider">Currently Applied Rate</p>
+                  <p className="text-xl font-black text-orange-700 font-mono">{currentRate > 0 ? <>₹{currentRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-orange-400">/Kg</span></> : <span className="text-sm text-orange-300">—</span>}</p>
+                </div>
+              </div>
+              {/* Lots list */}
+              <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+                {lots.map((lot, li) => {
+                  const diff = masterRate > 0 ? lot.rate - masterRate : 0;
+                  const diffPct = masterRate > 0 ? ((diff / masterRate) * 100) : 0;
+                  const isSelected = currentRate === lot.rate;
+                  const cheaper = diff < 0;
+                  return (
+                    <div key={li} className={`flex items-stretch gap-0 transition ${isSelected ? "bg-orange-50 ring-2 ring-inset ring-orange-400" : "hover:bg-gray-50"}`}>
+                      <div className={`w-1 flex-shrink-0 ${cheaper ? "bg-green-400" : diff > 0 ? "bg-red-400" : "bg-gray-300"}`} />
+                      <div className="flex-1 px-4 py-3 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="font-black text-gray-900 font-mono text-base">₹{lot.rate.toLocaleString("en-IN")}/Kg</span>
+                          {diff !== 0 && masterRate > 0 && (
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${cheaper ? "bg-green-100 text-green-700 border border-green-200" : "bg-red-100 text-red-700 border border-red-200"}`}>
+                              {cheaper ? "▼" : "▲"} ₹{Math.abs(diff).toLocaleString("en-IN")}/Kg ({diffPct > 0 ? "+" : ""}{diffPct.toFixed(1)}% vs master)
+                            </span>
+                          )}
+                          {masterRate > 0 && diff === 0 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200">= Same as master</span>}
+                          {isSelected && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-200 text-orange-800 border border-orange-300">✓ Applied</span>}
+                        </div>
+                        <div className="text-[10px] text-gray-500 mb-0.5 font-medium truncate">{lot.itemName}</div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-gray-500">
+                          <span><span className="text-gray-400">GRN:</span> <span className="font-semibold text-gray-700">{lot.grnNo}</span> · {lot.grnDate}</span>
+                          <span><span className="text-gray-400">Supplier:</span> <span className="font-semibold text-gray-700 truncate">{lot.supplier}</span></span>
+                          <span className="truncate"><span className="text-gray-400">Batch:</span> <span className="font-mono text-gray-600">{lot.batchNo}</span></span>
+                          <span><span className="text-gray-400">In Stock:</span> <span className="font-semibold text-gray-700">{lot.qty.toLocaleString("en-IN")} {lot.unit}</span></span>
+                        </div>
+                      </div>
+                      <div className="flex items-center pr-3">
+                        <button type="button"
+                          onClick={() => { updatePlyConsumable(plyIdx, ciIdx, { rate: lot.rate }); setCiLotPickerOpen(null); }}
+                          className={`px-3 py-2 rounded-xl text-[11px] font-bold transition ${isSelected ? "bg-orange-100 text-orange-700 border border-orange-300 cursor-default" : "bg-orange-600 hover:bg-orange-700 text-white shadow-sm"}`}>
+                          {isSelected ? "Applied" : "Apply"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {lots.length === 0 && (
+                  <div className="p-8 text-center text-gray-400 text-sm">No stock lots found for {ci.itemSubGroup || ci.itemGroup}</div>
+                )}
+              </div>
+              {/* Footer */}
+              <div className="flex-shrink-0 px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3">
+                {masterRate > 0 && (
+                  <button type="button"
+                    onClick={() => { updatePlyConsumable(plyIdx, ciIdx, { rate: masterRate }); setCiLotPickerOpen(null); }}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-[11px] font-bold transition">
+                    <RefreshCw size={11} /> Reset to Master Rate (₹{masterRate.toLocaleString("en-IN")})
+                  </button>
+                )}
+                <button onClick={() => setCiLotPickerOpen(null)}
+                  className="ml-auto px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl text-[11px] font-bold transition">Close</button>
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* ══ ATTACHMENT PREVIEW MODAL ══════════════════════════════ */}
+      {previewAttachment && (
+        <Modal open onClose={() => setPreviewAttachment(null)} title={previewAttachment.name} size="xl">
+          <div className="flex flex-col items-center justify-center min-h-[60vh]">
+            {previewAttachment.mimeType.startsWith("image/") ? (
+              <img src={previewAttachment.url} alt={previewAttachment.name}
+                className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-lg" />
+            ) : previewAttachment.mimeType === "application/pdf" ? (
+              <iframe src={previewAttachment.url} title={previewAttachment.name}
+                className="w-full rounded-xl border border-gray-200 shadow" style={{ height: "70vh" }} />
+            ) : (
+              <div className="flex flex-col items-center gap-4 py-16 text-center">
+                <div className="w-20 h-20 rounded-2xl bg-gray-100 flex items-center justify-center">
+                  <span className="text-2xl font-black text-gray-400">
+                    {previewAttachment.name.split(".").pop()?.toUpperCase() ?? "FILE"}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500 max-w-xs">
+                  Preview is not available for this file type.<br />Use the download button to open it.
+                </p>
+                <a href={previewAttachment.url} download={previewAttachment.name}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition">
+                  ↓ Download {previewAttachment.name}
+                </a>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
 
       {/* ══ VIEW MODAL ════════════════════════════════════════════ */}
       {viewRow && (
@@ -3098,14 +4209,51 @@ export default function GravureEstimationPage() {
 
       {/* ══ UPS LAYOUT PREVIEW MODAL ════════════════════════════ */}
       {upsPreviewPlan && (() => {
-        const plan   = upsPreviewPlan as any;
-        const jobW   = form.actualWidth || form.jobWidth || 0;
-        const shrink = (form as any).widthShrinkage || 0;
-        const trim   = form.trimmingSize || 0;
-        const acUps  = plan.acUps as number;
-        const filmW  = plan.filmSize as number;
+        const plan        = upsPreviewPlan as any;
+        const isSleeve    = ((form as any).structureType || "") === "Sleeve";
+        const jobW        = form.actualWidth || form.jobWidth || 0;
+        const shrink      = (form as any).widthShrinkage || 0;
+        const trim        = form.trimmingSize || 0;
+        const slvTransp   = isSleeve ? ((form as any).transparentArea || 0) : 0;
+        const slvSeam     = isSleeve ? ((form as any).seamingArea     || 0) : 0;
+        const sleeveFilmWidth = isSleeve ? (jobW * 2 + slvTransp + slvSeam) : 0;
+        const acUps       = plan.acUps as number;
+        const filmW       = plan.filmSize as number;
 
-        const effRepeat = (form.jobHeight || 0) + shrink;
+        const contentEst    = (form as any).content || "";
+        const gussetEst     = (form as any).gusset      || 0;
+        const topSealEst    = (form as any).topSeal     || 0;
+        const btmSealEst    = (form as any).bottomSeal  || 0;
+        const sideSealEst   = (form as any).sideSeal    || 0;
+        const ctrSealEst    = (form as any).centerSealWidth || 0;
+        const sideGussetEst = (form as any).sideGusset  || 0;
+
+        // Per-pouch-type effective repeat
+        let effRepeat: number;
+        if (isSleeve) {
+          effRepeat = (plan.cylCirc as number) / (plan.repeatUPS as number);
+        } else if (contentEst === "Pouch — 3 Side Seal" || contentEst === "Pouch — Center Seal" || contentEst === "Both Side Gusset Pouch") {
+          effRepeat = (form.jobHeight || 0) + topSealEst + btmSealEst + shrink;
+        } else if (contentEst === "Standup Pouch" || contentEst === "Zipper Pouch" || contentEst === "3D Pouch / Flat Bottom") {
+          effRepeat = (form.jobHeight || 0) + topSealEst + (gussetEst > 0 ? gussetEst / 2 : 0) + shrink;
+        } else {
+          effRepeat = (form.jobHeight || 0) + shrink;
+        }
+
+        // Per-pouch-type lane width (film width per UPS)
+        let diagLaneW: number;
+        if (isSleeve) {
+          diagLaneW = jobW * 2 + slvTransp + slvSeam;
+        } else if (contentEst === "Pouch — 3 Side Seal" || contentEst === "Standup Pouch" || contentEst === "Zipper Pouch") {
+          diagLaneW = jobW + 2 * sideSealEst;
+        } else if (contentEst === "Pouch — Center Seal") {
+          diagLaneW = jobW * 2 + ctrSealEst;
+        } else if (contentEst === "Both Side Gusset Pouch" || contentEst === "3D Pouch / Flat Bottom") {
+          diagLaneW = jobW + 2 * sideGussetEst;
+        } else {
+          diagLaneW = jobW;
+        }
+
         const repeatUPS = plan.repeatUPS as number;
         const cylCirc   = plan.cylCirc   as number;
         const jobH      = form.jobHeight || 0;
@@ -3119,7 +4267,7 @@ export default function GravureEstimationPage() {
         const sx = (mm: number) => mm * (drawW / (filmW || 1));
         const sy = (mm: number) => mm * (drawH / (cylCirc || 1));
         const trimPx = sx(trim);
-        const lanePx = sx(jobW);
+        const lanePx = isSleeve ? sx(sleeveFilmWidth) : sx(diagLaneW);
         const repPx  = sy(effRepeat);
         const C_TRIM  = "#fed7aa";
         const C_LANE  = ["#dbeafe", "#bfdbfe"];
@@ -3131,18 +4279,32 @@ export default function GravureEstimationPage() {
             <div className="space-y-4">
               {/* Stats row */}
               <div className="flex flex-wrap gap-2 text-xs">
-                {[
-                  { l: "Film Width",    v: `${filmW} mm`,              cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-                  { l: "AC UPS",        v: String(acUps),              cls: "bg-purple-50 text-purple-700 border-purple-200" },
-                  { l: "Job Width",     v: `${jobW} mm`,               cls: "bg-blue-50 text-blue-700 border-blue-200" },
-                  { l: "Repeat Shrink", v: shrink > 0 ? `+${shrink} mm (on repeat length)` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
-                  { l: "Trimming",      v: trim > 0 ? `${trim}+${trim} mm` : "—", cls: "bg-orange-50 text-orange-700 border-orange-200" },
-                  { l: "Repeat UPS",    v: String(plan.repeatUPS),     cls: "bg-teal-50 text-teal-700 border-teal-200" },
-                  { l: "Total Pieces",  v: String(plan.totalUPS),      cls: "bg-green-50 text-green-700 border-green-200" },
-                  { l: "Cylinder",      v: plan.cylinderCode,          cls: "bg-violet-50 text-violet-700 border-violet-200" },
-                  { l: "Cyl. Circ",     v: `${plan.cylCirc} mm`,       cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-                  { l: "Machine",       v: plan.machineName,           cls: "bg-gray-50 text-gray-700 border-gray-200" },
-                ].map(s => (
+                {(() => {
+                  const dc = jobW * 2 + slvSeam + slvTransp;
+                  const cutLen = form.jobHeight || 0;
+                  const cutWithShrink = cutLen + shrink;
+                  const baseStats = [
+                    { l: "Film Width", v: `${filmW} mm`,  cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+                    { l: "AC UPS",     v: String(acUps),  cls: "bg-purple-50 text-purple-700 border-purple-200" },
+                    { l: isSleeve ? "Layflat" : "Job Width", v: `${jobW} mm`, cls: "bg-blue-50 text-blue-700 border-blue-200" },
+                  ];
+                  const typeStats = isSleeve ? [
+                    { l: "Design Circ",  v: (() => { const p=[`${jobW}×2`]; if(slvTransp>0)p.push(`+${slvTransp}`); if(slvSeam>0)p.push(`+${slvSeam}`); return `${p.join("")} = ${dc} mm`; })(), cls: "bg-blue-100 text-blue-800 border-blue-300" },
+                    { l: "Cut Length",   v: shrink > 0 ? `${cutLen}+${shrink} = ${cutWithShrink} mm` : `${cutLen} mm`, cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                    { l: "Repeat Count", v: `${plan.repeatUPS}×`, cls: "bg-teal-50 text-teal-700 border-teal-200" },
+                    { l: "Cyl. Circ",    v: `${cutWithShrink}×${plan.repeatUPS} = ${plan.cylCirc} mm`, cls: "bg-emerald-50 text-emerald-800 border-emerald-300" },
+                  ] : [
+                    { l: "Length Shrink", v: shrink > 0 ? `+${shrink} mm` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                    { l: "Trimming",      v: trim > 0 ? `${trim}+${trim} mm` : "—", cls: "bg-orange-50 text-orange-700 border-orange-200" },
+                    { l: "Repeat UPS",    v: String(plan.repeatUPS), cls: "bg-teal-50 text-teal-700 border-teal-200" },
+                    { l: "Cyl. Circ",     v: `${plan.cylCirc} mm`, cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+                  ];
+                  return [...baseStats, ...typeStats,
+                    { l: "Total Pieces", v: String(plan.totalUPS), cls: "bg-green-50 text-green-700 border-green-200" },
+                    { l: "Cylinder",     v: plan.cylinderCode,     cls: "bg-violet-50 text-violet-700 border-violet-200" },
+                    { l: "Machine",      v: plan.machineName,      cls: "bg-gray-50 text-gray-700 border-gray-200" },
+                  ];
+                })().map(s => (
                   <div key={s.l} className={`px-2.5 py-1.5 rounded-lg border font-medium ${s.cls}`}>
                     <span className="opacity-60 text-[10px] uppercase tracking-wider block leading-none mb-0.5">{s.l}</span>
                     <span className="font-bold">{s.v}</span>
@@ -3193,7 +4355,7 @@ export default function GravureEstimationPage() {
                                   markerStart="url(#dim-start2)" markerEnd="url(#dim-end2)" />
                                 <rect x={laneStartX + lanePx / 2 - 22} y={ay - 8} width={44} height={12} fill="rgba(255,255,255,0.85)" rx={2} />
                                 <text x={laneStartX + lanePx / 2} y={ay + 3} textAnchor="middle" fontSize={8} fill="#1e40af" fontWeight="700">
-                                  {jobW} mm
+                                  {diagLaneW} mm
                                 </text>
                               </g>
                             );
@@ -3229,7 +4391,7 @@ export default function GravureEstimationPage() {
                     ticks.push(<text key="t0" x={cx} y={ry+8} fontSize={7} fill="#9ca3af">0</text>);
                     if (trim > 0) { cx += trimPx; ticks.push(<text key="tt" x={cx} y={ry+8} fontSize={7} fill="#f97316" textAnchor="middle">{trim}</text>); }
                     for (let li = 0; li <= acUps; li++) {
-                      const xmm = trim + li * jobW;
+                      const xmm = trim + li * diagLaneW;
                       const xpx = sx(xmm);
                       ticks.push(<g key={`bt-${li}`}><line x1={xpx} y1={ry-2} x2={xpx} y2={ry+2} stroke="#9ca3af" strokeWidth={0.8} />{(li===0||li===acUps||li===Math.floor(acUps/2))&&<text x={xpx} y={ry+9} fontSize={7} fill="#6b7280" textAnchor="middle">{xmm}</text>}</g>);
                     }
@@ -3273,7 +4435,7 @@ export default function GravureEstimationPage() {
                 {/* Legend */}
                 <div className="flex flex-wrap gap-3 mt-3 pt-2 border-t border-gray-200">
                   {[
-                    { color: "#dbeafe", border: "#6366f1", label: `Job cell — ${jobW}mm wide × ${effRepeat}mm repeat length` },
+                    { color: "#dbeafe", border: "#6366f1", label: `Job cell — ${diagLaneW}mm wide × ${effRepeat}mm repeat length` },
                     ...(trim > 0 ? [{ color: C_TRIM, border: "#f97316", label: `Trim both sides (${trim}mm each)` }] : []),
                     ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: `Shrinkage +${shrink}mm on repeat length` }] : []),
                   ].map(l => (
@@ -3296,7 +4458,12 @@ export default function GravureEstimationPage() {
                     <tbody className="divide-y divide-gray-100 bg-white">
                       {trim>0&&<tr><td className="px-3 py-1.5 text-gray-500">Left Bleed</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{background:"#fff7ed",color:"#c2410c"}}>Trim</span></td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">{trim}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{background:"#fed7aa",border:"1px solid #c2410c"}}/></td></tr>}
                       {Array.from({length:acUps},(_,i)=>(
-                        <tr key={i}><td className="px-3 py-1.5 text-gray-500">{i+1} UPS</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{background:"#e0e7ff",color:"#4338ca"}}>Job Width</span></td><td className="px-3 py-1.5 font-mono font-bold text-indigo-600">{jobW}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{background:"#e0e7ff",border:"1px solid #6366f1"}}/></td></tr>
+                        <tr key={i}>
+                          <td className="px-3 py-1.5 text-gray-500">{i+1} UPS{isSleeve && <span className="ml-1 text-[10px] text-gray-400">(LF×2+T+S)</span>}</td>
+                          <td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{background:"#e0e7ff",color:"#4338ca"}}>{isSleeve ? "Sleeve Lane (LF×2+T+S)" : diagLaneW !== jobW ? "Pouch Lane (W+seals/gusset)" : "Job Width"}</span></td>
+                          <td className="px-3 py-1.5 font-mono font-bold text-indigo-600">{isSleeve ? sleeveFilmWidth : diagLaneW}</td>
+                          <td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{background:"#e0e7ff",border:"1px solid #6366f1"}}/></td>
+                        </tr>
                       ))}
                       {trim>0&&<tr><td className="px-3 py-1.5 text-gray-500">Right Bleed</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{background:"#fff7ed",color:"#c2410c"}}>Trim</span></td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">{trim}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{background:"#fed7aa",border:"1px solid #c2410c"}}/></td></tr>}
                       {plan.deadMargin>0&&<tr><td className="px-3 py-1.5 text-gray-400 italic">Dead Margin</td><td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-500">Waste</span></td><td className="px-3 py-1.5 font-mono text-gray-400">{plan.deadMargin}</td><td className="px-3 py-1.5"><div className="w-5 h-3 rounded bg-gray-200 border border-gray-400"/></td></tr>}
@@ -3315,11 +4482,14 @@ export default function GravureEstimationPage() {
                       <tr>{["Component","Value","Note"].map(h=><th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 bg-white">
-                      <tr><td className="px-3 py-1.5 text-gray-600">Repeat Length</td><td className="px-3 py-1.5 font-mono font-bold text-indigo-700">{jobH} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">As entered in Basic Info</td></tr>
+                      <tr><td className="px-3 py-1.5 text-gray-600">Pouch / Repeat Height</td><td className="px-3 py-1.5 font-mono font-bold text-indigo-700">{jobH} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">As entered</td></tr>
+                      {topSealEst>0&&<tr><td className="px-3 py-1.5 text-gray-600">+ Top Seal</td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{topSealEst} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">Top seal added to repeat</td></tr>}
+                      {btmSealEst>0&&(contentEst==="Pouch — 3 Side Seal"||contentEst==="Pouch — Center Seal"||contentEst==="Both Side Gusset Pouch")&&<tr><td className="px-3 py-1.5 text-gray-600">+ Bottom Seal</td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{btmSealEst} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">Bottom seal added to repeat</td></tr>}
+                      {gussetEst>0&&(contentEst==="Standup Pouch"||contentEst==="Zipper Pouch"||contentEst==="3D Pouch / Flat Bottom")&&<tr><td className="px-3 py-1.5 text-gray-600">+ Bottom Gusset / 2</td><td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{gussetEst/2} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">Bottom gusset folds into repeat</td></tr>}
                       {shrink>0&&<tr><td className="px-3 py-1.5 text-gray-600">+ Shrinkage</td><td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">+{shrink} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">Applied to repeat length only</td></tr>}
-                      <tr className="bg-teal-50"><td className="px-3 py-1.5 font-bold text-teal-800">= Effective Repeat</td><td className="px-3 py-1.5 font-mono font-bold text-teal-700">{jobH+shrink} mm</td><td className="px-3 py-1.5 text-teal-600 text-[10px]">Repeat Length + Shrinkage</td></tr>
+                      <tr className="bg-teal-50"><td className="px-3 py-1.5 font-bold text-teal-800">= Effective Repeat</td><td className="px-3 py-1.5 font-mono font-bold text-teal-700">{effRepeat} mm</td><td className="px-3 py-1.5 text-teal-600 text-[10px]">Used for cylinder circumference matching</td></tr>
                       <tr><td className="px-3 py-1.5 text-gray-600">Cylinder Circumference</td><td className="px-3 py-1.5 font-mono font-bold text-emerald-700">{plan.cylCirc} mm</td><td className="px-3 py-1.5 text-gray-400 text-[10px]">{plan.cylinderCode} — {plan.cylinderName}</td></tr>
-                      <tr className="bg-green-50 border-t-2 border-green-200"><td className="px-3 py-2 font-bold text-green-800">÷ Repeat UPS</td><td className="px-3 py-2 font-mono font-bold text-green-700 text-sm">{plan.repeatUPS}×</td><td className="px-3 py-2 text-green-600 text-[10px]">{plan.cylCirc} ÷ {jobH+shrink} = {plan.repeatUPS} repeats per revolution</td></tr>
+                      <tr className="bg-green-50 border-t-2 border-green-200"><td className="px-3 py-2 font-bold text-green-800">÷ Repeat UPS</td><td className="px-3 py-2 font-mono font-bold text-green-700 text-sm">{plan.repeatUPS}×</td><td className="px-3 py-2 text-green-600 text-[10px]">{plan.cylCirc} ÷ {effRepeat} = {plan.repeatUPS} repeats per revolution</td></tr>
                     </tbody>
                   </table>
                 </div>

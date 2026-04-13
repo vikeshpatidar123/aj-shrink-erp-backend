@@ -8,6 +8,7 @@ interface ModalProps {
   title: string;
   children: React.ReactNode;
   size?: "sm" | "md" | "lg" | "xl";
+  subHeader?: React.ReactNode;
 }
 
 // Wider sizes so less scrolling is needed
@@ -18,7 +19,7 @@ const sizes = {
   xl: "sm:max-w-[92vw]",
 };
 
-export default function Modal({ open, onClose, title, children, size = "md" }: ModalProps) {
+export default function Modal({ open, onClose, title, children, size = "md", subHeader }: ModalProps) {
   useEffect(() => {
     if (open) document.body.style.overflow = "hidden";
     else document.body.style.overflow = "";
@@ -49,6 +50,12 @@ export default function Modal({ open, onClose, title, children, size = "md" }: M
           </button>
         </div>
 
+        {/* Sub-header (sticky tabs etc) */}
+        {subHeader && (
+          <div className="flex-shrink-0 px-4 sm:px-6 pt-3 pb-0 border-b border-gray-100 bg-white">
+            {subHeader}
+          </div>
+        )}
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5">{children}</div>
       </div>

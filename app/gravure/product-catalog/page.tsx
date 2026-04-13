@@ -158,12 +158,31 @@ export default function ProductCatalogPage() {
     setReplanAttachments(p => { const item = p.find(x => x.id === id); if (item) URL.revokeObjectURL(item.url); return p.filter(x => x.id !== id); });
   };
 
+  // ── Derive structureType from content sub-type ───────────
+  // Sleeve: cylinder circ = layflat × 2, repeatUPS = 1
+  // Pouch: standard planning, film width = pouch width as entered
+  // Label/Roll Form/Laminate Roll: standard label planning
+  const getStructureType = (content: string): "Label" | "Sleeve" | "Pouch" => {
+    const c = content.toLowerCase();
+    if (c.includes("sleeve")) return "Sleeve";
+    if (
+      c.includes("pouch") ||
+      c.includes("standup") ||
+      c === "zipper pouch"
+    ) return "Pouch";
+    return "Label";
+  };
+
   const rf = <K extends keyof GravureProductCatalog>(k: K, v: GravureProductCatalog[K]) => {
     setReplanForm(p => {
       if (!p) return p;
       const next = { ...p, [k]: v };
       if (k === "frontColors" || k === "backColors") {
         next.noOfColors = ((k === "frontColors" ? v : p.frontColors) as number || 0) + ((k === "backColors" ? v : p.backColors) as number || 0);
+      }
+      // Auto-set structureType when content changes
+      if (k === "content") {
+        (next as any).structureType = getStructureType(v as string);
       }
       return next;
     });
@@ -259,7 +278,13 @@ export default function ProductCatalogPage() {
   const replanCost = useMemo(() => {
     if (!replanForm) return null;
     const qty    = replanForm.standardQty || 0;
-    const widthM = (replanForm.jobWidth || 0) / 1000;
+    const sType  = (replanForm as any).structureType || "Label";
+    // Material film width:
+    //   Sleeve → film is the flat tube = jobWidth (layflat). Material area = qty × layflat.
+    //   Pouch  → film width = jobWidth as entered (user enters the full film/pouch width).
+    //   Label  → use actualWidth (trimming-corrected width).
+    const filmWidthMm = sType === "Label" ? (replanForm.actualWidth || replanForm.jobWidth || 0) : (replanForm.jobWidth || 0);
+    const widthM = filmWidthMm / 1000;
     const areaM2 = qty * widthM;
     const WASTE  = 0.03;
     let filmCost = 0, consumableCost = 0;
@@ -305,7 +330,11 @@ export default function ProductCatalogPage() {
 
   // ── Production Plan for Catalog (Sleeve × Cylinder based) ──
   const replanAllPlans = useMemo(() => {
-    const planWidth = replanForm?.actualWidth || replanForm?.jobWidth || 0;
+    const sTypeCheck = (replanForm as any)?.structureType || "Label";
+    // For Sleeve, planWidth = layflat (jobWidth). For Label/Pouch, use actualWidth.
+    const planWidth = sTypeCheck === "Sleeve"
+      ? (replanForm?.jobWidth || 0)
+      : (replanForm?.actualWidth || replanForm?.jobWidth || 0);
     if (!replanForm?.machineId || planWidth <= 0) return [];
     const machine = PRINT_MACHINES.find(m => m.id === replanForm.machineId);
     if (!machine) return [];
@@ -315,21 +344,81 @@ export default function ProductCatalogPage() {
     const machineMinCirc = parseFloat((machine as any).repeatLengthMin) || 0;
     const machineMaxCirc = parseFloat((machine as any).repeatLengthMax) || 9999;
     const shrink    = replanForm.widthShrinkage || 0;
-    const jobH      = replanForm.jobHeight || 0;
-    const effectiveRepeat = jobH + shrink; // shrinkage adds to repeat length, not width
-    const laneWidth = planWidth; // width is not affected by shrinkage
     const trim      = replanForm.trimmingSize || 0;
+    const sType     = (replanForm as any).structureType || "Label";
+    const content   = (replanForm as any).content || "";
+    const gusset    = (replanForm as any).gusset || 0;
+    const topSeal   = (replanForm as any).topSeal    || 0;
+    const bottomSeal= (replanForm as any).bottomSeal || 0;
+    const sideSeal  = (replanForm as any).sideSeal   || 0;
+    const ctrSeal   = (replanForm as any).centerSealWidth || 0;
+    const sideGusset= (replanForm as any).sideGusset || 0;
+    const jobW      = replanForm.jobWidth  || 0;
+    const jobH      = replanForm.jobHeight || 0;
 
-    // per-cylinder: UPS around = cylCirc / effectiveRepeat — must be an EXACT multiple (within 0.5mm tolerance)
+    // ── Lane width (film width per UPS lane) ──
+    //    Sleeve            → layflat×2 + transparentArea + seamingArea
+    //    3-Side Seal       → W + 2×sideSeal
+    //    Center Seal       → W×2 + centerSealWidth  (W = half-width)
+    //    Standup / Zipper  → W + 2×sideSeal
+    //    Both Side Gusset  → W + 2×sideGusset
+    //    3D / Flat Bottom  → W + 2×sideGusset
+    //    Label / other     → actualWidth as-is
+    const sleeveTransp = sType === "Sleeve" ? ((replanForm as any).transparentArea || 0) : 0;
+    const sleeveSeam   = sType === "Sleeve" ? ((replanForm as any).seamingArea   || 0) : 0;
+    let laneWidth: number;
+    if (sType === "Sleeve") {
+      laneWidth = jobW * 2 + sleeveTransp + sleeveSeam;
+    } else if (content === "Pouch — 3 Side Seal" || content === "Standup Pouch" || content === "Zipper Pouch") {
+      laneWidth = jobW + 2 * sideSeal;
+    } else if (content === "Pouch — Center Seal") {
+      laneWidth = jobW * 2 + ctrSeal;
+    } else if (content === "Both Side Gusset Pouch" || content === "3D Pouch / Flat Bottom") {
+      laneWidth = jobW + 2 * sideGusset;
+    } else {
+      laneWidth = planWidth;
+    }
+    if (laneWidth <= 0) laneWidth = planWidth > 0 ? planWidth : 1;
+
+    // ── Effective repeat (cylinder circumference per repeat) ──
+    //    Sleeve            → cuttingLength = jobHeight + shrink  (length direction)
+    //    3-Side Seal       → H + topSeal + bottomSeal
+    //    Center Seal       → H + topSeal + bottomSeal
+    //    Standup / Zipper  → H + topSeal + gusset/2
+    //    Both Side Gusset  → H + topSeal + bottomSeal
+    //    3D / Flat Bottom  → H + topSeal + gusset/2
+    //    Label             → jobHeight + shrink
+    const designCirc      = jobW * 2 + sleeveSeam + sleeveTransp;  // Sleeve width direction only
+    const sleeveCutLength = sType === "Sleeve" ? jobH + shrink : 0;
+    let effectiveRepeat: number;
+    if (sType === "Sleeve") {
+      effectiveRepeat = sleeveCutLength;
+    } else if (content === "Pouch — 3 Side Seal" || content === "Pouch — Center Seal" || content === "Both Side Gusset Pouch") {
+      effectiveRepeat = jobH + topSeal + bottomSeal + shrink;
+    } else if (content === "Standup Pouch" || content === "Zipper Pouch" || content === "3D Pouch / Flat Bottom") {
+      effectiveRepeat = jobH + topSeal + (gusset > 0 ? gusset / 2 : 0) + shrink;
+    } else {
+      // Label / roll form / other
+      effectiveRepeat = jobH + shrink;
+    }
+
+    // per-cylinder: UPS around = cylCirc / effectiveRepeat
     const calcRepeatUPS = (cylRepeatLength: number) => {
       if (effectiveRepeat <= 0) return 1;
-      const ups = cylRepeatLength / effectiveRepeat;
-      const rounded = Math.round(ups);
-      return rounded;
+      return Math.round(cylRepeatLength / effectiveRepeat);
     };
-    // returns true only if cylCirc is within machine circ range AND exact multiple of effectiveRepeat (±0.5mm)
+
+    // isValidCircumference:
+    //   Sleeve → cylCirc must be exact multiple of designCirc (N×designCirc, N=1,2,3...)
+    //            because multi-repeat is allowed (same sleeve image N times per revolution)
+    //   Label / Pouch → exact multiple of effectiveRepeat (±0.5mm)
     const isValidCircumference = (cylCirc: number) => {
       if (cylCirc < machineMinCirc || cylCirc > machineMaxCirc) return false;
+      if (sType === "Sleeve") {
+        if (sleeveCutLength <= 0) return false;
+        const rem = cylCirc % sleeveCutLength;
+        return rem < 1 || (sleeveCutLength - rem) < 1; // exact multiple of cuttingLength ±1mm
+      }
       if (effectiveRepeat <= 0) return true;
       const remainder = cylCirc % effectiveRepeat;
       return remainder < 0.5 || (effectiveRepeat - remainder) < 0.5;
@@ -355,14 +444,20 @@ export default function ProductCatalogPage() {
           const circ = parseFloat(t.repeatLength || "450") || 450;
           return isValidCircumference(circ);
         });
-        // If no real cylinder matches → generate Special Order entries for each valid multiple
-        // of effectiveRepeat (from smallest above 200mm up to 1100mm)
+        // Special Order cylinders:
+        //   Sleeve → only ONE valid circ = layflat × 2. No multiples.
+        //   Label/Pouch → generate all valid multiples of effectiveRepeat.
         const specialCylinders = (() => {
+          if (sType === "Sleeve") {
+            // effectiveRepeat already = (jobWidth×2) + shrink
+            if (effectiveRepeat < machineMinCirc || effectiveRepeat > machineMaxCirc) return [];
+            return [{ id: "SPECIAL-CYL-SLEEVE", code: "SPL", name: `Special Order Sleeve Cyl (${effectiveRepeat}mm)`, printWidth: String(Math.ceil(minCyl)), repeatLength: String(effectiveRepeat), isSpecial: true, isSpecialSleeve: false }];
+          }
           if (effectiveRepeat <= 0) return [{ id: "SPECIAL-CYL-1", code: "SPL", name: "Special Order", printWidth: String(Math.ceil(minCyl)), repeatLength: "450", isSpecial: true, isSpecialSleeve: false }];
           const results = [];
           for (let mult = 1; mult * effectiveRepeat <= machineMaxCirc; mult++) {
             const circ = mult * effectiveRepeat;
-            if (circ < machineMinCirc) continue; // below machine min circumference
+            if (circ < machineMinCirc) continue;
             results.push({ id: `SPECIAL-CYL-${mult}`, code: "SPL", name: `Special Order (${mult}×${effectiveRepeat}mm)`, printWidth: String(Math.ceil(minCyl)), repeatLength: String(circ), isSpecial: true, isSpecialSleeve: false });
           }
           return results.length > 0 ? results : [];
@@ -446,7 +541,69 @@ export default function ProductCatalogPage() {
       }).flat();
     });
 
-    const rawPlans = [...loopA, ...loopB];
+    // ── LOOP S: SLEEVE products — no print sleeve needed, direct cylinder planning ──
+    // Gravure shrink/stretch sleeves are printed flat. Film = layflat width.
+    // designCirc = LF×2 + widthShrinkage  (circumferential shrinkage ONLY)
+    // Sleeve cylinder circ = cuttingLength × N (N = 1, 2, 3...) — LENGTH direction
+    //   cuttingLength = jobHeight + lengthShrinkage
+    //   Must be within machine min/max circumference
+    // UPS across = floor((machineMaxFilm - 2×trim) / laneWidth)
+    const loopS = sType === "Sleeve" ? (() => {
+      if (sleeveCutLength <= 0) return [];
+      const maxAcUps = Math.floor((machineMaxFilm - 2 * trim) / laneWidth);
+      if (maxAcUps === 0) return [];
+      // Max repeat count: how many times cuttingLength fits inside machineMaxCirc
+      const maxRepeatCount = Math.floor(machineMaxCirc / sleeveCutLength);
+      if (maxRepeatCount === 0) return [];
+
+      const plans: any[] = [];
+
+      for (let repeatCount = 1; repeatCount <= maxRepeatCount; repeatCount++) {
+        const cylinderCirc = sleeveCutLength * repeatCount;
+        if (cylinderCirc < machineMinCirc) continue;  // below machine minimum — try next multiple
+        if (cylinderCirc > machineMaxCirc) break;
+
+        // Find real cylinders with circ ≈ cylinderCirc (±1mm)
+        const realCyls = CYLINDER_TOOLS_ALL.filter(t => {
+          const circ = parseFloat(t.repeatLength || "0") || 0;
+          return Math.abs(circ - cylinderCirc) < 1;
+        }).map(c => ({ id: c.id, code: c.code, name: c.name, printWidth: c.printWidth, repeatLength: c.repeatLength || String(cylinderCirc), isSpecial: false }));
+
+        // Special order if no stock cylinder matches
+        const specialCyl = { id: `SPECIAL-CYL-SLEEVE-R${repeatCount}`, code: "SPL", name: `Special Order (${cylinderCirc}mm = ${sleeveCutLength}×${repeatCount})`, printWidth: "1500", repeatLength: String(cylinderCirc), isSpecial: true };
+        const cylList = realCyls.length > 0 ? realCyls : [specialCyl];
+
+        for (let acUps = 1; acUps <= maxAcUps; acUps++) {
+          const printingWidth = acUps * laneWidth;
+          const filmWidth = printingWidth + 2 * trim; // trim both sides of film
+          if (filmWidth > machineMaxFilm) break;
+          if (filmWidth < machineMinFilm) continue;
+          const deadMargin = parseFloat((machineMaxFilm - filmWidth).toFixed(1));
+
+          for (const cyl of cylList) {
+            const reqRMT  = replanForm.standardQty > 0 ? Math.ceil(replanForm.standardQty / (acUps * repeatCount)) : 1;
+            const totalRMT = Math.ceil(reqRMT * 1.01);
+            plans.push({
+              planId: `SLEEVE-${machine.id}-R${repeatCount}-${acUps}UPS-${cyl.id}`,
+              machineName: machine.name,
+              filmSize: filmWidth, acUps, printingWidth,
+              sleeveCode: "—", sleeveName: "No Print Sleeve Required", sleeveWidthVal: filmWidth,
+              cylinderCode: cyl.code, cylinderName: cyl.name,
+              cylinderWidthVal: parseFloat(cyl.printWidth) || 0,
+              sideWaste: 0, deadMargin, totalWaste: deadMargin,
+              cylCirc: cylinderCirc, repeatUPS: repeatCount, totalUPS: acUps * repeatCount,
+              reqRMT, totalRMT, wastage: deadMargin,
+              isSpecial: cyl.isSpecial, isSpecialSleeve: false, isBest: false,
+              designCirc, sleeveCutLength, repeatCount,   // carry for UI display
+            });
+          }
+        }
+      }
+      return plans;
+    })() : [];
+
+    // For Sleeve: only use loopS. For Label/Pouch: use loopA + loopB.
+    const rawPlans = sType === "Sleeve" ? loopS : [...loopA, ...loopB];
 
     if (rawPlans.length === 0) return rawPlans;
     const sorted = [...rawPlans].sort((a, b) =>
@@ -456,7 +613,7 @@ export default function ProductCatalogPage() {
       b.acUps       !== a.acUps       ? b.acUps        - a.acUps       : 0
     );
     return sorted.map((p, idx) => ({ ...p, isBest: !p.isSpecial && idx === 0 }));
-  }, [replanForm?.machineId, replanForm?.actualWidth, replanForm?.jobWidth, replanForm?.jobHeight, replanForm?.trimmingSize, replanForm?.widthShrinkage, replanForm?.standardQty]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [replanForm?.machineId, replanForm?.actualWidth, replanForm?.jobWidth, replanForm?.jobHeight, replanForm?.trimmingSize, replanForm?.widthShrinkage, replanForm?.standardQty, (replanForm as any)?.structureType, (replanForm as any)?.content, (replanForm as any)?.gusset, (replanForm as any)?.sealSize, (replanForm as any)?.seamingArea, (replanForm as any)?.transparentArea, (replanForm as any)?.topSeal, (replanForm as any)?.bottomSeal, (replanForm as any)?.sideSeal, (replanForm as any)?.centerSealWidth, (replanForm as any)?.sideGusset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const replanVisiblePlans = useMemo(() => {
     let rows = replanAllPlans;
@@ -1481,6 +1638,69 @@ export default function ProductCatalogPage() {
                       <Calculator size={14} className="text-white" />
                       <p className="text-xs font-bold text-white uppercase tracking-widest">Dimension Setup — {replanForm.content}</p>
                     </div>
+
+                    {/* ── Sleeve / Pouch extra fields — auto-shown by content type ── */}
+                    {(() => {
+                      const sType = (replanForm as any).structureType || getStructureType(replanForm.content);
+                      if (sType === "Label") return null;
+                      return (
+                        <div className="px-4 pt-3 pb-0">
+                          {sType === "Pouch" && (
+                            <div className="flex flex-wrap items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-xl text-[10px]">
+                              <div className="flex items-center gap-1.5 text-orange-700 font-bold uppercase tracking-wide">
+                                <Package size={12} /> Pouch Specs
+                              </div>
+                              {/* Planning info */}
+                              <div className="ml-auto flex gap-2 flex-wrap">
+                                <div className="px-3 py-1.5 bg-white border border-orange-200 rounded-lg font-bold text-orange-700">
+                                  Lane = {replanForm.jobWidth} mm
+                                </div>
+                                <div className="px-3 py-1.5 bg-white border border-orange-200 rounded-lg text-orange-600">
+                                  Repeat = {replanForm.jobHeight} mm
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {sType === "Sleeve" && (
+                            <div className="flex flex-wrap items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-[10px]">
+                              <div className="flex items-center gap-1.5 text-blue-700 font-bold uppercase tracking-wide">
+                                <Layers size={12} /> Sleeve Planning
+                              </div>
+                              <div className="px-3 py-1.5 bg-white border border-blue-200 rounded-lg font-bold text-blue-700">
+                                Layflat = {replanForm.jobWidth} mm
+                              </div>
+                              {(() => {
+                                const lf = replanForm.jobWidth || 0;
+                                const sh = replanForm.widthShrinkage || 0;
+                                const sa = (replanForm as any).seamingArea     || 0;
+                                const ta = (replanForm as any).transparentArea || 0;
+                                const dc = lf * 2 + sa + ta; // width direction only
+                                const parts: string[] = [`${lf}×2`];
+                                if (ta > 0) parts.push(`+${ta}`);
+                                if (sa > 0) parts.push(`+${sa}`);
+                                return (
+                                  <>
+                                    <div className="flex flex-col px-3 py-1.5 bg-blue-600 text-white rounded-lg font-bold text-[10px] leading-tight">
+                                      <span>Design Circ (per sleeve)</span>
+                                      <span className="text-xs font-black">{parts.join("")} = {dc} mm</span>
+                                    </div>
+                                    <div className="px-3 py-1.5 bg-white border border-blue-200 rounded-lg text-blue-600">
+                                      Cutting Length = {replanForm.jobHeight} mm
+                                    </div>
+                                    <div className="flex flex-col px-3 py-1.5 bg-amber-50 border border-amber-300 rounded-lg text-amber-700 font-bold ml-auto text-[10px] leading-tight">
+                                      <span>Cylinder Circ</span>
+                                      <span>{sh > 0 ? `(${replanForm.jobHeight}+${sh})` : `${replanForm.jobHeight}`}mm × N (N=1,2,3…)</span>
+                                      <span className="font-normal text-amber-600">Shrink applied per sleeve</span>
+                                    </div>
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
                       {/* Left: inputs */}
                       <div className="space-y-4">
@@ -1489,25 +1709,67 @@ export default function ProductCatalogPage() {
                           <DimensionInputPanel
                             contentType={replanForm.content}
                             dims={dimValues}
+                            colClasses={
+                              replanForm.content === "Sleeve — Shrink" || replanForm.content === "Sleeve — Stretch"
+                                ? "grid-cols-2"
+                                : undefined
+                            }
                             onChange={patch => {
                               patchDim(patch);
-                              if ("width"        in patch && patch.width        !== undefined) rf("jobWidth",  patch.width);
-                              if ("layflatWidth"  in patch && patch.layflatWidth !== undefined) rf("jobWidth",  patch.layflatWidth);
+                              if ("width"        in patch && patch.width        !== undefined) { rf("jobWidth",  patch.width); rf("actualWidth", patch.width); }
+                              if ("layflatWidth"  in patch && patch.layflatWidth !== undefined) { rf("jobWidth",  patch.layflatWidth); rf("actualWidth", patch.layflatWidth); }
                               if ("height"       in patch && patch.height       !== undefined) rf("jobHeight", patch.height);
                               if ("cutHeight"    in patch && patch.cutHeight    !== undefined) rf("jobHeight", patch.cutHeight);
+                              // Sync gusset, sealWidth, seamingArea, transparentArea into replanForm
+                              if ("gusset"          in patch && patch.gusset          !== undefined) rf("gusset"          as any, patch.gusset);
+                              if ("sealWidth"       in patch && patch.sealWidth       !== undefined) rf("sealSize"        as any, patch.sealWidth);
+                              if ("seamingArea"     in patch && patch.seamingArea     !== undefined) rf("seamingArea"     as any, patch.seamingArea);
+                              if ("transparentArea" in patch && patch.transparentArea !== undefined) rf("transparentArea" as any, patch.transparentArea);
+                              if ("topSeal"         in patch && patch.topSeal         !== undefined) rf("topSeal"         as any, patch.topSeal);
+                              if ("bottomSeal"      in patch && patch.bottomSeal      !== undefined) rf("bottomSeal"      as any, patch.bottomSeal);
+                              if ("sideSeal"        in patch && patch.sideSeal        !== undefined) rf("sideSeal"        as any, patch.sideSeal);
+                              if ("centerSealWidth" in patch && patch.centerSealWidth !== undefined) rf("centerSealWidth" as any, patch.centerSealWidth);
+                              if ("sideGusset"      in patch && patch.sideGusset      !== undefined) rf("sideGusset"      as any, patch.sideGusset);
                             }}
                           />
                         </div>
+                        {/* Shrinkage — label differs by structure type */}
                         <div>
-                          <label className="text-[10px] font-semibold text-rose-500 uppercase block mb-1">
-                            Repeat Length Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— optional</span>
-                          </label>
-                          <input
-                            type="number" min={0} max={1.5} step={0.1} placeholder="e.g. 1"
-                            value={dimValues.widthShrinkage ?? replanForm.widthShrinkage ?? ""}
-                            onChange={e => { const v = Math.min(1.5, Math.max(0, Number(e.target.value) || 0)); patchDim({ widthShrinkage: v }); rf("widthShrinkage", v || undefined); }}
-                            className="w-full text-sm border border-rose-200 rounded-xl px-3 py-2 bg-rose-50 focus:bg-white outline-none focus:ring-2 focus:ring-rose-400 font-mono"
-                          />
+                          {(() => {
+                            const st = (replanForm as any).structureType || getStructureType(replanForm.content);
+                            return (
+                              <>
+                                <label className="text-[10px] font-semibold text-rose-500 uppercase block mb-1">
+                                  {st === "Sleeve"
+                                    ? <>Length Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— applied to cutting length per sleeve</span></>
+                                    : <>Repeat Length Shrinkage (mm) <span className="normal-case text-gray-400 font-normal">— optional</span></>}
+                                </label>
+                                <input
+                                  type="number" min={0} max={st === "Sleeve" ? 10 : 1.5} step={0.1}
+                                  placeholder={st === "Sleeve" ? "e.g. 3" : "e.g. 1"}
+                                  value={dimValues.widthShrinkage ?? replanForm.widthShrinkage ?? ""}
+                                  onChange={e => { const v = Math.min(st === "Sleeve" ? 10 : 1.5, Math.max(0, Number(e.target.value) || 0)); patchDim({ widthShrinkage: v }); rf("widthShrinkage", v || undefined); }}
+                                  className="w-full text-sm border border-rose-200 rounded-xl px-3 py-2 bg-rose-50 focus:bg-white outline-none focus:ring-2 focus:ring-rose-400 font-mono"
+                                />
+                                {st === "Sleeve" && (replanForm.jobWidth || 0) > 0 && (
+                                  <p className="text-[10px] text-rose-600 mt-1 font-semibold">
+                                    {(() => {
+                                      const lf = replanForm.jobWidth || 0;
+                                      const sh = replanForm.widthShrinkage || 0;
+                                      const sa = (replanForm as any).seamingArea     || 0;
+                                      const ta = (replanForm as any).transparentArea || 0;
+                                      const dc = lf * 2 + sa + ta; // width direction only
+                                      const parts: string[] = [`${lf}×2`];
+                                      if (ta > 0) parts.push(`+${ta}`);
+                                      if (sa > 0) parts.push(`+${sa}`);
+                                      const shrinkNote = sh > 0 ? ` | Length shrinkage +${sh}mm` : "";
+                                      return `Design Circ = ${parts.join("")} = ${dc}mm (per sleeve)${shrinkNote}`;
+                                    })()}
+                                  </p>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                         {/* ── Colors inside Dimension Setup ── */}
                         <div className="border-t border-indigo-100 pt-3">
@@ -2427,9 +2689,54 @@ export default function ProductCatalogPage() {
                                   </tr>
                                 );
                               })}
-                              {replanVisiblePlans.length === 0 && (
-                                <tr><td colSpan={17} className="p-4 text-center text-gray-400 text-xs">No plans match your search</td></tr>
-                              )}
+                              {replanVisiblePlans.length === 0 && (() => {
+                                const sT = (replanForm as any).structureType || "Label";
+                                const machine = PRINT_MACHINES.find(m => m.id === replanForm.machineId);
+                                const minC = parseFloat((machine as any)?.repeatLengthMin) || 0;
+                                const maxC = parseFloat((machine as any)?.repeatLengthMax) || 9999;
+                                const maxF = parseFloat((machine as any)?.maxWebWidth) || 0;
+                                const minF = parseFloat((machine as any)?.minWebWidth) || 0;
+                                const sh   = replanForm.widthShrinkage || 0;
+                                const jW   = replanForm.jobWidth || 0;
+                                const jH   = replanForm.jobHeight || 0;
+
+                                let reason = "";
+                                let tip = "";
+                                if (sT === "Sleeve") {
+                                  const dc = jW * 2 + sh;
+                                  const maxN = dc > 0 ? Math.floor(maxC / dc) : 0;
+                                  const minN = dc > 0 ? Math.ceil(minC / dc) : 0;
+                                  if (dc <= 0) reason = "Enter Layflat Width to generate plans.";
+                                  else if (dc * maxN < minC) reason = `Design Circ = ${dc}mm. Even ${maxN}× repeat = ${dc*maxN}mm is below machine min ${minC}mm. Use a larger Layflat.`;
+                                  else if (jW > maxF) reason = `Layflat ${jW}mm exceeds machine max film width ${maxF}mm.`;
+                                  else if (jW < minF) reason = `Film width (${jW}mm) is below machine minimum ${minF}mm.`;
+                                  else reason = "No plans generated. Check machine selection and limits.";
+                                  if (dc > 0 && minN >= 1 && minN <= maxN)
+                                    tip = `Machine min circ = ${minC}mm → min repeat count = ${minN}× (cylinder = ${dc}×${minN} = ${dc*minN}mm). Plans with ${minN}× to ${maxN}× repeat should appear.`;
+                                } else {
+                                  const gus = (replanForm as any).gusset || 0;
+                                  const seal = (replanForm as any).sealSize || 0;
+                                  const effRep = jH + seal + (gus > 0 ? gus / 2 : 0) + sh;
+                                  if (effRep > 0 && effRep < minC) reason = `Effective Repeat = ${effRep}mm (H${jH}${seal > 0 ? `+Seal${seal}` : ""}${gus > 0 ? `+Gusset/2=${gus/2}` : ""}${sh > 0 ? `+Shrink${sh}` : ""}) is below machine minimum ${minC}mm.`;
+                                  else if (effRep > maxC) reason = `Effective Repeat = ${effRep}mm exceeds machine maximum ${maxC}mm.`;
+                                  else if ((replanForm.actualWidth || jW) > maxF) reason = `Job width exceeds machine max film width ${maxF}mm.`;
+                                  else reason = "No sleeve/cylinder in stock fits this job. Only special orders should appear — check if filters are active.";
+                                }
+                                return (
+                                  <tr>
+                                    <td colSpan={17} className="p-5">
+                                      <div className="flex flex-col items-center gap-2 text-center">
+                                        <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 font-bold text-lg">!</div>
+                                        <p className="text-sm font-bold text-gray-700">No Plans Generated</p>
+                                        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 max-w-lg">{reason}</p>
+                                        {tip && (
+                                          <p className="text-[10px] text-blue-600 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 max-w-lg">{tip}</p>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })()}
                             </tbody>
                           </table>
                         </div>
@@ -3341,11 +3648,14 @@ export default function ProductCatalogPage() {
 
       {/* ══ CYLINDER CIRCUMFERENCE GUIDE MODAL ══════════════════ */}
       {cylGuideOpen && replanForm && (() => {
+        const sTypeGuide = (replanForm as any).structureType || "Label";
         const jobH    = replanForm.jobHeight || 0;
-        const jobW    = replanForm.actualWidth || replanForm.jobWidth || 0;
+        const jobW    = sTypeGuide === "Sleeve" ? (replanForm.jobWidth || 0) : (replanForm.actualWidth || replanForm.jobWidth || 0);
         const shrink  = replanForm.widthShrinkage || 0;
         const trim    = replanForm.trimmingSize   || 0;
-        const laneW   = jobW + shrink;
+        // For Sleeve: shrink is circumferential — does NOT affect lane width
+        // For Label/Pouch: shrink is on repeat length — does NOT affect lane width either
+        const laneW   = jobW;
         // Available sleeves from stock
         const stockSleeves = SLEEVE_TOOLS.map(s => parseFloat(s.printWidth)).filter(w => w > 0).sort((a, b) => a - b);
         // Circumference options: 1× to 8× jobHeight (practical range)
@@ -3437,17 +3747,57 @@ export default function ProductCatalogPage() {
 
       {/* ══ UPS LAYOUT PREVIEW MODAL ═════════════════════════════ */}
       {upsPreviewPlan && replanForm && (() => {
-        const plan   = upsPreviewPlan as any;
-        const jobW   = replanForm.actualWidth || replanForm.jobWidth || 0;
-        const shrink = replanForm.widthShrinkage || 0;
-        const trim   = replanForm.trimmingSize   || 0;
-        const acUps  = plan.acUps as number;
-        const filmW  = plan.filmSize as number;
+        const plan      = upsPreviewPlan as any;
+        const sTypePrev = (replanForm as any).structureType || "Label";
+        const isSleeve  = sTypePrev === "Sleeve";
+        const jobW      = isSleeve ? (replanForm.jobWidth || 0) : (replanForm.actualWidth || replanForm.jobWidth || 0);
+        const shrink    = replanForm.widthShrinkage || 0;
+        const slvTransp = isSleeve ? ((replanForm as any).transparentArea || 0) : 0;
+        const slvSeam   = isSleeve ? ((replanForm as any).seamingArea   || 0) : 0;
+        // Sleeve on film: 1 AC UPS = layflat×2 + transparentArea + seamingArea
+        const sleeveFilmWidth = isSleeve ? (jobW * 2 + slvTransp + slvSeam) : 0;
+        // Trim applies to both sleeve and label/pouch
+        const trim      = replanForm.trimmingSize || 0;
+        const filmW      = plan.filmSize as number;
+        // Always trust plan.acUps — planning engine already uses correct laneWidth
+        const acUps      = plan.acUps as number;
+        const contentPrev   = (replanForm as any).content || "";
+        const gussetPrev    = (replanForm as any).gusset      || 0;
+        const topSealPrev   = (replanForm as any).topSeal     || 0;
+        const btmSealPrev   = (replanForm as any).bottomSeal  || 0;
+        const sideSealPrev  = (replanForm as any).sideSeal    || 0;
+        const ctrSealPrev   = (replanForm as any).centerSealWidth || 0;
+        const sideGussetPrev= (replanForm as any).sideGusset  || 0;
+        // effRepeat = one row height in diagram
+        // Sleeve → cutting length per repeat = cylCirc / repeatUPS (from selected plan)
+        // Pouches → per-type formula (same as planning engine)
+        let effRepeat: number;
+        if (isSleeve) {
+          effRepeat = (plan.cylCirc as number) / (plan.repeatUPS as number);
+        } else if (contentPrev === "Pouch — 3 Side Seal" || contentPrev === "Pouch — Center Seal" || contentPrev === "Both Side Gusset Pouch") {
+          effRepeat = (replanForm.jobHeight || 0) + topSealPrev + btmSealPrev + shrink;
+        } else if (contentPrev === "Standup Pouch" || contentPrev === "Zipper Pouch" || contentPrev === "3D Pouch / Flat Bottom") {
+          effRepeat = (replanForm.jobHeight || 0) + topSealPrev + (gussetPrev > 0 ? gussetPrev / 2 : 0) + shrink;
+        } else {
+          effRepeat = (replanForm.jobHeight || 0) + shrink;
+        }
+        // Lane width shown in diagram
+        let diagLaneW: number;
+        if (isSleeve) {
+          diagLaneW = jobW * 2 + slvTransp + slvSeam;
+        } else if (contentPrev === "Pouch — 3 Side Seal" || contentPrev === "Standup Pouch" || contentPrev === "Zipper Pouch") {
+          diagLaneW = jobW + 2 * sideSealPrev;
+        } else if (contentPrev === "Pouch — Center Seal") {
+          diagLaneW = jobW * 2 + ctrSealPrev;
+        } else if (contentPrev === "Both Side Gusset Pouch" || contentPrev === "3D Pouch / Flat Bottom") {
+          diagLaneW = jobW + 2 * sideGussetPrev;
+        } else {
+          diagLaneW = jobW;
+        }
         // pixel scaling: fit into ~640px canvas
         const CANVAS = 640;
         const scale  = filmW > 0 ? CANVAS / filmW : 1;
         const toW    = (mm: number) => Math.max(mm * scale, mm > 0 ? 2 : 0);
-        // sections list for drawing — shrinkage is on repeat length (height), not width
         const sections: { label: string; mm: number; color: string; text: string }[] = [];
         if (trim > 0) sections.push({ label: `${trim}mm`, mm: trim, color: "#fed7aa", text: "#c2410c" });
         for (let i = 0; i < acUps; i++) {
@@ -3459,17 +3809,31 @@ export default function ProductCatalogPage() {
             <div className="space-y-4">
               {/* Stats row */}
               <div className="flex flex-wrap gap-2 text-xs">
-                {[
-                  { l: "Film Width",  v: `${filmW} mm`,  cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
-                  { l: "AC UPS",      v: String(acUps),   cls: "bg-purple-50 text-purple-700 border-purple-200" },
-                  { l: "Job Width",   v: `${jobW} mm`,    cls: "bg-blue-50 text-blue-700 border-blue-200" },
-                  { l: "Repeat Shrink", v: shrink > 0 ? `+${shrink} mm (on repeat length)` : "—", cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
-                  { l: "Trimming",    v: trim > 0 ? `${trim}+${trim} mm` : "—",      cls: "bg-orange-50 text-orange-700 border-orange-200" },
-                  { l: "Repeat UPS",  v: String(plan.repeatUPS), cls: "bg-teal-50 text-teal-700 border-teal-200" },
-                  { l: "Total Pieces", v: String(plan.totalUPS),  cls: "bg-green-50 text-green-700 border-green-200" },
-                  { l: "Cylinder",    v: plan.cylinderCode,       cls: "bg-violet-50 text-violet-700 border-violet-200" },
-                  { l: "Cyl. Circ",   v: `${plan.cylCirc} mm`,   cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-                ].map(s => (
+                {(() => {
+                  const dc = (replanForm.jobWidth * 2) + slvSeam + slvTransp; // design circ = width only
+                  const baseStats = [
+                    { l: "Film Width",   v: `${filmW} mm`,         cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+                    { l: "AC UPS",       v: String(acUps),          cls: "bg-purple-50 text-purple-700 border-purple-200" },
+                    { l: "Layflat",      v: `${jobW} mm`,           cls: "bg-blue-50 text-blue-700 border-blue-200" },
+                  ];
+                  const cutLen   = replanForm.jobHeight || 0;
+                  const cutWithShrink = cutLen + shrink;
+                  const sleeveStats = isSleeve ? [
+                    { l: "Design Circ",   v: (() => { const p=[`${jobW}×2`]; if(slvTransp>0)p.push(`+${slvTransp}`); if(slvSeam>0)p.push(`+${slvSeam}`); return `${p.join("")} = ${dc} mm`; })(), cls: "bg-blue-100 text-blue-800 border-blue-300" },
+                    { l: "Cut Length",    v: shrink > 0 ? `${cutLen}+${shrink} = ${cutWithShrink} mm` : `${cutLen} mm`, cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                    { l: "Repeat Count",  v: `${plan.repeatUPS}×`,                                    cls: "bg-teal-50 text-teal-700 border-teal-200" },
+                    { l: "Cyl. Circ",     v: `${cutWithShrink}×${plan.repeatUPS} = ${plan.cylCirc} mm`, cls: "bg-emerald-50 text-emerald-800 border-emerald-300" },
+                  ] : [
+                    { l: "Repeat Shrink", v: shrink > 0 ? `+${shrink} mm` : "—",           cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+                    { l: "Trimming",      v: trim > 0 ? `${trim}+${trim} mm` : "—",         cls: "bg-orange-50 text-orange-700 border-orange-200" },
+                    { l: "Repeat UPS",    v: String(plan.repeatUPS),                         cls: "bg-teal-50 text-teal-700 border-teal-200" },
+                    { l: "Cyl. Circ",     v: `${plan.cylCirc} mm`,                          cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+                  ];
+                  return [...baseStats, ...sleeveStats,
+                    { l: "Total Pieces", v: String(plan.totalUPS),  cls: "bg-green-50 text-green-700 border-green-200" },
+                    { l: "Cylinder",     v: plan.cylinderCode,      cls: "bg-violet-50 text-violet-700 border-violet-200" },
+                  ];
+                })().map(s => (
                   <div key={s.l} className={`px-2.5 py-1.5 rounded-lg border font-medium ${s.cls}`}>
                     <span className="opacity-60 text-[10px] uppercase tracking-wider block leading-none mb-0.5">{s.l}</span>
                     <span className="font-bold">{s.v}</span>
@@ -3479,26 +3843,33 @@ export default function ProductCatalogPage() {
 
               {/* ── Combined 2D Layout Diagram ── */}
               {(() => {
-                const effRepeat = (replanForm.jobHeight || 0) + shrink;
                 const repeatUPS = plan.repeatUPS as number;
                 const cylCirc   = plan.cylCirc   as number;
-                const jobH      = replanForm.jobHeight || 0;
+                const jobH      = sTypePrev === "Sleeve" ? (replanForm.jobWidth * 2) : (replanForm.jobHeight || 0);
 
                 // SVG canvas
                 const SVG_W = 730;   // extra 70px right for height arrow
-                const SVG_H = 415;   // extra 55px bottom for width arrow
-                const RULER_LEFT  = 36;  // left ruler width
-                const RULER_BTM   = 22;  // bottom ruler height
-                const drawW = 660 - RULER_LEFT;  // keep same scale (old SVG_W)
-                const drawH = 360 - RULER_BTM;   // keep same scale (old SVG_H)
+                const SVG_H = 430;   // extra top space for double arrows in sleeve
+                const RULER_LEFT  = isSleeve ? 50 : 36;  // sleeve needs more top space for 2 arrow rows
+                const RULER_BTM   = 22;
+                const drawW = 660 - RULER_LEFT;
+                const drawH = 360 - RULER_BTM;
 
-                // scales
+                // diagramAcUps = plan.acUps (trusted). diagramFilmW = plan.filmSize (trusted).
+                const diagramAcUps = acUps;
+                const diagramFilmW = filmW;
+
+                // scale to fit filmW exactly in drawW
                 const sx = (mm: number) => mm * (drawW / filmW);
                 const sy = (mm: number) => mm * (drawH / cylCirc);
 
                 // column x positions
-                const trimPx = sx(trim);
-                const lanePx = sx(jobW);
+                const trimPx   = sx(trim);
+                // Lane pixel width: Sleeve = layflat×2+T+S, Pouch = diagLaneW (includes seals/gussets), Label = jobW
+                const lanePx   = isSleeve ? sx(sleeveFilmWidth) : sx(diagLaneW);
+                const transpPx = sx(slvTransp);
+                const lfPx     = sx(jobW);          // one side (front or back)
+                const seamPx   = sx(slvSeam);
 
                 // repeat row heights
                 const repPx  = sy(effRepeat);
@@ -3512,8 +3883,9 @@ export default function ProductCatalogPage() {
                 return (
                   <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                     <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-3">
-                      Full Layout — {acUps} AC UPS × {repeatUPS} Repeat UPS = {plan.totalUPS} Total Pieces &nbsp;|&nbsp;
+                      Full Layout — {acUps} AC UPS × {repeatUPS} Repeat = {plan.totalUPS} Total Pieces &nbsp;|&nbsp;
                       Film {filmW}mm × Cyl. Circ {cylCirc}mm
+                      {isSleeve && ` (Cut Length ${effRepeat}mm × ${repeatUPS} = ${cylCirc}mm)`}
                     </p>
 
                     <svg width={SVG_W} height={SVG_H} className="w-full" viewBox={`0 0 ${SVG_W} ${SVG_H}`}>
@@ -3542,33 +3914,160 @@ export default function ProductCatalogPage() {
                         }
                         cx += trimPx;
 
-                        // job lanes
-                        for (let li = 0; li < acUps; li++) {
-                          const bg = C_LANE[li % 2];
+                        // job lanes (sleeve uses diagramAcUps to prevent overflow)
+                        for (let li = 0; li < diagramAcUps; li++) {
                           const laneStartX = cx;
-                          cells.push(
-                            <g key={`l-${ri}-${li}`}>
-                              <rect x={cx} y={ry} width={lanePx} height={repPx} fill={bg} stroke="#6366f1" strokeWidth={0.4} />
-                              {/* Width arrow in every cell */}
-                              {lanePx > 30 && repPx > 18 && (() => {
-                                const ax1 = laneStartX + 5;
-                                const ax2 = laneStartX + lanePx - 5;
-                                const ay  = ry + repPx / 2;
-                                return (
-                                  <g key="w-arrow">
-                                    <line x1={ax1} y1={ay} x2={ax2} y2={ay}
-                                      stroke="#1e40af" strokeWidth="1.3"
-                                      markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
-                                    <rect x={laneStartX + lanePx / 2 - 22} y={ay - 8} width={44} height={12} fill="rgba(255,255,255,0.85)" rx={2} />
-                                    <text x={laneStartX + lanePx / 2} y={ay + 3} textAnchor="middle" fontSize={8} fill="#1e40af" fontWeight="700">
-                                      {jobW} mm
-                                    </text>
-                                  </g>
-                                );
-                              })()}
-                            </g>
-                          );
-                          cx += lanePx;
+
+                          if (isSleeve) {
+                            // ── SLEEVE CELL: flat film layout ──
+                            // 1 AC UPS on film = [TRANSPARENT | FRONT(lf) | BACK(lf) | SEAM]
+                            // total lane = transpPx + lfPx + lfPx + seamPx = lanePx
+                            const lx        = laneStartX;
+                            const frontX    = lx + transpPx;
+                            const foldX     = frontX + lfPx;
+                            const seamX     = foldX + lfPx;
+                            const C_FRONT   = "#dbeafe";
+                            const C_BACK    = "#bfdbfe";
+                            const C_TRANSP  = "#f0f9ff";   // light cyan for transparent area
+                            const C_SEAM    = "#fef3c7";   // light amber for seaming area
+
+                            cells.push(
+                              <g key={`l-${ri}-${li}`}>
+                                {/* cut line LEFT edge (outer boundary) */}
+                                <line x1={lx} y1={ry} x2={lx} y2={ry + repPx}
+                                  stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2" />
+
+                                {/* TRANSPARENT zone */}
+                                {transpPx > 0 && (
+                                  <rect x={lx} y={ry} width={transpPx} height={repPx}
+                                    fill={C_TRANSP} stroke="#0ea5e9" strokeWidth={0.4} strokeDasharray="3 2" />
+                                )}
+                                {transpPx > 8 && repPx > 16 && (
+                                  <text x={lx + transpPx / 2} y={ry + repPx / 2 + 3}
+                                    textAnchor="middle" fontSize={Math.min(6, transpPx / 3)} fill="#0369a1" fontWeight="700" opacity={0.8}>
+                                    {transpPx > 14 ? "T" : ""}
+                                  </text>
+                                )}
+
+                                {/* FRONT lane */}
+                                <rect x={frontX} y={ry} width={lfPx} height={repPx}
+                                  fill={C_FRONT} stroke="none" />
+                                {lfPx > 10 && repPx > 16 && (
+                                  <text x={frontX + lfPx / 2} y={ry + repPx / 2 + 3}
+                                    textAnchor="middle" fontSize={Math.min(7, lfPx / 4)} fill="#1d4ed8" fontWeight="700" opacity={0.8}>
+                                    {lfPx > 20 ? "FRONT" : "F"}
+                                  </text>
+                                )}
+
+                                {/* FOLD line (tube seam) */}
+                                <line x1={foldX} y1={ry} x2={foldX} y2={ry + repPx}
+                                  stroke="#7c3aed" strokeWidth={1.2} strokeDasharray="5 2" />
+
+                                {/* BACK lane */}
+                                <rect x={foldX} y={ry} width={lfPx} height={repPx}
+                                  fill={C_BACK} stroke="none" />
+                                {lfPx > 10 && repPx > 16 && (
+                                  <text x={foldX + lfPx / 2} y={ry + repPx / 2 + 3}
+                                    textAnchor="middle" fontSize={Math.min(7, lfPx / 4)} fill="#1e40af" fontWeight="700" opacity={0.8}>
+                                    {lfPx > 20 ? "BACK" : "B"}
+                                  </text>
+                                )}
+
+                                {/* SEAMING zone */}
+                                {seamPx > 0 && (
+                                  <rect x={seamX} y={ry} width={seamPx} height={repPx}
+                                    fill={C_SEAM} stroke="#d97706" strokeWidth={0.4} strokeDasharray="3 2" />
+                                )}
+                                {seamPx > 8 && repPx > 16 && (
+                                  <text x={seamX + seamPx / 2} y={ry + repPx / 2 + 3}
+                                    textAnchor="middle" fontSize={Math.min(6, seamPx / 3)} fill="#92400e" fontWeight="700" opacity={0.8}>
+                                    {seamPx > 14 ? "S" : ""}
+                                  </text>
+                                )}
+
+                                {/* cut line RIGHT edge */}
+                                <line x1={lx + lanePx} y1={ry} x2={lx + lanePx} y2={ry + repPx}
+                                  stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2" />
+                                {/* outer border */}
+                                <rect x={lx} y={ry} width={lanePx} height={repPx}
+                                  fill="none" stroke="#3b82f6" strokeWidth={0.5} />
+
+                                {/* Dimension arrows — first row only */}
+                                {ri === 0 && lanePx > 16 && (() => {
+                                  const ay1 = ry - 8;   // full lane arrow
+                                  const ay2 = ry - 18;  // FRONT/BACK sub-arrows
+                                  return (
+                                    <g>
+                                      {/* Full lane arrow — sleeveFilmWidth */}
+                                      <line x1={lx + 2} y1={ay1} x2={lx + lanePx - 2} y2={ay1}
+                                        stroke="#1e3a8a" strokeWidth="1.4"
+                                        markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
+                                      <rect x={lx + lanePx / 2 - 22} y={ay1 - 6} width={44} height={10}
+                                        fill="rgba(255,255,255,0.95)" rx={2} />
+                                      <text x={lx + lanePx / 2} y={ay1 + 2}
+                                        textAnchor="middle" fontSize={7} fill="#1e3a8a" fontWeight="800">
+                                        {sleeveFilmWidth}mm
+                                      </text>
+                                      {/* FRONT sub-arrow */}
+                                      {lfPx > 16 && (
+                                        <>
+                                          <line x1={frontX + 1} y1={ay2} x2={frontX + lfPx - 1} y2={ay2}
+                                            stroke="#1d4ed8" strokeWidth="0.9"
+                                            markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
+                                          <rect x={frontX + lfPx / 2 - 14} y={ay2 - 5} width={28} height={9}
+                                            fill="rgba(255,255,255,0.9)" rx={2} />
+                                          <text x={frontX + lfPx / 2} y={ay2 + 2}
+                                            textAnchor="middle" fontSize={6} fill="#1d4ed8" fontWeight="700">
+                                            {jobW}mm
+                                          </text>
+                                        </>
+                                      )}
+                                      {/* BACK sub-arrow */}
+                                      {lfPx > 16 && (
+                                        <>
+                                          <line x1={foldX + 1} y1={ay2} x2={foldX + lfPx - 1} y2={ay2}
+                                            stroke="#1e40af" strokeWidth="0.9"
+                                            markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
+                                          <rect x={foldX + lfPx / 2 - 14} y={ay2 - 5} width={28} height={9}
+                                            fill="rgba(255,255,255,0.9)" rx={2} />
+                                          <text x={foldX + lfPx / 2} y={ay2 + 2}
+                                            textAnchor="middle" fontSize={6} fill="#1e40af" fontWeight="700">
+                                            {jobW}mm
+                                          </text>
+                                        </>
+                                      )}
+                                    </g>
+                                  );
+                                })()}
+                              </g>
+                            );
+                            cx += lanePx; // 1 AC UPS = layflat×2 + transparent + seam on film
+                          } else {
+                            // ── LABEL / POUCH CELL ──
+                            const bg = C_LANE[li % 2];
+                            cells.push(
+                              <g key={`l-${ri}-${li}`}>
+                                <rect x={cx} y={ry} width={lanePx} height={repPx} fill={bg} stroke="#6366f1" strokeWidth={0.4} />
+                                {lanePx > 30 && repPx > 18 && (() => {
+                                  const ax1 = laneStartX + 5;
+                                  const ax2 = laneStartX + lanePx - 5;
+                                  const ay  = ry + repPx / 2;
+                                  return (
+                                    <g>
+                                      <line x1={ax1} y1={ay} x2={ax2} y2={ay}
+                                        stroke="#1e40af" strokeWidth="1.3"
+                                        markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
+                                      <rect x={laneStartX + lanePx / 2 - 22} y={ay - 8} width={44} height={12} fill="rgba(255,255,255,0.85)" rx={2} />
+                                      <text x={laneStartX + lanePx / 2} y={ay + 3} textAnchor="middle" fontSize={8} fill="#1e40af" fontWeight="700">
+                                        {diagLaneW} mm
+                                      </text>
+                                    </g>
+                                  );
+                                })()}
+                              </g>
+                            );
+                          }
+                          if (!isSleeve) cx += lanePx; // Sleeve cx already incremented above (lanePx×2)
                         }
 
                         // right trim
@@ -3582,16 +4081,17 @@ export default function ProductCatalogPage() {
                           ? <line key={`dh-${ri}`} x1={0} y1={ry + repPx} x2={cx} y2={ry + repPx} stroke={C_DASH} strokeWidth={1} strokeDasharray="4 3" />
                           : null;
 
-                        // Left repeat-length arrow — one per row
+                        // Left ruler — height = Design Circ per sleeve
                         const rulerLabel = repPx > 20 ? (
                           <g key={`rl-${ri}`}>
                             <line x1={15} y1={ry + 4} x2={15} y2={ry + repPx - 4}
-                              stroke="#374151" strokeWidth="1.3"
+                              stroke={isSleeve ? "#1d4ed8" : "#374151"} strokeWidth="1.3"
                               markerStart="url(#dim-start)" markerEnd="url(#dim-end)" />
-                            <rect x={2} y={ry + repPx / 2 - 22} width={14} height={44} fill="white" />
-                            <text x={15} y={ry + repPx / 2} textAnchor="middle" fontSize={8} fill="#111827" fontWeight="700"
+                            <rect x={1} y={ry + repPx / 2 - 30} width={14} height={60} fill="white" />
+                            <text x={15} y={ry + repPx / 2} textAnchor="middle"
+                              fontSize={7} fill={isSleeve ? "#1d4ed8" : "#111827"} fontWeight="700"
                               transform={`rotate(-90, 15, ${ry + repPx / 2})`}>
-                              {effRepeat} mm
+                              {isSleeve ? `Cut ${effRepeat}mm` : `${effRepeat}mm`}
                             </text>
                           </g>
                         ) : null;
@@ -3612,19 +4112,19 @@ export default function ProductCatalogPage() {
                           cx += trimPx;
                           ticks.push(<text key="tt" x={cx} y={ry + 8} fontSize={7} fill="#f97316" textAnchor="middle">{trim}</text>);
                         }
-                        for (let li = 0; li <= acUps; li++) {
-                          const xmm = trim + li * jobW;
+                        for (let li = 0; li <= diagramAcUps; li++) {
+                          const xmm = trim + li * (isSleeve ? sleeveFilmWidth : diagLaneW);
                           const xpx = sx(xmm);
                           ticks.push(
                             <g key={`bt-${li}`}>
                               <line x1={xpx} y1={ry - 2} x2={xpx} y2={ry + 2} stroke="#9ca3af" strokeWidth={0.8} />
-                              {(li === 0 || li === acUps || li === Math.floor(acUps / 2)) && (
+                              {(li === 0 || li === diagramAcUps || li === Math.floor(diagramAcUps / 2)) && (
                                 <text x={xpx} y={ry + 9} fontSize={7} fill="#6b7280" textAnchor="middle">{xmm}</text>
                               )}
                             </g>
                           );
                         }
-                        ticks.push(<text key="total" x={sx(filmW)} y={ry + 9} fontSize={7} fill="#6b7280" textAnchor="end">{filmW}mm</text>);
+                        ticks.push(<text key="total" x={sx(diagramFilmW)} y={ry + 9} fontSize={7} fill="#6b7280" textAnchor="end">{diagramFilmW}mm</text>);
                         return ticks;
                       })()}
 
@@ -3642,7 +4142,7 @@ export default function ProductCatalogPage() {
                             <line x1={drawW} y1={arrowY - 6} x2={drawW} y2={arrowY + 6} stroke="#374151" strokeWidth="1" />
                             <rect x={midX - 42} y={arrowY - 7} width={84} height={13} fill="white" />
                             <text x={midX} y={arrowY + 4} textAnchor="middle" fontSize={10} fill="#111827" fontWeight="700">
-                              Total Film Width: {filmW} mm
+                              Total Film Width: {diagramFilmW} mm
                             </text>
                           </g>
                         );
@@ -3675,9 +4175,21 @@ export default function ProductCatalogPage() {
                     {/* Legend */}
                     <div className="flex flex-wrap gap-3 mt-3 pt-2 border-t border-gray-200">
                       {[
-                        { color: "#dbeafe", border: "#6366f1", label: `Job cell — ${jobW}mm wide × ${effRepeat}mm repeat length` },
-                        ...(trim > 0 ? [{ color: C_TRIM, border: "#f97316", label: `Trim both sides (${trim}mm each)` }] : []),
-                        ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: `Shrinkage +${shrink}mm on repeat length` }] : []),
+                        ...(isSleeve ? [
+                          ...(trim > 0 ? [{ color: "#fed7aa", border: "#f97316", label: `Trim both sides — ${trim}mm each` }] : []),
+                          ...(slvTransp > 0 ? [{ color: "#f0f9ff", border: "#0ea5e9", label: `Transparent area — ${slvTransp}mm (left edge of sleeve)` }] : []),
+                          { color: "#dbeafe", border: "#3b82f6", label: `FRONT face — ${jobW}mm (Layflat = single side width)` },
+                          { color: "#bfdbfe", border: "#3b82f6", label: `BACK face — ${jobW}mm. Total per sleeve = ${jobW}+${jobW} = ${jobW*2}mm (Design Circ without shrink)` },
+                          ...(slvSeam > 0 ? [{ color: "#fef3c7", border: "#d97706", label: `Seaming area — ${slvSeam}mm (right edge of sleeve)` }] : []),
+                          { color: "white",   border: "#ef4444", label: `Cut line — vertical, at sleeve outer edges` },
+                          { color: "white",   border: "#7c3aed", label: `Fold line — vertical centre between FRONT & BACK (tube seam, width dir)` },
+                        ] : [
+                          { color: "#dbeafe", border: "#6366f1", label: `Job cell — ${diagLaneW}mm wide × ${effRepeat}mm repeat length` },
+                          ...(trim > 0 ? [{ color: C_TRIM, border: "#f97316", label: `Trim both sides (${trim}mm each)` }] : []),
+                        ]),
+                        ...(shrink > 0 ? [{ color: "#fae8ff", border: "#a21caf", label: isSleeve
+                            ? `Length Shrinkage +${shrink}mm per sleeve (cutting length direction)`
+                            : `Shrinkage +${shrink}mm on repeat length` }] : []),
                       ].map(l => (
                         <div key={l.label} className="flex items-center gap-1.5">
                           <div className="w-4 h-4 rounded border-2 flex-shrink-0" style={{ background: l.color, borderColor: l.border }} />
@@ -3707,9 +4219,18 @@ export default function ProductCatalogPage() {
                       )}
                       {Array.from({ length: acUps }, (_, i) => (
                         <tr key={`lane-${i}`}>
-                          <td className="px-3 py-1.5 text-gray-500">{i + 1} UPS</td>
-                          <td className="px-3 py-1.5"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#e0e7ff", color: "#4338ca" }}>Job Width</span></td>
-                          <td className="px-3 py-1.5 font-mono font-bold text-indigo-600">{jobW}</td>
+                          <td className="px-3 py-1.5 text-gray-500">
+                            {i + 1} UPS
+                            {isSleeve && <span className="ml-1 text-[10px] text-gray-400">(LF×2+T+S)</span>}
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold" style={{ background: "#e0e7ff", color: "#4338ca" }}>
+                              {isSleeve ? "Sleeve Lane (LF×2+T+S)" : diagLaneW !== jobW ? `Pouch Lane (W+seals/gusset)` : "Job Width"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-1.5 font-mono font-bold text-indigo-600">
+                            {isSleeve ? sleeveFilmWidth : diagLaneW}
+                          </td>
                           <td className="px-3 py-1.5"><div className="w-5 h-3 rounded" style={{ background: "#e0e7ff", border: "1px solid #6366f1" }} /></td>
                         </tr>
                       ))}
@@ -3731,7 +4252,9 @@ export default function ProductCatalogPage() {
 
               {/* Repeat (Height) direction breakdown */}
               <div>
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Repeat UPS Breakdown — Repeat Length Direction</p>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">
+                  {sTypePrev === "Sleeve" ? "Repeat UPS Breakdown — Circumference Direction" : "Repeat UPS Breakdown — Repeat Length Direction"}
+                </p>
                 <div className="overflow-x-auto rounded-xl border border-gray-200">
                   <table className="min-w-full text-xs">
                     <thead className="bg-gray-100">
@@ -3742,23 +4265,84 @@ export default function ProductCatalogPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 bg-white">
-                      <tr>
-                        <td className="px-3 py-1.5 text-gray-600">Repeat Length</td>
-                        <td className="px-3 py-1.5 font-mono font-bold text-indigo-700">{replanForm.jobHeight || 0} mm</td>
-                        <td className="px-3 py-1.5 text-gray-400 text-[10px]">As entered in Basic Info</td>
-                      </tr>
-                      {shrink > 0 && (
-                        <tr>
-                          <td className="px-3 py-1.5 text-gray-600">+ Shrinkage (on repeat length)</td>
-                          <td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">+{shrink} mm</td>
-                          <td className="px-3 py-1.5 text-gray-400 text-[10px]">Applied to repeat length only</td>
-                        </tr>
+                      {sTypePrev === "Sleeve" ? (() => {
+                        const cutLen   = replanForm.jobHeight || 0;
+                        const slvCutWithShrink = cutLen + shrink;
+                        const rCount   = plan.repeatUPS as number;
+                        const cylC     = plan.cylCirc as number;
+                        return (
+                        <>
+                          <tr>
+                            <td className="px-3 py-1.5 text-gray-600">Cutting Length</td>
+                            <td className="px-3 py-1.5 font-mono font-bold text-indigo-700">{cutLen} mm</td>
+                            <td className="px-3 py-1.5 text-gray-400 text-[10px]">As entered — sleeve height after cutting</td>
+                          </tr>
+                          {shrink > 0 && (
+                            <tr>
+                              <td className="px-3 py-1.5 text-gray-600">+ Length Shrinkage</td>
+                              <td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">+{shrink} mm</td>
+                              <td className="px-3 py-1.5 text-gray-400 text-[10px]">Added to cutting length before cylinder sizing</td>
+                            </tr>
+                          )}
+                          <tr className="bg-blue-50">
+                            <td className="px-3 py-1.5 font-bold text-blue-800">= Cylinder Repeat (per sleeve)</td>
+                            <td className="px-3 py-1.5 font-mono font-bold text-blue-700">{slvCutWithShrink} mm</td>
+                            <td className="px-3 py-1.5 text-blue-600 text-[10px]">{cutLen}{shrink > 0 ? `+${shrink}` : ""} = {slvCutWithShrink}mm per sleeve length</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-1.5 text-gray-600">× Repeat Count (N)</td>
+                            <td className="px-3 py-1.5 font-mono font-bold text-purple-700">× {rCount}</td>
+                            <td className="px-3 py-1.5 text-gray-400 text-[10px]">{rCount === 1 ? "1 sleeve per revolution" : `${rCount} sleeves per revolution`}</td>
+                          </tr>
+                          <tr className="bg-teal-50 border-t-2 border-teal-200">
+                            <td className="px-3 py-1.5 font-bold text-teal-800">= Cylinder Circumference</td>
+                            <td className="px-3 py-1.5 font-mono font-bold text-teal-700">{cylC} mm</td>
+                            <td className="px-3 py-1.5 text-teal-600 text-[10px]">{slvCutWithShrink}mm × {rCount} = {cylC}mm — {cylC} % {slvCutWithShrink} = {cylC % slvCutWithShrink === 0 ? "0 ✓" : `${cylC % slvCutWithShrink} ✗`}</td>
+                          </tr>
+                        </>
+                        );
+                      })() : (
+                        <>
+                          <tr>
+                            <td className="px-3 py-1.5 text-gray-600">Pouch / Repeat Height</td>
+                            <td className="px-3 py-1.5 font-mono font-bold text-indigo-700">{replanForm.jobHeight || 0} mm</td>
+                            <td className="px-3 py-1.5 text-gray-400 text-[10px]">As entered</td>
+                          </tr>
+                          {topSealPrev > 0 && (
+                            <tr>
+                              <td className="px-3 py-1.5 text-gray-600">+ Top Seal</td>
+                              <td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{topSealPrev} mm</td>
+                              <td className="px-3 py-1.5 text-gray-400 text-[10px]">Top seal added to repeat</td>
+                            </tr>
+                          )}
+                          {btmSealPrev > 0 && (contentPrev === "Pouch — 3 Side Seal" || contentPrev === "Pouch — Center Seal" || contentPrev === "Both Side Gusset Pouch") && (
+                            <tr>
+                              <td className="px-3 py-1.5 text-gray-600">+ Bottom Seal</td>
+                              <td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{btmSealPrev} mm</td>
+                              <td className="px-3 py-1.5 text-gray-400 text-[10px]">Bottom seal added to repeat</td>
+                            </tr>
+                          )}
+                          {gussetPrev > 0 && (contentPrev === "Standup Pouch" || contentPrev === "Zipper Pouch" || contentPrev === "3D Pouch / Flat Bottom") && (
+                            <tr>
+                              <td className="px-3 py-1.5 text-gray-600">+ Bottom Gusset / 2</td>
+                              <td className="px-3 py-1.5 font-mono font-bold text-orange-600">+{gussetPrev / 2} mm</td>
+                              <td className="px-3 py-1.5 text-gray-400 text-[10px]">Bottom gusset folds into repeat (half depth)</td>
+                            </tr>
+                          )}
+                          {shrink > 0 && (
+                            <tr>
+                              <td className="px-3 py-1.5 text-gray-600">+ Shrinkage</td>
+                              <td className="px-3 py-1.5 font-mono font-bold text-fuchsia-600">+{shrink} mm</td>
+                              <td className="px-3 py-1.5 text-gray-400 text-[10px]">Applied to repeat length</td>
+                            </tr>
+                          )}
+                          <tr className="bg-teal-50">
+                            <td className="px-3 py-1.5 font-bold text-teal-800">= Effective Repeat</td>
+                            <td className="px-3 py-1.5 font-mono font-bold text-teal-700">{effRepeat} mm</td>
+                            <td className="px-3 py-1.5 text-teal-600 text-[10px]">Used for cylinder circumference matching</td>
+                          </tr>
+                        </>
                       )}
-                      <tr className="bg-teal-50">
-                        <td className="px-3 py-1.5 font-bold text-teal-800">= Effective Repeat</td>
-                        <td className="px-3 py-1.5 font-mono font-bold text-teal-700">{(replanForm.jobHeight || 0) + shrink} mm</td>
-                        <td className="px-3 py-1.5 text-teal-600 text-[10px]">Repeat Length + Shrinkage</td>
-                      </tr>
                       <tr>
                         <td className="px-3 py-1.5 text-gray-600">Cylinder Circumference</td>
                         <td className="px-3 py-1.5 font-mono font-bold text-emerald-700">{plan.cylCirc} mm</td>
@@ -3767,7 +4351,7 @@ export default function ProductCatalogPage() {
                       <tr className="bg-green-50 border-t-2 border-green-200">
                         <td className="px-3 py-2 font-bold text-green-800">÷ Repeat UPS</td>
                         <td className="px-3 py-2 font-mono font-bold text-green-700 text-sm">{plan.repeatUPS}×</td>
-                        <td className="px-3 py-2 text-green-600 text-[10px]">{plan.cylCirc} ÷ {(replanForm.jobHeight || 0) + shrink} = {plan.repeatUPS} repeats per revolution</td>
+                        <td className="px-3 py-2 text-green-600 text-[10px]">{plan.cylCirc} ÷ {effRepeat} = {plan.repeatUPS} {sTypePrev === "Sleeve" ? "images" : "repeats"} per revolution</td>
                       </tr>
                     </tbody>
                   </table>

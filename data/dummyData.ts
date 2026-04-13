@@ -66,6 +66,11 @@ export const categories: CategoryMaster[] = [
       "Roll Form — Milk",
       "Roll Form — Oil",
       "Roll Form — Snacks",
+      "Sleeve — Shrink",
+      "Sleeve — Stretch",
+      "Both Side Gusset Pouch",
+      "3D Pouch / Flat Bottom",
+      "Laminate Roll",
     ],
     plyConsumables: [
       { id: "PC001", plyType: "Printing",   itemGroup: "Ink",      itemSubGroup: "Solvent Based Ink",   fieldDisplayName: "Ink Wet Weight",      defaultValue: 3.5, minValue: 1,   maxValue: 8,   sharePercentageFormula: "" },
@@ -203,16 +208,19 @@ export type Tool = {
   // Doctor Blade / Impression Roller / Slitter Knife
   material: string; bladeWidth: string; bladeThickness: string; bladeLength: string;
   hardness: string; knifeType: string; knifeDiameter: string; knifeThickness: string;
+  // Cylinder Life Tracking
+  shelfLifeMeters?: number;  // Total designed life in running meters
+  usedMeters?: number;       // Meters already printed (updated after each job)
 };
 
 const bt = { clientName: "", jobCardNo: "", jobName: "", location: "", hsnCode: "", purchaseUnit: "Nos", stockUnit: "Nos", category: "", description: "", status: "Active" as const, repeatLength: "", printWidth: "", noOfColors: "", colorName: "", engravingType: "", screen: "", engravingAngle: "", cellDepth: "", cylinderMaterial: "", surfaceFinish: "", chromeStatus: "", toolPrefix: "", toolRefCode: "", dieType: "", length: "", width: "", height: "", upsL: "", upsW: "", totalUps: "", machine: "", deckNo: "", lineCount: "", volume: "", rollWidth: "", rollDiameter: "", aniloxEngravingType: "", aniloxMaterial: "", material: "", bladeWidth: "", bladeThickness: "", bladeLength: "", hardness: "", knifeType: "", knifeDiameter: "", knifeThickness: "" };
 
 export const tools: Tool[] = [
   // Cylinders
-  { id: "T001", code: "CYL-P001", name: "Parle Biscuit – Back Print – 8C", toolType: "Cylinder", ...bt, clientName: "Parle Products Pvt Ltd", jobCardNo: "JC-2024-001", jobName: "Parle-G 100g Wrap", location: "Rack A-1", noOfColors: "8", repeatLength: "450", printWidth: "1100", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "32", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated" },
-  { id: "T002", code: "CYL-B001", name: "Britannia – Surface Print – 6C", toolType: "Cylinder", ...bt, clientName: "Britannia Industries Ltd", jobCardNo: "JC-2024-015", jobName: "Britannia NutriChoice 200g", location: "Rack A-2", noOfColors: "6", repeatLength: "400", printWidth: "1050", engravingType: "Electromechanical", screen: "60", engravingAngle: "45", cellDepth: "28", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated" },
-  { id: "T003", code: "CYL-H001", name: "Haldiram – Combo Print – 9C", toolType: "Cylinder", ...bt, clientName: "Haldiram Snacks Pvt Ltd", jobCardNo: "JC-2024-022", jobName: "Haldiram Bhujia 200g Pouch", location: "Rack B-1", noOfColors: "9", repeatLength: "480", printWidth: "1200", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Needs Re-chrome" },
-  { id: "T004", code: "CYL-A001", name: "Amul – Shrink Sleeve – 6C", toolType: "Cylinder", ...bt, clientName: "Amul Dairy", jobCardNo: "JC-2024-031", jobName: "Amul Butter Shrink Sleeve", location: "Rack B-2", noOfColors: "6", repeatLength: "360", printWidth: "800", engravingType: "Laser", screen: "80", engravingAngle: "45", cellDepth: "25", cylinderMaterial: "Aluminium", surfaceFinish: "Chrome Plated", chromeStatus: "Plated" },
+  { id: "T001", code: "CYL-P001", name: "Parle Biscuit – Back Print – 8C", toolType: "Cylinder", ...bt, clientName: "Parle Products Pvt Ltd", jobCardNo: "JC-2024-001", jobName: "Parle-G 100g Wrap", location: "Rack A-1", noOfColors: "8", repeatLength: "450", printWidth: "1100", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "32", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", shelfLifeMeters: 25000, usedMeters: 23200 },
+  { id: "T002", code: "CYL-B001", name: "Britannia – Surface Print – 6C", toolType: "Cylinder", ...bt, clientName: "Britannia Industries Ltd", jobCardNo: "JC-2024-015", jobName: "Britannia NutriChoice 200g", location: "Rack A-2", noOfColors: "6", repeatLength: "400", printWidth: "1050", engravingType: "Electromechanical", screen: "60", engravingAngle: "45", cellDepth: "28", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", shelfLifeMeters: 20000, usedMeters: 18500 },
+  { id: "T003", code: "CYL-H001", name: "Haldiram – Combo Print – 9C", toolType: "Cylinder", ...bt, clientName: "Haldiram Snacks Pvt Ltd", jobCardNo: "JC-2024-022", jobName: "Haldiram Bhujia 200g Pouch", location: "Rack B-1", noOfColors: "9", repeatLength: "480", printWidth: "1200", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Needs Re-chrome", shelfLifeMeters: 30000, usedMeters: 15000 },
+  { id: "T004", code: "CYL-A001", name: "Amul – Shrink Sleeve – 6C", toolType: "Cylinder", ...bt, clientName: "Amul Dairy", jobCardNo: "JC-2024-031", jobName: "Amul Butter Shrink Sleeve", location: "Rack B-2", noOfColors: "6", repeatLength: "360", printWidth: "800", engravingType: "Laser", screen: "80", engravingAngle: "45", cellDepth: "25", cylinderMaterial: "Aluminium", surfaceFinish: "Chrome Plated", chromeStatus: "Plated", shelfLifeMeters: 25000, usedMeters: 24800 },
   // Dies
   { id: "T005", code: "DIE-001", name: "3-Side Seal Pouch Die – Parle", toolType: "Die", ...bt, clientName: "Parle Products Pvt Ltd", jobName: "Parle-G 100g", toolPrefix: "3SS", toolRefCode: "DIE-REF-001", dieType: "Flat Die", length: "200", width: "130", height: "25", upsL: "4", upsW: "2", totalUps: "8", location: "Die Store-1", hsnCode: "8207", purchaseUnit: "Nos", stockUnit: "Nos" },
   { id: "T006", code: "DIE-002", name: "Stand-up Pouch Die – Haldiram", toolType: "Die", ...bt, clientName: "Haldiram Snacks Pvt Ltd", jobName: "Bhujia 200g SUP", toolPrefix: "SUP", toolRefCode: "DIE-REF-002", dieType: "Rotary Die", length: "280", width: "180", height: "30", upsL: "2", upsW: "2", totalUps: "4", location: "Die Store-1", hsnCode: "8207", purchaseUnit: "Nos", stockUnit: "Nos" },
@@ -237,24 +245,24 @@ export const tools: Tool[] = [
   { id: "T014", code: "SK-001", name: "Upper Knife Set – SLT-01", toolType: "Slitter Knife", ...bt, machine: "SLT-01", knifeType: "Upper Knife", material: "Tungsten Carbide", knifeDiameter: "150", knifeThickness: "0.4", location: "Slitter Store" },
   { id: "T015", code: "SK-002", name: "Lower Knife Set – SLT-02", toolType: "Slitter Knife", ...bt, machine: "SLT-02", knifeType: "Lower Knife", material: "HSS", knifeDiameter: "120", knifeThickness: "1.0", location: "Slitter Store" },
   // Additional Cylinders (various print widths for planning coverage)
-  { id: "T016", code: "CYL-NAR-001", name: "Narrow Cylinder 500mm", toolType: "Cylinder", ...bt, printWidth: "500", repeatLength: "350", noOfColors: "4", engravingType: "Electromechanical", screen: "60", engravingAngle: "45", cellDepth: "28", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-1" },
-  { id: "T017", code: "CYL-MED-001", name: "Medium Cylinder 700mm", toolType: "Cylinder", ...bt, printWidth: "700", repeatLength: "400", noOfColors: "6", engravingType: "Electromechanical", screen: "65", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-2" },
-  { id: "T021", code: "CYL-WID-001", name: "Wide Cylinder 1350mm", toolType: "Cylinder", ...bt, printWidth: "1350", repeatLength: "500", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "32", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack D-1" },
-  { id: "T022", code: "CYL-XWD-001", name: "Extra-Wide Cylinder 1500mm", toolType: "Cylinder", ...bt, printWidth: "1500", repeatLength: "550", noOfColors: "10", engravingType: "Laser", screen: "80", engravingAngle: "45", cellDepth: "25", cylinderMaterial: "Aluminium", surfaceFinish: "Chrome Plated", chromeStatus: "Plated", location: "Rack D-2" },
-  { id: "T035", code: "CYL-WD2-001", name: "Wide Cylinder 1400mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1400", repeatLength: "480", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack D-3" },
-  { id: "T036", code: "CYL-WD3-001", name: "Wide Cylinder 1600mm – Aluminium", toolType: "Cylinder", ...bt, printWidth: "1600", repeatLength: "600", noOfColors: "10", engravingType: "Laser", screen: "80", engravingAngle: "45", cellDepth: "25", cylinderMaterial: "Aluminium", surfaceFinish: "Chrome Plated", chromeStatus: "Plated", location: "Rack D-4" },
-  { id: "T037", code: "CYL-WD4-001", name: "Wide Cylinder 1700mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1700", repeatLength: "650", noOfColors: "10", engravingType: "Electromechanical", screen: "75", engravingAngle: "45", cellDepth: "32", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack D-5" },
+  { id: "T016", code: "CYL-NAR-001", name: "Narrow Cylinder 500mm", toolType: "Cylinder", ...bt, printWidth: "500", repeatLength: "350", noOfColors: "4", engravingType: "Electromechanical", screen: "60", engravingAngle: "45", cellDepth: "28", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-1", shelfLifeMeters: 25000, usedMeters: 0 },
+  { id: "T017", code: "CYL-MED-001", name: "Medium Cylinder 700mm", toolType: "Cylinder", ...bt, printWidth: "700", repeatLength: "400", noOfColors: "6", engravingType: "Electromechanical", screen: "65", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-2", shelfLifeMeters: 25000, usedMeters: 0 },
+  { id: "T021", code: "CYL-WID-001", name: "Wide Cylinder 1350mm", toolType: "Cylinder", ...bt, printWidth: "1350", repeatLength: "500", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "32", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack D-1", shelfLifeMeters: 25000, usedMeters: 0 },
+  { id: "T022", code: "CYL-XWD-001", name: "Extra-Wide Cylinder 1500mm", toolType: "Cylinder", ...bt, printWidth: "1500", repeatLength: "550", noOfColors: "10", engravingType: "Laser", screen: "80", engravingAngle: "45", cellDepth: "25", cylinderMaterial: "Aluminium", surfaceFinish: "Chrome Plated", chromeStatus: "Plated", location: "Rack D-2", shelfLifeMeters: 25000, usedMeters: 0 },
+  { id: "T035", code: "CYL-WD2-001", name: "Wide Cylinder 1400mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1400", repeatLength: "480", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack D-3", shelfLifeMeters: 25000, usedMeters: 0 },
+  { id: "T036", code: "CYL-WD3-001", name: "Wide Cylinder 1600mm – Aluminium", toolType: "Cylinder", ...bt, printWidth: "1600", repeatLength: "600", noOfColors: "10", engravingType: "Laser", screen: "80", engravingAngle: "45", cellDepth: "25", cylinderMaterial: "Aluminium", surfaceFinish: "Chrome Plated", chromeStatus: "Plated", location: "Rack D-4", shelfLifeMeters: 25000, usedMeters: 0 },
+  { id: "T037", code: "CYL-WD4-001", name: "Wide Cylinder 1700mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1700", repeatLength: "650", noOfColors: "10", engravingType: "Electromechanical", screen: "75", engravingAngle: "45", cellDepth: "32", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack D-5", shelfLifeMeters: 25000, usedMeters: 0 },
   // Ultra-wide cylinders — no matching sleeve in stock → triggers SPECIAL SLEEVE plans
-  { id: "T046", code: "CYL-UWD-001", name: "Ultra-Wide Cylinder 2500mm – Steel", toolType: "Cylinder", ...bt, printWidth: "2500", repeatLength: "700", noOfColors: "10", engravingType: "Electromechanical", screen: "75", engravingAngle: "45", cellDepth: "32", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack E-1" },
-  { id: "T047", code: "CYL-UWD-002", name: "Ultra-Wide Cylinder 3200mm – Steel", toolType: "Cylinder", ...bt, printWidth: "3200", repeatLength: "800", noOfColors: "10", engravingType: "Electromechanical", screen: "75", engravingAngle: "45", cellDepth: "34", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack E-2" },
+  { id: "T046", code: "CYL-UWD-001", name: "Ultra-Wide Cylinder 2500mm – Steel", toolType: "Cylinder", ...bt, printWidth: "2500", repeatLength: "700", noOfColors: "10", engravingType: "Electromechanical", screen: "75", engravingAngle: "45", cellDepth: "32", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack E-1", shelfLifeMeters: 30000, usedMeters: 0 },
+  { id: "T047", code: "CYL-UWD-002", name: "Ultra-Wide Cylinder 3200mm – Steel", toolType: "Cylinder", ...bt, printWidth: "3200", repeatLength: "800", noOfColors: "10", engravingType: "Electromechanical", screen: "75", engravingAngle: "45", cellDepth: "34", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack E-2", shelfLifeMeters: 30000, usedMeters: 0 },
   // Fill gap: 1100–1350mm range
-  { id: "T038", code: "CYL-WD5-001", name: "Cylinder 1150mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1150", repeatLength: "460", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-3" },
-  { id: "T039", code: "CYL-WD6-001", name: "Cylinder 1200mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1200", repeatLength: "470", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-4" },
-  { id: "T040", code: "CYL-WD7-001", name: "Cylinder 1250mm – Aluminium", toolType: "Cylinder", ...bt, printWidth: "1250", repeatLength: "475", noOfColors: "8", engravingType: "Laser", screen: "75", engravingAngle: "45", cellDepth: "27", cylinderMaterial: "Aluminium", surfaceFinish: "Chrome Plated", chromeStatus: "Plated", location: "Rack C-5" },
-  { id: "T041", code: "CYL-WD8-001", name: "Cylinder 1300mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1300", repeatLength: "490", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "31", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-6" },
+  { id: "T038", code: "CYL-WD5-001", name: "Cylinder 1150mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1150", repeatLength: "460", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-3", shelfLifeMeters: 25000, usedMeters: 0 },
+  { id: "T039", code: "CYL-WD6-001", name: "Cylinder 1200mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1200", repeatLength: "470", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-4", shelfLifeMeters: 25000, usedMeters: 3200 },
+  { id: "T040", code: "CYL-WD7-001", name: "Cylinder 1250mm – Aluminium", toolType: "Cylinder", ...bt, printWidth: "1250", repeatLength: "475", noOfColors: "8", engravingType: "Laser", screen: "75", engravingAngle: "45", cellDepth: "27", cylinderMaterial: "Aluminium", surfaceFinish: "Chrome Plated", chromeStatus: "Plated", location: "Rack C-5", shelfLifeMeters: 20000, usedMeters: 8500 },
+  { id: "T041", code: "CYL-WD8-001", name: "Cylinder 1300mm – Steel", toolType: "Cylinder", ...bt, printWidth: "1300", repeatLength: "490", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "31", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-6", shelfLifeMeters: 25000, usedMeters: 12000 },
   // Fill gap: 800–1050mm range
-  { id: "T042", code: "CYL-MED2-001", name: "Cylinder 900mm – Steel", toolType: "Cylinder", ...bt, printWidth: "900", repeatLength: "420", noOfColors: "6", engravingType: "Electromechanical", screen: "65", engravingAngle: "45", cellDepth: "28", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-7" },
-  { id: "T043", code: "CYL-MED3-001", name: "Cylinder 950mm – Steel", toolType: "Cylinder", ...bt, printWidth: "950", repeatLength: "430", noOfColors: "6", engravingType: "Electromechanical", screen: "65", engravingAngle: "45", cellDepth: "29", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-8" },
+  { id: "T042", code: "CYL-MED2-001", name: "Cylinder 900mm – Steel", toolType: "Cylinder", ...bt, printWidth: "900", repeatLength: "420", noOfColors: "6", engravingType: "Electromechanical", screen: "65", engravingAngle: "45", cellDepth: "28", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-7", shelfLifeMeters: 25000, usedMeters: 22000 },
+  { id: "T043", code: "CYL-MED3-001", name: "Cylinder 950mm – Steel", toolType: "Cylinder", ...bt, printWidth: "950", repeatLength: "430", noOfColors: "6", engravingType: "Electromechanical", screen: "65", engravingAngle: "45", cellDepth: "29", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack C-8", shelfLifeMeters: 25000, usedMeters: 5000 },
   // Sleeves (printWidth = sleeve internal/usable width in mm)
   { id: "T025", code: "SLV-001", name: "Sleeve 320mm – PVC", toolType: "Sleeve", ...bt, printWidth: "320", cylinderMaterial: "PVC", engravingType: "N/A", surfaceFinish: "Glossy", chromeStatus: "N/A", location: "Sleeve Store – Rack A" },
   { id: "T026", code: "SLV-002", name: "Sleeve 420mm – PVC", toolType: "Sleeve", ...bt, printWidth: "420", cylinderMaterial: "PVC", engravingType: "N/A", surfaceFinish: "Glossy", chromeStatus: "N/A", location: "Sleeve Store – Rack A" },
@@ -270,9 +278,9 @@ export const tools: Tool[] = [
   { id: "T048", code: "SLV-013", name: "Sleeve 950mm – PVC", toolType: "Sleeve", ...bt, printWidth: "950", cylinderMaterial: "PVC", engravingType: "N/A", surfaceFinish: "Glossy", chromeStatus: "N/A", location: "Sleeve Store – Rack C" },
   { id: "T052", code: "SLV-014", name: "Sleeve 990mm – PETG", toolType: "Sleeve", ...bt, printWidth: "990", cylinderMaterial: "PETG", engravingType: "N/A", surfaceFinish: "Semi-Gloss", chromeStatus: "N/A", location: "Sleeve Store – Rack C" },
   // Demo cylinders: 1100mm print width, 3 different circumferences to show Repeat UPS variation
-  { id: "T049", code: "CYL-DEM-001", name: "Cylinder 1100mm – Circ 480mm (4 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "480", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-1" },
-  { id: "T050", code: "CYL-DEM-002", name: "Cylinder 1100mm – Circ 360mm (3 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "360", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-2" },
-  { id: "T051", code: "CYL-DEM-003", name: "Cylinder 1100mm – Circ 240mm (2 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "240", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-3" },
+  { id: "T049", code: "CYL-DEM-001", name: "Cylinder 1100mm – Circ 480mm (4 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "480", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-1", shelfLifeMeters: 25000, usedMeters: 1800 },
+  { id: "T050", code: "CYL-DEM-002", name: "Cylinder 1100mm – Circ 360mm (3 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "360", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-2", shelfLifeMeters: 25000, usedMeters: 24200 },
+  { id: "T051", code: "CYL-DEM-003", name: "Cylinder 1100mm – Circ 240mm (2 UPS@120)", toolType: "Cylinder", ...bt, printWidth: "1100", repeatLength: "240", noOfColors: "8", engravingType: "Electromechanical", screen: "70", engravingAngle: "45", cellDepth: "30", cylinderMaterial: "Steel", surfaceFinish: "Hard Chrome", chromeStatus: "Plated", location: "Rack F-3", shelfLifeMeters: 25000, usedMeters: 9500 },
   // Extra-wide sleeves — require Special-Order cylinders (no stock cylinder ≥ 1800mm exists)
   { id: "T044", code: "SLV-011", name: "Sleeve 1800mm – PVC", toolType: "Sleeve", ...bt, printWidth: "1800", cylinderMaterial: "PVC", engravingType: "N/A", surfaceFinish: "Glossy", chromeStatus: "N/A", location: "Sleeve Store – Rack F" },
   { id: "T045", code: "SLV-012", name: "Sleeve 2000mm – PETG", toolType: "Sleeve", ...bt, printWidth: "2000", cylinderMaterial: "PETG", engravingType: "N/A", surfaceFinish: "Semi-Gloss", chromeStatus: "N/A", location: "Sleeve Store – Rack F" },
@@ -1949,6 +1957,196 @@ export const grnRecords: GRN[] = [
       },
     ],
   },
+  {
+    id: "GRN006", grnNo: "GRN00006_25_26", grnDate: "2026-03-25",
+    supplier: "Cosmo Films Ltd", supplierState: "Maharashtra",
+    invoiceNo: "CF/INV/2625", invoiceDate: "2026-03-24",
+    eWayBillNo: "EWB0325006", eWayBillDate: "2026-03-24",
+    gateEntryNo: "GE-006", gateEntryDate: "2026-03-25",
+    lrVehicleNo: "MH-04-CD-2290", transporter: "Fast Logistics",
+    receivedBy: "Ramesh Kumar", remark: "Second lot — rate increase due to petro pricing",
+    status: "Completed",
+    lines: [
+      {
+        lineId: "GL008", poRef: "PO00006_25_26",
+        itemCode: "RM-FIL-4475", itemGroup: "Film", subGroup: "BOPP Film",
+        itemName: "BOPP 90 MICRON 0.2 THICKNESS",
+        orderedQty: 1500, receivedQty: 1500, stockUnit: "Kg", purchaseUnit: "Kg",
+        rate: 158, hsnCode: "3920", gstPct: 18,
+        batchNo: "BATCH-RM-FIL-4475-20260325-002",
+        supplierBatchNo: "CF-BOPP-2625-01", expiryDate: "",
+        warehouseId: "WH003", warehouseName: "Film Store", bin: "FL-A2",
+        basicAmt: 237000, cgstAmt: 21330, sgstAmt: 21330, igstAmt: 0, totalAmt: 279660,
+      },
+    ],
+  },
+  {
+    id: "GRN007", grnNo: "GRN00007_25_26", grnDate: "2026-04-02",
+    supplier: "Uflex Ltd", supplierState: "Uttar Pradesh",
+    invoiceNo: "UFX/INV/0402", invoiceDate: "2026-04-01",
+    eWayBillNo: "EWB0402007", eWayBillDate: "2026-04-01",
+    gateEntryNo: "GE-007", gateEntryDate: "2026-04-02",
+    lrVehicleNo: "UP-16-AB-5544", transporter: "Speed Cargo",
+    receivedBy: "Sunil Patil", remark: "",
+    status: "Completed",
+    lines: [
+      {
+        lineId: "GL009", poRef: "PO00007_25_26",
+        itemCode: "RM-FIL-PET-001", itemGroup: "Film", subGroup: "PET Film",
+        itemName: "PET FILM 12 MICRON",
+        orderedQty: 800, receivedQty: 800, stockUnit: "Kg", purchaseUnit: "Kg",
+        rate: 210, hsnCode: "3920", gstPct: 18,
+        batchNo: "BATCH-RM-FIL-PET-20260402-001",
+        supplierBatchNo: "UFX-PET12-0402-A", expiryDate: "",
+        warehouseId: "WH003", warehouseName: "Film Store", bin: "FL-B1",
+        basicAmt: 168000, cgstAmt: 15120, sgstAmt: 15120, igstAmt: 0, totalAmt: 198240,
+      },
+      {
+        lineId: "GL010", poRef: "PO00007_25_26",
+        itemCode: "RM-FIL-PET-002", itemGroup: "Film", subGroup: "PET Film",
+        itemName: "PET FILM 12 MICRON (ECONOMY GRADE)",
+        orderedQty: 500, receivedQty: 500, stockUnit: "Kg", purchaseUnit: "Kg",
+        rate: 198, hsnCode: "3920", gstPct: 18,
+        batchNo: "BATCH-RM-FIL-PET-20260402-002",
+        supplierBatchNo: "UFX-PET12-ECO-0402-A", expiryDate: "",
+        warehouseId: "WH003", warehouseName: "Film Store", bin: "FL-B2",
+        basicAmt: 99000, cgstAmt: 8910, sgstAmt: 8910, igstAmt: 0, totalAmt: 116820,
+      },
+    ],
+  },
+  {
+    id: "GRN008", grnNo: "GRN00008_25_26", grnDate: "2026-04-05",
+    supplier: "Reliance Industries Ltd", supplierState: "Gujarat",
+    invoiceNo: "RIL/INV/0405", invoiceDate: "2026-04-04",
+    eWayBillNo: "EWB0405008", eWayBillDate: "2026-04-04",
+    gateEntryNo: "GE-008", gateEntryDate: "2026-04-05",
+    lrVehicleNo: "GJ-05-EF-7721", transporter: "National Carriers",
+    receivedBy: "Ramesh Kumar", remark: "LLDPE — two grades",
+    status: "Completed",
+    lines: [
+      {
+        lineId: "GL011", poRef: "PO00008_25_26",
+        itemCode: "RM-FIL-1022", itemGroup: "Film", subGroup: "LLDPE Grade",
+        itemName: "LLDPE C4 GRADE FILM",
+        orderedQty: 2000, receivedQty: 1980, stockUnit: "Kg", purchaseUnit: "Kg",
+        rate: 93, hsnCode: "3920", gstPct: 18,
+        batchNo: "BATCH-RM-FIL-LLDPE-C4-20260405-001",
+        supplierBatchNo: "RIL-LLDPE-C4-0405-01", expiryDate: "",
+        warehouseId: "WH003", warehouseName: "Film Store", bin: "FL-C1",
+        basicAmt: 184140, cgstAmt: 0, sgstAmt: 0, igstAmt: 33145, totalAmt: 217285,
+      },
+      {
+        lineId: "GL012", poRef: "PO00008_25_26",
+        itemCode: "RM-FIL-1023", itemGroup: "Film", subGroup: "LLDPE Grade",
+        itemName: "LLDPE C6 GRADE FILM",
+        orderedQty: 1000, receivedQty: 1000, stockUnit: "Kg", purchaseUnit: "Kg",
+        rate: 97, hsnCode: "3920", gstPct: 18,
+        batchNo: "BATCH-RM-FIL-LLDPE-C6-20260405-001",
+        supplierBatchNo: "RIL-LLDPE-C6-0405-01", expiryDate: "",
+        warehouseId: "WH003", warehouseName: "Film Store", bin: "FL-C1",
+        basicAmt: 97000, cgstAmt: 0, sgstAmt: 0, igstAmt: 17460, totalAmt: 114460,
+      },
+    ],
+  },
+  {
+    id: "GRN009", grnNo: "GRN00009_25_26", grnDate: "2026-04-08",
+    supplier: "Haldia Petrochemicals Ltd", supplierState: "West Bengal",
+    invoiceNo: "HPL/INV/0408", invoiceDate: "2026-04-07",
+    eWayBillNo: "EWB0408009", eWayBillDate: "2026-04-07",
+    gateEntryNo: "GE-009", gateEntryDate: "2026-04-08",
+    lrVehicleNo: "WB-06-CD-3390", transporter: "East West Cargo",
+    receivedBy: "Ramesh Kumar", remark: "LDPE film rolls",
+    status: "Completed",
+    lines: [
+      {
+        lineId: "GL013", poRef: "PO00009_25_26",
+        itemCode: "RM-FIL-3011", itemGroup: "Film", subGroup: "LDPE Grade",
+        itemName: "LDPE LD150",
+        orderedQty: 1500, receivedQty: 1500, stockUnit: "Kg", purchaseUnit: "Kg",
+        rate: 96, hsnCode: "3920", gstPct: 18,
+        batchNo: "BATCH-RM-FIL-LDPE-20260408-001",
+        supplierBatchNo: "HPL-LD150-0408-01", expiryDate: "",
+        warehouseId: "WH003", warehouseName: "Film Store", bin: "FL-A1",
+        basicAmt: 144000, cgstAmt: 12960, sgstAmt: 12960, igstAmt: 0, totalAmt: 169920,
+      },
+    ],
+  },
+  // ── Ink lots ──────────────────────────────────────────────────
+  {
+    id: "GRN010", grnNo: "GRN00010_25_26", grnDate: "2026-03-10",
+    supplier: "Siegwerk India Pvt Ltd", supplierState: "Maharashtra",
+    invoiceNo: "SW/INV/0310", invoiceDate: "2026-03-09",
+    eWayBillNo: "EWB0310010", eWayBillDate: "2026-03-09",
+    gateEntryNo: "GE-010", gateEntryDate: "2026-03-10",
+    lrVehicleNo: "MH-12-AB-1122", transporter: "Speed Cargo",
+    receivedBy: "Sunil Patil", remark: "Solvent based inks — lot 1",
+    status: "Completed",
+    lines: [
+      { lineId: "GL014", poRef: "PO00010_25_26", itemCode: "RM-INK-001", itemGroup: "Ink", subGroup: "Solvent Based Ink", itemName: "YELLOW INK SOLVENT BASED", orderedQty: 100, receivedQty: 100, stockUnit: "Kg", purchaseUnit: "Kg", rate: 445, hsnCode: "3215", gstPct: 18, batchNo: "BATCH-INK-SB-YLW-20260310-001", supplierBatchNo: "SW-SB-YLW-0310-A", expiryDate: "2027-03-10", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-A1", basicAmt: 44500, cgstAmt: 4005, sgstAmt: 4005, igstAmt: 0, totalAmt: 52510 },
+      { lineId: "GL015", poRef: "PO00010_25_26", itemCode: "RM-INK-002", itemGroup: "Ink", subGroup: "Solvent Based Ink", itemName: "CYAN INK SOLVENT BASED", orderedQty: 80, receivedQty: 80, stockUnit: "Kg", purchaseUnit: "Kg", rate: 475, hsnCode: "3215", gstPct: 18, batchNo: "BATCH-INK-SB-CYN-20260310-001", supplierBatchNo: "SW-SB-CYN-0310-A", expiryDate: "2027-03-10", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-A1", basicAmt: 38000, cgstAmt: 3420, sgstAmt: 3420, igstAmt: 0, totalAmt: 44840 },
+      { lineId: "GL016", poRef: "PO00010_25_26", itemCode: "RM-INK-003", itemGroup: "Ink", subGroup: "Solvent Based Ink", itemName: "MAGENTA INK SOLVENT BASED", orderedQty: 80, receivedQty: 80, stockUnit: "Kg", purchaseUnit: "Kg", rate: 488, hsnCode: "3215", gstPct: 18, batchNo: "BATCH-INK-SB-MAG-20260310-001", supplierBatchNo: "SW-SB-MAG-0310-A", expiryDate: "2027-03-10", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-A1", basicAmt: 39040, cgstAmt: 3514, sgstAmt: 3514, igstAmt: 0, totalAmt: 46068 },
+      { lineId: "GL017", poRef: "PO00010_25_26", itemCode: "RM-INK-004", itemGroup: "Ink", subGroup: "Solvent Based Ink", itemName: "BLACK INK SOLVENT BASED", orderedQty: 60, receivedQty: 60, stockUnit: "Kg", purchaseUnit: "Kg", rate: 415, hsnCode: "3215", gstPct: 18, batchNo: "BATCH-INK-SB-BLK-20260310-001", supplierBatchNo: "SW-SB-BLK-0310-A", expiryDate: "2027-03-10", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-A1", basicAmt: 24900, cgstAmt: 2241, sgstAmt: 2241, igstAmt: 0, totalAmt: 29382 },
+    ],
+  },
+  {
+    id: "GRN011", grnNo: "GRN00011_25_26", grnDate: "2026-04-01",
+    supplier: "Toyo Ink India Pvt Ltd", supplierState: "Maharashtra",
+    invoiceNo: "TY/INV/0401", invoiceDate: "2026-03-31",
+    eWayBillNo: "EWB0401011", eWayBillDate: "2026-03-31",
+    gateEntryNo: "GE-011", gateEntryDate: "2026-04-01",
+    lrVehicleNo: "MH-04-GH-5533", transporter: "Fast Logistics",
+    receivedBy: "Sunil Patil", remark: "PU inks lot 1 + Solvent based lot 2",
+    status: "Completed",
+    lines: [
+      { lineId: "GL018", poRef: "PO00011_25_26", itemCode: "RM-INK-006", itemGroup: "Ink", subGroup: "PU Ink", itemName: "RED INK PU BASED", orderedQty: 50, receivedQty: 50, stockUnit: "Kg", purchaseUnit: "Kg", rate: 515, hsnCode: "3215", gstPct: 18, batchNo: "BATCH-INK-PU-RED-20260401-001", supplierBatchNo: "TY-PU-RED-0401-A", expiryDate: "2027-04-01", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-A2", basicAmt: 25750, cgstAmt: 2318, sgstAmt: 2318, igstAmt: 0, totalAmt: 30386 },
+      { lineId: "GL019", poRef: "PO00011_25_26", itemCode: "RM-INK-007", itemGroup: "Ink", subGroup: "PU Ink", itemName: "YELLOW INK PU BASED", orderedQty: 50, receivedQty: 50, stockUnit: "Kg", purchaseUnit: "Kg", rate: 505, hsnCode: "3215", gstPct: 18, batchNo: "BATCH-INK-PU-YLW-20260401-001", supplierBatchNo: "TY-PU-YLW-0401-A", expiryDate: "2027-04-01", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-A2", basicAmt: 25250, cgstAmt: 2273, sgstAmt: 2273, igstAmt: 0, totalAmt: 29796 },
+      { lineId: "GL020", poRef: "PO00011_25_26", itemCode: "RM-INK-001", itemGroup: "Ink", subGroup: "Solvent Based Ink", itemName: "YELLOW INK SOLVENT BASED", orderedQty: 100, receivedQty: 100, stockUnit: "Kg", purchaseUnit: "Kg", rate: 452, hsnCode: "3215", gstPct: 18, batchNo: "BATCH-INK-SB-YLW-20260401-002", supplierBatchNo: "TY-SB-YLW-0401-A", expiryDate: "2027-04-01", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-A1", basicAmt: 45200, cgstAmt: 4068, sgstAmt: 4068, igstAmt: 0, totalAmt: 53336 },
+    ],
+  },
+  // ── Solvent lots ───────────────────────────────────────────────
+  {
+    id: "GRN012", grnNo: "GRN00012_25_26", grnDate: "2026-03-20",
+    supplier: "Deepak Nitrite Ltd", supplierState: "Gujarat",
+    invoiceNo: "DNL/INV/0320", invoiceDate: "2026-03-19",
+    eWayBillNo: "EWB0320012", eWayBillDate: "2026-03-19",
+    gateEntryNo: "GE-012", gateEntryDate: "2026-03-20",
+    lrVehicleNo: "GJ-05-CD-8820", transporter: "National Carriers",
+    receivedBy: "Ramesh Kumar", remark: "Solvents — toluene + EA",
+    status: "Completed",
+    lines: [
+      { lineId: "GL021", poRef: "PO00012_25_26", itemCode: "RM-SOL-001", itemGroup: "Solvent", subGroup: "Ethyl Acetate (EA)", itemName: "ETHYL ACETATE (EA) GRADE", orderedQty: 500, receivedQty: 500, stockUnit: "Kg", purchaseUnit: "Kg", rate: 62, hsnCode: "2915", gstPct: 18, batchNo: "BATCH-SOL-EA-20260320-001", supplierBatchNo: "DNL-EA-0320-01", expiryDate: "2027-03-20", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-B1", basicAmt: 31000, cgstAmt: 2790, sgstAmt: 2790, igstAmt: 0, totalAmt: 36580 },
+      { lineId: "GL022", poRef: "PO00012_25_26", itemCode: "RM-SOL-002", itemGroup: "Solvent", subGroup: "Toluene", itemName: "TOLUENE SOLVENT", orderedQty: 800, receivedQty: 800, stockUnit: "Kg", purchaseUnit: "Kg", rate: 53, hsnCode: "2902", gstPct: 18, batchNo: "BATCH-SOL-TOL-20260320-001", supplierBatchNo: "DNL-TOL-0320-01", expiryDate: "2027-03-20", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-B1", basicAmt: 42400, cgstAmt: 3816, sgstAmt: 3816, igstAmt: 0, totalAmt: 50032 },
+    ],
+  },
+  {
+    id: "GRN013", grnNo: "GRN00013_25_26", grnDate: "2026-04-06",
+    supplier: "Laxmi Organic Industries Ltd", supplierState: "Maharashtra",
+    invoiceNo: "LOI/INV/0406", invoiceDate: "2026-04-05",
+    eWayBillNo: "EWB0406013", eWayBillDate: "2026-04-05",
+    gateEntryNo: "GE-013", gateEntryDate: "2026-04-06",
+    lrVehicleNo: "MH-06-EF-6644", transporter: "Speed Cargo",
+    receivedBy: "Sunil Patil", remark: "IPA + EA second lot",
+    status: "Completed",
+    lines: [
+      { lineId: "GL023", poRef: "PO00013_25_26", itemCode: "RM-SOL-001", itemGroup: "Solvent", subGroup: "Ethyl Acetate (EA)", itemName: "ETHYL ACETATE (EA) GRADE", orderedQty: 400, receivedQty: 400, stockUnit: "Kg", purchaseUnit: "Kg", rate: 64, hsnCode: "2915", gstPct: 18, batchNo: "BATCH-SOL-EA-20260406-002", supplierBatchNo: "LOI-EA-0406-01", expiryDate: "2027-04-06", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-B2", basicAmt: 25600, cgstAmt: 2304, sgstAmt: 2304, igstAmt: 0, totalAmt: 30208 },
+      { lineId: "GL024", poRef: "PO00013_25_26", itemCode: "RM-SOL-003", itemGroup: "Solvent", subGroup: "IPA", itemName: "IPA SOLVENT 99%", orderedQty: 300, receivedQty: 300, stockUnit: "Kg", purchaseUnit: "Kg", rate: 73, hsnCode: "2905", gstPct: 18, batchNo: "BATCH-SOL-IPA-20260406-001", supplierBatchNo: "LOI-IPA-0406-01", expiryDate: "2027-04-06", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-B2", basicAmt: 21900, cgstAmt: 1971, sgstAmt: 1971, igstAmt: 0, totalAmt: 25842 },
+    ],
+  },
+  // ── Adhesive lots ──────────────────────────────────────────────
+  {
+    id: "GRN014", grnNo: "GRN00014_25_26", grnDate: "2026-04-04",
+    supplier: "Flint Group India Pvt Ltd", supplierState: "Maharashtra",
+    invoiceNo: "FG/INV/0404", invoiceDate: "2026-04-03",
+    eWayBillNo: "EWB0404014", eWayBillDate: "2026-04-03",
+    gateEntryNo: "GE-014", gateEntryDate: "2026-04-04",
+    lrVehicleNo: "MH-14-AB-9911", transporter: "Rapid Move",
+    receivedBy: "Sunil Patil", remark: "Lamination adhesive",
+    status: "Completed",
+    lines: [
+      { lineId: "GL025", poRef: "PO00014_25_26", itemCode: "RM-ADH-002", itemGroup: "Adhesive", subGroup: "Lamination Adhesive", itemName: "LAMINATION ADHESIVE SOLVENT FREE", orderedQty: 200, receivedQty: 200, stockUnit: "Kg", purchaseUnit: "Kg", rate: 285, hsnCode: "3506", gstPct: 18, batchNo: "BATCH-ADH-LAM-20260404-001", supplierBatchNo: "FG-ADH-LAM-0404-A", expiryDate: "2026-10-04", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-B1", basicAmt: 57000, cgstAmt: 5130, sgstAmt: 5130, igstAmt: 0, totalAmt: 67260 },
+      { lineId: "GL026", poRef: "PO00014_25_26", itemCode: "RM-ADH-003", itemGroup: "Adhesive", subGroup: "Solvent Based Adhesive", itemName: "SOLVENT BASED ADHESIVE", orderedQty: 150, receivedQty: 150, stockUnit: "Kg", purchaseUnit: "Kg", rate: 270, hsnCode: "3506", gstPct: 18, batchNo: "BATCH-ADH-SB-20260404-001", supplierBatchNo: "FG-ADH-SB-0404-A", expiryDate: "2027-04-04", warehouseId: "WH002", warehouseName: "Ink & Chemical Store", bin: "CH-B1", basicAmt: 40500, cgstAmt: 3645, sgstAmt: 3645, igstAmt: 0, totalAmt: 47790 },
+    ],
+  },
 ];
 
 // ─── INVENTORY – ITEM ISSUE ───────────────────────────────────
@@ -2254,6 +2452,24 @@ export type GravureOrder = {
   secondaryLayers: SecondaryLayer[];
   processes: GravureEstimationProcess[];
   overheadPct: number; profitPct: number;
+  // Planning passthrough fields (from Estimation → Order → WO)
+  structureType?: "Label" | "Sleeve" | "Pouch";
+  trimmingSize?: number;
+  widthShrinkage?: number;
+  gusset?: number;
+  topSeal?: number;
+  bottomSeal?: number;
+  sideSeal?: number;
+  centerSealWidth?: number;
+  sideGusset?: number;
+  seamingArea?: number;
+  transparentArea?: number;
+  finalRollOD?: number;
+  rollUnit?: "Meter" | "KG";
+  unwindDirection?: number;
+  frontColors?: number;
+  backColors?: number;
+  selectedPlanId?: string;
 };
 
 export type GravureProductCatalog = {
@@ -2279,6 +2495,17 @@ export type GravureProductCatalog = {
   trimmingSize?: number;
   widthShrinkage?: number;
   frontColors?: number; backColors?: number;
+  // ── Printing Structure Type (auto-derived from category + content) ──
+  structureType?: "Label" | "Sleeve" | "Pouch";
+  gusset?: number;
+  sealSize?: number;
+  hasZipper?: boolean;
+  // ── Pouch-specific seal / gusset dimensions ──
+  topSeal?: number;
+  bottomSeal?: number;
+  sideSeal?: number;
+  centerSealWidth?: number;
+  sideGusset?: number;
   // ── Product Details (merged master) ──
   packSize?: string;
   brandName?: string;
@@ -2309,6 +2536,24 @@ export type GravureWorkOrder = {
   actualWidth: number; actualHeight: number;
   width: number; noOfColors: number;
   printType: "Surface Print" | "Reverse Print" | "Combination";
+  // Structure & Dimension extras (from Estimation)
+  structureType?: "Label" | "Sleeve" | "Pouch";
+  trimmingSize?: number;
+  widthShrinkage?: number;
+  gusset?: number;
+  topSeal?: number;
+  bottomSeal?: number;
+  sideSeal?: number;
+  centerSealWidth?: number;
+  sideGusset?: number;
+  seamingArea?: number;
+  transparentArea?: number;
+  finalRollOD?: number;
+  rollUnit?: "Meter" | "KG";
+  unwindDirection?: number;
+  frontColors?: number; backColors?: number;
+  salesPerson?: string;
+  salesType?: string;
   // Machine & Cost
   machineId: string; machineName: string;
   cylinderCostPerColor: number;
@@ -2318,12 +2563,11 @@ export type GravureWorkOrder = {
   processes: GravureEstimationProcess[];
   secondaryLayers: SecondaryLayer[];
   selectedPlanId: string; ups: number;
-  trimmingSize?: number;
-  frontColors?: number; backColors?: number;
   // Operator & Production
   operatorId: string; operatorName: string;
   cylinderSet: string; inks: string[];
   quantity: number; unit: string;
+  wastagePct?: number;
   plannedDate: string; specialInstructions: string;
   status: "Open" | "In Progress" | "Completed" | "On Hold";
 };
@@ -2870,9 +3114,9 @@ export const gravureProductCatalog: GravureProductCatalog[] = [
 
 // ─── GRAVURE WORK ORDERS ──────────────────────────────────────
 export const gravureWorkOrders: GravureWorkOrder[] = [
-  { id: "GWO001", workOrderNo: "GRV-WO-2024-001", date: "2024-03-07", sourceOrderType: "Estimation", orderId: "GO001", orderNo: "GRV-ORD-2024-001", customerId: "C001", customerName: "Parle Products Pvt Ltd", jobName: "Parle-G Biscuit 100g Wrap", substrate: "BOPP 20μ", structure: "BOPP 20μ + Dry Lam + CPP 30μ", categoryId: "CAT001", categoryName: "Roto - Label", content: "BOPP Label", jobWidth: 340, jobHeight: 450, actualWidth: 341, actualHeight: 451, width: 340, noOfColors: 8, printType: "Surface Print", machineId: "M004", machineName: "Roto Press 1 – 8 Color", operatorId: "E004", operatorName: "Amit Tiwari", cylinderSet: "CYL-P001", inks: ["Cyan", "Magenta", "Yellow", "Black", "White", "Red", "Gold", "Silver"], quantity: 200000, unit: "Meter", plannedDate: "2024-03-18", processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 8, setupCharge: 0, amount: 28000 }, { processId: "PR004", processName: "8-Color Roto Printing", chargeUnit: "m²", rate: 2.50, qty: 0, setupCharge: 1500, amount: 1500 }, { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 0, setupCharge: 0, amount: 0 }], secondaryLayers: [{ id: "GWO001-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 20, gsm: 18.2, consumableItems: [] }, { id: "GWO001-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM007", itemName: "YELLOW INK SOLVENT BASED", gsm: 3.5, rate: 460 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }, { id: "GWO001-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 30, gsm: 27.6, consumableItems: [{ consumableId: "DEF_ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 }, { consumableId: "DEF_HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 }] }], cylinderCostPerColor: 3500, selectedPlanId: "", ups: 0, overheadPct: 12, profitPct: 15, perMeterRate: 1.36, totalAmount: 272000, specialInstructions: "Pantone matching mandatory. Approved sample attached.", status: "In Progress" },
-  { id: "GWO002", workOrderNo: "GRV-WO-2024-002", date: "2024-03-11", sourceOrderType: "Estimation", orderId: "GO002", orderNo: "GRV-ORD-2024-002", customerId: "C002", customerName: "Britannia Industries Ltd", jobName: "Britannia NutriChoice 200g", substrate: "PET 12μ", structure: "PET 12μ + Dry Lam + PE 40μ", categoryId: "CAT002", categoryName: "Pouch", content: "3-Side Seal", jobWidth: 420, jobHeight: 400, actualWidth: 421, actualHeight: 401, width: 420, noOfColors: 6, printType: "Reverse Print", machineId: "M003", machineName: "Roto Press 4 – 6 Color", operatorId: "E005", operatorName: "Deepak Verma", cylinderSet: "CYL-B001", inks: ["Cyan", "Magenta", "Yellow", "Black", "White", "Gold"], quantity: 150000, unit: "Meter", plannedDate: "2024-03-25", processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 6, setupCharge: 0, amount: 21000 }, { processId: "PR003", processName: "6-Color Roto Printing", chargeUnit: "m²", rate: 2.00, qty: 0, setupCharge: 1200, amount: 1200 }, { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 0, setupCharge: 0, amount: 0 }], secondaryLayers: [{ id: "GWO002-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 12, gsm: 10.9, consumableItems: [] }, { id: "GWO002-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM008", itemName: "CYAN INK SOLVENT BASED", gsm: 3.5, rate: 490 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }, { id: "GWO002-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 40, gsm: 36.8, consumableItems: [{ consumableId: "DEF_ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 }, { consumableId: "DEF_HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 }] }], cylinderCostPerColor: 3500, selectedPlanId: "", ups: 0, overheadPct: 12, profitPct: 15, perMeterRate: 1.52, totalAmount: 228000, specialInstructions: "Matte OPV coating required after printing.", status: "Open" },
-  { id: "GWO003", workOrderNo: "GRV-WO-2024-003", date: "2024-03-15", sourceOrderType: "Estimation", orderId: "GO003", orderNo: "GRV-ORD-2024-003", customerId: "C006", customerName: "Nestle India Ltd", jobName: "Maggi Noodles 70g Outer Wrap", substrate: "BOPP 20μ", structure: "BOPP 20μ + PE 30μ", categoryId: "", categoryName: "", content: "", jobWidth: 300, jobHeight: 0, actualWidth: 301, actualHeight: 1, width: 300, noOfColors: 8, printType: "Reverse Print", machineId: "M005", machineName: "Roto Press 2 – 9 Color", operatorId: "E006", operatorName: "Santosh Rao", cylinderSet: "", inks: ["Cyan", "Magenta", "Yellow", "Black", "White", "Red", "Green", "Orange"], quantity: 250000, unit: "Meter", plannedDate: "2024-03-30", processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 8, setupCharge: 0, amount: 28000 }, { processId: "PR004", processName: "8-Color Roto Printing", chargeUnit: "m²", rate: 2.50, qty: 0, setupCharge: 1500, amount: 1500 }, { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 0, setupCharge: 0, amount: 0 }], secondaryLayers: [{ id: "GWO003-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 20, gsm: 18.2, consumableItems: [] }, { id: "GWO003-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM010", itemName: "BLACK INK SOLVENT BASED", gsm: 3.5, rate: 430 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }, { id: "GWO003-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 30, gsm: 27.6, consumableItems: [{ consumableId: "DEF_ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 }, { consumableId: "DEF_HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 }] }], cylinderCostPerColor: 3500, selectedPlanId: "", ups: 0, overheadPct: 12, profitPct: 15, perMeterRate: 1.40, totalAmount: 350000, specialInstructions: "Cylinders to be sourced. Proofing required before production.", status: "On Hold" },
+  { id: "GWO001", workOrderNo: "GRV-WO-2024-001", date: "2024-03-07", sourceOrderType: "Estimation", orderId: "GO001", orderNo: "GRV-ORD-2024-001", customerId: "C001", customerName: "Parle Products Pvt Ltd", jobName: "Parle-G Biscuit 100g Wrap", substrate: "BOPP 20μ", structure: "BOPP 20μ + Dry Lam + CPP 30μ", categoryId: "CAT003", categoryName: "Labels & Stickers", content: "Wrap Around Labels", structureType: "Label", jobWidth: 340, jobHeight: 450, actualWidth: 341, actualHeight: 451, width: 340, noOfColors: 8, printType: "Surface Print", machineId: "M004", machineName: "Roto Press 1 – 8 Color", operatorId: "E004", operatorName: "Amit Tiwari", cylinderSet: "CYL-P001", inks: ["Cyan", "Magenta", "Yellow", "Black", "White", "Red", "Gold", "Silver"], quantity: 200000, unit: "Meter", plannedDate: "2024-03-18", processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 8, setupCharge: 0, amount: 28000 }, { processId: "PR004", processName: "8-Color Roto Printing", chargeUnit: "m²", rate: 2.50, qty: 0, setupCharge: 1500, amount: 1500 }, { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 0, setupCharge: 0, amount: 0 }], secondaryLayers: [{ id: "GWO001-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 20, gsm: 18.2, consumableItems: [] }, { id: "GWO001-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM007", itemName: "YELLOW INK SOLVENT BASED", gsm: 3.5, rate: 460 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }, { id: "GWO001-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 30, gsm: 27.6, consumableItems: [{ consumableId: "DEF_ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 }, { consumableId: "DEF_HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 }] }], cylinderCostPerColor: 3500, selectedPlanId: "", ups: 0, overheadPct: 12, profitPct: 15, perMeterRate: 1.36, totalAmount: 272000, specialInstructions: "Pantone matching mandatory. Approved sample attached.", status: "In Progress" },
+  { id: "GWO002", workOrderNo: "GRV-WO-2024-002", date: "2024-03-11", sourceOrderType: "Estimation", orderId: "GO002", orderNo: "GRV-ORD-2024-002", customerId: "C002", customerName: "Britannia Industries Ltd", jobName: "Britannia NutriChoice 200g", substrate: "PET 12μ", structure: "PET 12μ + Dry Lam + PE 40μ", categoryId: "CAT001", categoryName: "Flexible Packaging", content: "Pouch — 3 Side Seal", structureType: "Pouch", topSeal: 12, bottomSeal: 12, sideSeal: 10, jobWidth: 420, jobHeight: 400, actualWidth: 421, actualHeight: 401, width: 420, noOfColors: 6, printType: "Reverse Print", machineId: "M003", machineName: "Roto Press 4 – 6 Color", operatorId: "E005", operatorName: "Deepak Verma", cylinderSet: "CYL-B001", inks: ["Cyan", "Magenta", "Yellow", "Black", "White", "Gold"], quantity: 150000, unit: "Meter", plannedDate: "2024-03-25", processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 6, setupCharge: 0, amount: 21000 }, { processId: "PR003", processName: "6-Color Roto Printing", chargeUnit: "m²", rate: 2.00, qty: 0, setupCharge: 1200, amount: 1200 }, { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 0, setupCharge: 0, amount: 0 }], secondaryLayers: [{ id: "GWO002-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 12, gsm: 10.9, consumableItems: [] }, { id: "GWO002-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM008", itemName: "CYAN INK SOLVENT BASED", gsm: 3.5, rate: 490 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }, { id: "GWO002-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 40, gsm: 36.8, consumableItems: [{ consumableId: "DEF_ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 }, { consumableId: "DEF_HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 }] }], cylinderCostPerColor: 3500, selectedPlanId: "", ups: 0, overheadPct: 12, profitPct: 15, perMeterRate: 1.52, totalAmount: 228000, specialInstructions: "Matte OPV coating required after printing.", status: "Open" },
+  { id: "GWO003", workOrderNo: "GRV-WO-2024-003", date: "2024-03-15", sourceOrderType: "Estimation", orderId: "GO003", orderNo: "GRV-ORD-2024-003", customerId: "C006", customerName: "Nestle India Ltd", jobName: "Maggi Noodles 70g Outer Wrap", substrate: "BOPP 20μ", structure: "BOPP 20μ + PE 30μ", categoryId: "CAT001", categoryName: "Flexible Packaging", content: "Roll Form — Snacks", structureType: "Label", jobWidth: 300, jobHeight: 200, actualWidth: 301, actualHeight: 1, width: 300, noOfColors: 8, printType: "Reverse Print", machineId: "M005", machineName: "Roto Press 2 – 9 Color", operatorId: "E006", operatorName: "Santosh Rao", cylinderSet: "", inks: ["Cyan", "Magenta", "Yellow", "Black", "White", "Red", "Green", "Orange"], quantity: 250000, unit: "Meter", plannedDate: "2024-03-30", processes: [{ processId: "PR001", processName: "Cylinder Engraving", chargeUnit: "Cylinder", rate: 3500, qty: 8, setupCharge: 0, amount: 28000 }, { processId: "PR004", processName: "8-Color Roto Printing", chargeUnit: "m²", rate: 2.50, qty: 0, setupCharge: 1500, amount: 1500 }, { processId: "PR007", processName: "Dry Bond Lamination", chargeUnit: "m²", rate: 1.80, qty: 0, setupCharge: 0, amount: 0 }], secondaryLayers: [{ id: "GWO003-L1", layerNo: 1, plyType: "Film", itemSubGroup: "BOPP Film", density: 0.91, thickness: 20, gsm: 18.2, consumableItems: [] }, { id: "GWO003-L2", layerNo: 2, plyType: "Printing", itemSubGroup: "", density: 0, thickness: 0, gsm: 0, consumableItems: [{ consumableId: "DEF_INK", fieldDisplayName: "Ink", itemGroup: "Ink", itemSubGroup: "Solvent Based Ink", itemId: "ITM010", itemName: "BLACK INK SOLVENT BASED", gsm: 3.5, rate: 430 }, { consumableId: "DEF_SOL", fieldDisplayName: "Solvent", itemGroup: "Solvent", itemSubGroup: "Ethyl Acetate (EA)", itemId: "ITM015", itemName: "ETHYL ACETATE (EA) GRADE", gsm: 2.0, rate: 65 }] }, { id: "GWO003-L3", layerNo: 3, plyType: "Lamination", itemSubGroup: "LLDPE Grade", density: 0.92, thickness: 30, gsm: 27.6, consumableItems: [{ consumableId: "DEF_ADH", fieldDisplayName: "Adhesive", itemGroup: "Adhesive", itemSubGroup: "PU Adhesive", itemId: "ITM019", itemName: "PU ADHESIVE 2K (PART A)", gsm: 3.5, rate: 330 }, { consumableId: "DEF_HRD", fieldDisplayName: "Hardener", itemGroup: "Hardner", itemSubGroup: "PU Hardener", itemId: "ITM022", itemName: "PU HARDENER (PART B)", gsm: 0.7, rate: 395 }] }], cylinderCostPerColor: 3500, selectedPlanId: "", ups: 0, overheadPct: 12, profitPct: 15, perMeterRate: 1.40, totalAmount: 350000, specialInstructions: "Cylinders to be sourced. Proofing required before production.", status: "On Hold" },
 ];
 
 // ─── GRAVURE ITEM ISSUES ──────────────────────────────────────

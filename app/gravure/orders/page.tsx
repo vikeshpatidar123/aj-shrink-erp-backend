@@ -471,7 +471,6 @@ export default function GravureOrdersPage() {
                   className="mt-1 w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400">
                   <option value="">Select...</option>
                   <option value="GRV">GRV</option>
-                  <option value="FLX">FLX</option>
                   <option value="EXP">EXP</option>
                 </select>
               </div>
@@ -527,14 +526,6 @@ export default function GravureOrdersPage() {
                 <select value={form.salesType} onChange={e => f("salesType", e.target.value)}
                   className="mt-1 w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400">
                   {SALES_TYPES.map(s => <option key={s}>{s}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-500 uppercase">Sales Ledger</label>
-                <select value={form.salesLedger} onChange={e => f("salesLedger", e.target.value)}
-                  className="mt-1 w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400">
-                  <option value="">-- Select --</option>
-                  {SALES_LEDGERS.map(s => <option key={s}>{s}</option>)}
                 </select>
               </div>
             </div>
