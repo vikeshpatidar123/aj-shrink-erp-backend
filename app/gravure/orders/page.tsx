@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 import {
   Plus, Eye, Pencil, Trash2, ShoppingCart, Calculator, BookMarked,
   X, Save, FileText, Truck, Search, ChevronDown, ChevronUp,
-  Check, Layers,
+  Check, Layers, Printer, List,
 } from "lucide-react";
 import {
   customers, gravureOrders as initData, GravureOrder, GravureOrderLine,
@@ -191,6 +191,9 @@ export default function GravureOrdersPage() {
   const [form,       setForm]      = useState<FormState>(blankForm());
   const [deleteId,   setDelId]     = useState<string | null>(null);
   const [viewRow,    setViewRow]   = useState<GravureOrder | null>(null);
+  const [showList,   setShowList]  = useState(false);
+  const [printOrder, setPrintOrder] = useState<GravureOrder | null>(null);
+  const [listSearch, setListSearch] = useState("");
   const [enquirySearch, setEnquirySearch] = useState("");
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
 
@@ -454,6 +457,10 @@ export default function GravureOrdersPage() {
             <span className="text-xs px-2 py-0.5 rounded font-bold bg-purple-500">GRV</span>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={() => setShowList(true)}
+              className="flex items-center gap-1.5 text-teal-200 hover:text-white text-xs px-3 py-1.5 rounded hover:bg-teal-700 transition-colors border border-teal-600">
+              <List size={13} /> Show List
+            </button>
             <button onClick={closeForm} className="flex items-center gap-1 text-teal-200 hover:text-white text-xs px-3 py-1 rounded hover:bg-teal-700 transition-colors">
               <X size={13} />Back
             </button>
@@ -999,9 +1006,12 @@ export default function GravureOrdersPage() {
                 <Trash2 size={14} />Delete
               </button>
             )}
-            <button className="flex items-center gap-2 px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white text-sm font-semibold rounded-lg transition-colors">
-              <FileText size={14} />Print
-            </button>
+            {editing && (
+              <button onClick={() => setPrintOrder(editing)}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg transition-colors">
+                <Printer size={14} />Print
+              </button>
+            )}
             <button onClick={closeForm}
               className="flex items-center gap-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition-colors">
               Back
@@ -1029,7 +1039,10 @@ export default function GravureOrdersPage() {
             {data.length} orders · ₹{totalRevenue.toLocaleString()} revenue
           </p>
         </div>
-        <Button icon={<Plus size={16} />} onClick={openAdd}>New Order</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" icon={<List size={16} />} onClick={() => setShowList(true)}>Show List</Button>
+          <Button icon={<Plus size={16} />} onClick={openAdd}>New Order</Button>
+        </div>
       </div>
 
       {/* Stat cards */}
@@ -1052,6 +1065,7 @@ export default function GravureOrdersPage() {
           actions={row => (
             <div className="flex items-center gap-1.5 justify-end">
               <Button variant="ghost" size="sm" icon={<Eye size={13} />} onClick={() => setViewRow(row)}>View</Button>
+              <Button variant="ghost" size="sm" icon={<Printer size={13} />} onClick={() => setPrintOrder(row)}>Print</Button>
               <Button variant="ghost" size="sm" icon={<Pencil size={13} />} onClick={() => openEdit(row)}>Edit</Button>
               <Button variant="danger" size="sm" icon={<Trash2 size={13} />} onClick={() => setDelId(row.id)}>Delete</Button>
             </div>
@@ -1146,6 +1160,278 @@ export default function GravureOrdersPage() {
           </div>
         </Modal>
       )}
+
+      {/* ══ SHOW LIST POPUP ═══════════════════════════════════════ */}
+      {showList && (
+        <>
+          <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm" onClick={() => setShowList(false)} />
+          <div className="fixed z-[61] inset-x-4 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:w-[800px] top-12 bottom-8 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="bg-teal-800 text-white px-4 py-3 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <List size={16} className="text-teal-300" />
+                <span className="font-bold text-sm">Booked Orders ({data.length})</span>
+              </div>
+              <button onClick={() => setShowList(false)} className="p-1.5 hover:bg-teal-700 rounded-lg transition"><X size={16} /></button>
+            </div>
+            {/* Search */}
+            <div className="px-4 py-2.5 border-b border-gray-200 flex-shrink-0">
+              <div className="relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input value={listSearch} onChange={e => setListSearch(e.target.value)}
+                  placeholder="Search by order no, customer, PO..."
+                  className="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400" />
+              </div>
+            </div>
+            {/* List */}
+            <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+              {data
+                .filter(o => {
+                  const q = listSearch.toLowerCase();
+                  return !q || o.orderNo.toLowerCase().includes(q) || o.customerName.toLowerCase().includes(q) || (o.poNo || "").toLowerCase().includes(q);
+                })
+                .map(o => (
+                  <div key={o.id} className="px-4 py-3 hover:bg-gray-50 transition">
+                    <div className="flex items-start justify-between gap-3">
+                      {/* Left info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className="font-black text-sm text-teal-800 font-mono">{o.orderNo}</span>
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${STATUS_COLORS[o.status]}`}>{o.status}</span>
+                          {o.directDispatch && <span className="text-[10px] font-semibold px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full">Direct Dispatch</span>}
+                        </div>
+                        <div className="text-sm font-semibold text-gray-800 truncate">{o.customerName}</div>
+                        <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500 flex-wrap">
+                          <span>{o.date}</span>
+                          {o.poNo && <span>PO: <strong className="text-gray-700">{o.poNo}</strong></span>}
+                          {o.salesPerson && <span>Sales: <strong className="text-gray-700">{o.salesPerson}</strong></span>}
+                          <span className="text-[10px] font-bold text-gray-700">{o.orderLines?.length || 0} product{(o.orderLines?.length || 0) !== 1 ? "s" : ""}</span>
+                          <span className="font-bold text-green-700">₹{o.totalAmount.toLocaleString("en-IN")}</span>
+                        </div>
+                        {/* Product tags */}
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {(o.orderLines || []).slice(0, 3).map((l, i) => (
+                            <span key={i} className="text-[10px] px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-100 rounded-full">{l.productName || l.productCode || "—"}</span>
+                          ))}
+                          {(o.orderLines || []).length > 3 && <span className="text-[10px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">+{o.orderLines.length - 3} more</span>}
+                        </div>
+                      </div>
+                      {/* Actions */}
+                      <div className="flex flex-col gap-1.5 flex-shrink-0">
+                        <button onClick={() => { setPrintOrder(o); }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-[11px] font-bold rounded-lg transition">
+                          <Printer size={11} /> Print
+                        </button>
+                        <button onClick={() => { setShowList(false); openEdit(o); }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-[11px] font-bold rounded-lg transition">
+                          <Pencil size={11} /> Edit
+                        </button>
+                        <button onClick={() => { setDelId(o.id); }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[11px] font-bold rounded-lg transition">
+                          <Trash2 size={11} /> Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              {data.length === 0 && (
+                <div className="p-12 text-center text-gray-400 text-sm">No orders booked yet.</div>
+              )}
+            </div>
+            {/* Footer */}
+            <div className="flex-shrink-0 px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+              <span>{data.length} orders · ₹{data.reduce((s, o) => s + o.totalAmount, 0).toLocaleString("en-IN")} total</span>
+              <button onClick={() => setShowList(false)}
+                className="px-4 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold rounded-lg text-xs transition">Close</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ══ ORDER PRINT MODAL ════════════════════════════════════ */}
+      {printOrder && (() => {
+        const o = printOrder;
+        const balance = Math.max(0, o.totalAmount - o.advancePaid);
+        const handlePrint = () => {
+          const el = document.getElementById("order-print-area");
+          if (!el) return;
+          const orig = document.body.innerHTML;
+          document.body.innerHTML = el.innerHTML;
+          window.print();
+          document.body.innerHTML = orig;
+          window.location.reload();
+        };
+        const S = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+        return (
+          <>
+            <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm" onClick={() => setPrintOrder(null)} />
+            <div className="fixed z-[71] inset-4 sm:inset-8 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+              {/* Toolbar */}
+              <div className="flex items-center justify-between px-5 py-3 bg-teal-900 text-white flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  <Printer size={18} className="text-teal-300" />
+                  <span className="font-bold text-sm">Order Confirmation Print — {o.orderNo}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={handlePrint}
+                    className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold rounded-xl transition">
+                    <Printer size={14} /> Print
+                  </button>
+                  <button onClick={() => setPrintOrder(null)} className="p-2 hover:bg-white/10 rounded-lg transition"><X size={16} /></button>
+                </div>
+              </div>
+              {/* Scrollable preview */}
+              <div className="flex-1 overflow-auto bg-gray-100 p-4 sm:p-8">
+                <div id="order-print-area" className="bg-white mx-auto shadow-lg" style={{ width: "210mm", minHeight: "297mm", padding: "12mm", fontFamily: "Arial, sans-serif", fontSize: "9pt", color: "#111" }}>
+
+                  {/* ── HEADER ── */}
+                  <div style={{ borderBottom: "3px solid #0f766e", paddingBottom: "6px", marginBottom: "8px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontSize: "16pt", fontWeight: "900", color: "#0f766e", letterSpacing: "1px" }}>AJ SHRINK INDUSTRIES</div>
+                        <div style={{ fontSize: "7.5pt", color: "#555", marginTop: "2px" }}>Gravure Printing &amp; Flexible Packaging</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "13pt", fontWeight: "800", color: "#1e3a8a", letterSpacing: "2px" }}>ORDER CONFIRMATION</div>
+                        <div style={{ fontSize: "7.5pt", color: "#555", marginTop: "2px" }}>Gravure Sales Order</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── ORDER IDENTITY STRIP ── */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0", border: "2px solid #0f766e", marginBottom: "8px" }}>
+                    {[
+                      ["Order No",    o.orderNo],
+                      ["Order Date",  o.date],
+                      ["Status",      o.status],
+                      ["PO No",       o.poNo || "—"],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ padding: "5px 8px", borderRight: "1px solid #99f6e4" }}>
+                        <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                        <div style={{ fontSize: "9pt", fontWeight: "800", color: "#0f766e" }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── CUSTOMER INFO ── */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "6px", marginBottom: "8px" }}>
+                    {[
+                      ["Customer Name",  o.customerName],
+                      ["Sales Person",   o.salesPerson   || "—"],
+                      ["Sales Type",     o.salesType     || "—"],
+                      ["PO Date",        o.poDate        || "—"],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ border: "1px solid #d1d5db", borderRadius: "4px", padding: "5px 8px", background: "#f0fdfa" }}>
+                        <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                        <div style={{ fontSize: "9pt", fontWeight: "800", color: "#111" }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── PRODUCT LINES TABLE ── */}
+                  <div style={{ marginBottom: "8px" }}>
+                    <div style={{ background: "#0f766e", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Product / Order Lines</div>
+                    <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                      <thead>
+                        <tr style={{ background: "#f0fdfa" }}>
+                          {["#", "Product / Job Name", "Category", "Size (mm)", "Colors", "Cyl.", "Qty", "Unit", "Rate (₹)", "Disc%", "Amount (₹)", "Delivery"].map(h => (
+                            <th key={h} style={{ padding: "3px 5px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(o.orderLines || []).map((l, i) => (
+                          <tr key={l.id} style={{ background: i % 2 === 0 ? "#fff" : "#f0fdfa" }}>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{i + 1}</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontWeight: "700" }}>
+                              <div>{l.productName || "—"}</div>
+                              {l.productCode && <div style={{ fontSize: "6.5pt", color: "#6b7280" }}>{l.productCode}</div>}
+                              <span style={{ fontSize: "6.5pt", padding: "1px 5px", borderRadius: "8px", background: l.sourceType === "Estimation" ? "#dbeafe" : l.sourceType === "Catalog" ? "#ede9fe" : "#f3f4f6", color: l.sourceType === "Estimation" ? "#1d4ed8" : l.sourceType === "Catalog" ? "#6d28d9" : "#374151", fontWeight: "700" }}>{l.sourceType}</span>
+                            </td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontSize: "7.5pt" }}>{l.categoryName || "—"}</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{l.jobWidth && l.jobHeight ? `${l.jobWidth}×${l.jobHeight}` : "—"}</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{l.noOfColors}C</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center", fontSize: "7.5pt" }}>{l.cylinderStatus}</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "right", fontWeight: "700" }}>{l.orderQty.toLocaleString("en-IN")}</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{l.unit}</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "right" }}>₹{l.rate}</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>—</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "right", fontWeight: "700" }}>{S(l.amount)}</td>
+                            <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontSize: "7.5pt" }}>{l.deliveryDate || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: "#f0fdfa", borderTop: "2px solid #0f766e" }}>
+                          <td colSpan={11} style={{ padding: "4px 8px", border: "1px solid #d1d5db", fontWeight: "700", textAlign: "right", fontSize: "8.5pt" }}>Order Total</td>
+                          <td style={{ padding: "4px 8px", border: "2px solid #0f766e", textAlign: "right", fontWeight: "900", fontSize: "10pt", color: "#0f766e" }}>{S(o.totalAmount)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* ── FINANCIAL SUMMARY ── */}
+                  <div style={{ marginBottom: "8px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px" }}>
+                    {[
+                      { label: "Order Total",   val: S(o.totalAmount),  bg: "#f0fdfa", border: "#0f766e", color: "#0f766e" },
+                      { label: "Advance Paid",  val: S(o.advancePaid),  bg: "#f0fdf4", border: "#16a34a", color: "#16a34a" },
+                      { label: "Balance Due",   val: S(balance),        bg: balance > 0 ? "#fef2f2" : "#f0fdf4", border: balance > 0 ? "#dc2626" : "#16a34a", color: balance > 0 ? "#dc2626" : "#16a34a" },
+                    ].map(s => (
+                      <div key={s.label} style={{ border: `2px solid ${s.border}`, borderRadius: "4px", padding: "8px 12px", background: s.bg, textAlign: "center" }}>
+                        <div style={{ fontSize: "7pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{s.label}</div>
+                        <div style={{ fontSize: "14pt", fontWeight: "900", color: s.color, marginTop: "2px" }}>{s.val}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── REMARKS ── */}
+                  {o.remarks && (
+                    <div style={{ marginBottom: "8px", border: "1px solid #d1d5db", borderRadius: "4px", padding: "6px 10px", background: "#fffbeb" }}>
+                      <div style={{ fontSize: "7pt", fontWeight: "800", color: "#b45309", textTransform: "uppercase", marginBottom: "3px" }}>Remarks / Terms</div>
+                      <div style={{ fontSize: "8.5pt" }}>{o.remarks}</div>
+                    </div>
+                  )}
+
+                  {/* ── TERMS BOX ── */}
+                  <div style={{ marginBottom: "8px", border: "1px solid #d1d5db", borderRadius: "4px", padding: "6px 10px", background: "#f9fafb" }}>
+                    <div style={{ fontSize: "7pt", fontWeight: "800", color: "#374151", textTransform: "uppercase", marginBottom: "4px" }}>Standard Terms &amp; Conditions</div>
+                    <div style={{ fontSize: "7pt", color: "#6b7280", lineHeight: "1.6" }}>
+                      1. Goods once dispatched cannot be returned without prior approval. &nbsp;|&nbsp;
+                      2. Payment as per agreed credit terms. &nbsp;|&nbsp;
+                      3. Disputes subject to local jurisdiction. &nbsp;|&nbsp;
+                      4. Prices valid for 30 days from order date.
+                    </div>
+                  </div>
+
+                  {/* ── SIGN-OFF ── */}
+                  <div style={{ marginTop: "10px", borderTop: "2px solid #0f766e", paddingTop: "8px" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <tbody>
+                        <tr>
+                          {["Prepared By", "Authorized Signatory", "Customer Signature", "Accounts"].map(role => (
+                            <td key={role} style={{ width: "25%", padding: "4px 8px", border: "1px solid #d1d5db", textAlign: "center" }}>
+                              <div style={{ height: "30px" }} />
+                              <div style={{ borderTop: "1px solid #333", paddingTop: "3px", fontSize: "7pt", fontWeight: "700", color: "#374151" }}>{role}</div>
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ── FOOTER ── */}
+                  <div style={{ marginTop: "6px", display: "flex", justifyContent: "space-between", borderTop: "1px solid #e5e7eb", paddingTop: "4px", fontSize: "6.5pt", color: "#9ca3af" }}>
+                    <span>Printed: {new Date().toLocaleString("en-IN")}</span>
+                    <span>AJ Shrink Industries — Gravure Order Confirmation</span>
+                    <span>{o.orderNo}</span>
+                  </div>
+
+                </div>{/* end print area */}
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       {/* Delete Confirm */}
       {deleteId && (
