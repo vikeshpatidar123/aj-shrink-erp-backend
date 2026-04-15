@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   BookMarked, Eye, Trash2, Clock, CheckCircle2,
   ShoppingCart, CheckCircle, AlertCircle, Lock, ArrowRight,
@@ -747,6 +747,88 @@ export default function ProductCatalogPage() {
       createdInMaster: false,
     })));
   };
+
+  // ── Auto-sync Color Shade + Cylinder rows whenever inks change in consumables ──
+  useEffect(() => {
+    if (!replanOpen || !replanForm) return;
+
+    const COLOR_LAB: Record<string, { l: string; a: string; b: string }> = {
+      "Red":     { l: "41.0",  a: "54.2",  b: "38.1"  },
+      "Yellow":  { l: "89.3",  a: "-6.1",  b: "80.4"  },
+      "Blue":    { l: "25.1",  a: "23.4",  b: "-52.8" },
+      "Black":   { l: "16.0",  a: "0.1",   b: "0.0"   },
+      "White":   { l: "95.2",  a: "-1.0",  b: "2.3"   },
+      "Green":   { l: "46.3",  a: "-50.2", b: "30.1"  },
+      "Cyan":    { l: "60.1",  a: "-38.2", b: "-31.4" },
+      "Magenta": { l: "48.2",  a: "72.1",  b: "-10.3" },
+      "Orange":  { l: "65.4",  a: "43.1",  b: "65.2"  },
+      "Violet":  { l: "30.2",  a: "40.1",  b: "-42.3" },
+    };
+    const PROCESS_COLOURS = new Set(["Cyan", "Magenta", "Yellow", "Black"]);
+
+    // Build ordered ink list from all plies (consumableId = stable key)
+    const inkList = replanForm.secondaryLayers.flatMap(l =>
+      l.consumableItems
+        .filter(ci => ci.itemGroup === "Ink")
+        .map(ci => {
+          const master = items.find(it => it.id === ci.itemId);
+          return {
+            consumableId: ci.consumableId,
+            inkItemId: ci.itemId ?? "",
+            inkName: ci.itemName || master?.name || "",
+            colour: (master as any)?.colour || "",
+            pantoneNo: (master as any)?.pantoneNo || "",
+          };
+        })
+    );
+
+    // Sync Color Shades — preserve user-entered LAB/remarks for existing rows
+    setCatalogColorShades(prev => inkList.map((ink, i) => {
+      const existing = prev.find(c => (c as any).consumableId === ink.consumableId);
+      if (existing) return { ...existing, colorNo: i + 1 };
+      const lab = ink.colour ? (COLOR_LAB[ink.colour] ?? { l: "", a: "", b: "" }) : { l: "", a: "", b: "" };
+      const autoType: "Spot" | "Process" | "Special" = ink.colour && PROCESS_COLOURS.has(ink.colour) ? "Process" : "Spot";
+      return {
+        colorNo: i + 1,
+        colorName: ink.colour || ink.inkName || `Color ${i + 1}`,
+        inkType: autoType,
+        pantoneRef: ink.pantoneNo,
+        labL: lab.l, labA: lab.a, labB: lab.b,
+        actualL: "", actualA: "", actualB: "",
+        deltaE: "1.0", shadeCardRef: "", status: "Pending" as const, remarks: "",
+        consumableId: ink.consumableId, inkItemId: ink.inkItemId,
+      } as any;
+    }));
+
+    // Sync Cylinder Allocs — preserve user-entered data for existing rows
+    const planCirc      = replanSelectedPlan ? String(replanSelectedPlan.cylCirc) : "";
+    const planCylCode   = replanSelectedPlan ? ((replanSelectedPlan as any).cylinderCode ?? "") : "";
+    const planCylWidth  = replanSelectedPlan ? String((replanSelectedPlan as any).cylinderWidthVal ?? "") : "";
+    const planRepeatUPS = replanSelectedPlan ? (replanSelectedPlan.repeatUPS as number) : 1;
+    const isSpecialPlan = replanSelectedPlan ? !!(replanSelectedPlan as any).isSpecial : false;
+
+    setCatalogCylAllocs(prev => inkList.map((ink, i) => {
+      const existing = prev.find(c => (c as any).consumableId === ink.consumableId);
+      if (existing) return { ...existing, colorNo: i + 1, colorName: ink.colour || ink.inkName || existing.colorName };
+      return {
+        colorNo: i + 1,
+        colorName: ink.colour || ink.inkName || `Color ${i + 1}`,
+        cylinderNo: isSpecialPlan
+          ? `SPL-C${String(i + 1).padStart(2, "0")}`
+          : planCylCode ? `${planCylCode}-C${String(i + 1).padStart(2, "0")}` : "",
+        circumference: planCirc, printWidth: planCylWidth, repeatUPS: planRepeatUPS,
+        cylinderType: (isSpecialPlan ? "New" : "Existing") as CylinderAlloc["cylinderType"],
+        status: "Pending" as const, remarks: "", createdInMaster: false,
+        consumableId: ink.consumableId,
+      } as any;
+    }));
+
+    // Keep noOfColors in sync with actual ink count
+    if (inkList.length !== replanForm.noOfColors) {
+      setReplanForm(p => p ? { ...p, noOfColors: inkList.length } : p);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replanForm?.secondaryLayers, replanOpen, replanSelectedPlan]);
 
   const openReplan = (row: GravureProductCatalog) => {
     setIsNewCatalog(false);
