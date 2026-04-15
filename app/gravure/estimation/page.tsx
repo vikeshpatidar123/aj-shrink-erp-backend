@@ -3803,6 +3803,16 @@ export default function GravureEstimationPage() {
           .filter(line => line.itemGroup === "Film" && line.subGroup === l.itemSubGroup)
           .map(line => ({ grnNo: g.grnNo, grnDate: g.grnDate, supplier: g.supplier, batchNo: line.batchNo, rate: line.rate, qty: line.receivedQty, unit: line.stockUnit }))
         );
+        // Weighted average rate (by stock qty); fallback to simple avg if qty=0
+        const totalFilmQty = lots.reduce((s, lt) => s + lt.qty, 0);
+        const filmAvgRate = lots.length > 0
+          ? parseFloat((totalFilmQty > 0
+              ? lots.reduce((s, lt) => s + lt.rate * lt.qty, 0) / totalFilmQty
+              : lots.reduce((s, lt) => s + lt.rate, 0) / lots.length
+            ).toFixed(2))
+          : 0;
+        const filmAvgDiff = masterRate > 0 ? parseFloat((filmAvgRate - masterRate).toFixed(2)) : 0;
+        const filmAvgDiffPct = masterRate > 0 ? parseFloat(((filmAvgDiff / masterRate) * 100).toFixed(1)) : 0;
         return (
           <>
             {/* Backdrop */}
@@ -3813,20 +3823,29 @@ export default function GravureEstimationPage() {
               <div className="bg-gradient-to-r from-orange-600 to-orange-500 px-4 py-3 flex items-center justify-between flex-shrink-0">
                 <div>
                   <p className="text-white font-black text-sm uppercase tracking-wide">{l.itemSubGroup}</p>
-                  <p className="text-orange-100 text-[10px] mt-0.5">Select a purchase lot to use its rate in cost estimation</p>
+                  <p className="text-orange-100 text-[10px] mt-0.5">Select a lot or apply weighted average of all {lots.length} lots in stock</p>
                 </div>
                 <button onClick={() => setFilmLotPickerOpen(null)} className="text-white/70 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition"><X size={16}/></button>
               </div>
 
-              {/* Rate comparison banner */}
-              <div className="grid grid-cols-2 gap-px bg-gray-200 flex-shrink-0">
-                <div className="bg-blue-50 px-4 py-2.5 text-center">
-                  <p className="text-[9px] text-blue-400 uppercase font-bold tracking-wider">Master (Estimation) Rate</p>
-                  <p className="text-xl font-black text-blue-700 font-mono">₹{masterRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-blue-400">/Kg</span></p>
+              {/* Rate comparison banner — 3 tiles */}
+              <div className="grid grid-cols-3 gap-px bg-gray-200 flex-shrink-0">
+                <div className="bg-blue-50 px-3 py-2.5 text-center">
+                  <p className="text-[9px] text-blue-400 uppercase font-bold tracking-wider">Master Rate</p>
+                  <p className="text-lg font-black text-blue-700 font-mono">₹{masterRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-blue-400">/Kg</span></p>
                 </div>
-                <div className="bg-orange-50 px-4 py-2.5 text-center">
-                  <p className="text-[9px] text-orange-400 uppercase font-bold tracking-wider">Currently Applied Rate</p>
-                  <p className="text-xl font-black text-orange-700 font-mono">₹{currentRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-orange-400">/Kg</span></p>
+                <div className="bg-green-50 px-3 py-2.5 text-center">
+                  <p className="text-[9px] text-green-500 uppercase font-bold tracking-wider">Avg. Rate (Wtd.)</p>
+                  <p className="text-lg font-black text-green-700 font-mono">₹{filmAvgRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-green-400">/Kg</span></p>
+                  {filmAvgDiff !== 0 && masterRate > 0 && (
+                    <p className={`text-[9px] font-bold mt-0.5 ${filmAvgDiff < 0 ? "text-green-600" : "text-red-500"}`}>
+                      {filmAvgDiff < 0 ? "▼" : "▲"} ₹{Math.abs(filmAvgDiff)}/Kg ({filmAvgDiffPct > 0 ? "+" : ""}{filmAvgDiffPct}% vs master)
+                    </p>
+                  )}
+                </div>
+                <div className="bg-orange-50 px-3 py-2.5 text-center">
+                  <p className="text-[9px] text-orange-400 uppercase font-bold tracking-wider">Applied Rate</p>
+                  <p className="text-lg font-black text-orange-700 font-mono">₹{currentRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-orange-400">/Kg</span></p>
                 </div>
               </div>
 
@@ -3879,14 +3898,21 @@ export default function GravureEstimationPage() {
               </div>
 
               {/* Footer */}
-              <div className="flex-shrink-0 px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3">
+              <div className="flex-shrink-0 px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3 flex-wrap">
                 <button type="button"
                   onClick={() => { const masterR = masterRate; const layers = [...form.secondaryLayers]; layers[plyIndex] = { ...l, filmRate: masterR }; f("secondaryLayers", layers); setFilmLotPickerOpen(null); }}
                   className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-[11px] font-bold transition">
-                  <RefreshCw size={11} /> Reset to Master Rate (₹{masterRate.toLocaleString("en-IN")})
+                  <RefreshCw size={11} /> Reset to Master (₹{masterRate.toLocaleString("en-IN")})
                 </button>
+                {lots.length > 0 && (
+                  <button type="button"
+                    onClick={() => { const layers = [...form.secondaryLayers]; layers[plyIndex] = { ...l, filmRate: filmAvgRate }; f("secondaryLayers", layers); setFilmLotPickerOpen(null); }}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-[11px] font-bold shadow-sm transition">
+                    ✓ Apply Avg. Rate (₹{filmAvgRate.toLocaleString("en-IN")})
+                  </button>
+                )}
                 <button onClick={() => setFilmLotPickerOpen(null)}
-                  className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl text-[11px] font-bold transition">Close</button>
+                  className="ml-auto px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl text-[11px] font-bold transition">Close</button>
               </div>
             </div>
           </>
@@ -3906,6 +3932,16 @@ export default function GravureEstimationPage() {
           .filter(line => line.itemGroup === ci.itemGroup && line.subGroup === ci.itemSubGroup)
           .map(line => ({ grnNo: g.grnNo, grnDate: g.grnDate, supplier: g.supplier, batchNo: line.batchNo, rate: line.rate, qty: line.receivedQty, unit: line.stockUnit, itemName: line.itemName }))
         );
+        // Weighted average rate (by stock qty); fallback to simple avg if qty=0
+        const totalCiQty = lots.reduce((s, lt) => s + lt.qty, 0);
+        const ciAvgRate = lots.length > 0
+          ? parseFloat((totalCiQty > 0
+              ? lots.reduce((s, lt) => s + lt.rate * lt.qty, 0) / totalCiQty
+              : lots.reduce((s, lt) => s + lt.rate, 0) / lots.length
+            ).toFixed(2))
+          : 0;
+        const ciAvgDiff = masterRate > 0 ? parseFloat((ciAvgRate - masterRate).toFixed(2)) : 0;
+        const ciAvgDiffPct = masterRate > 0 ? parseFloat(((ciAvgDiff / masterRate) * 100).toFixed(1)) : 0;
         const groupColor: Record<string, string> = { Ink: "from-blue-600 to-blue-500", Solvent: "from-purple-600 to-purple-500", Adhesive: "from-violet-600 to-violet-500", Hardner: "from-pink-600 to-pink-500" };
         const gradClass = groupColor[ci.itemGroup] ?? "from-orange-600 to-orange-500";
         return (
@@ -3920,15 +3956,24 @@ export default function GravureEstimationPage() {
                 </div>
                 <button onClick={() => setCiLotPickerOpen(null)} className="text-white/70 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition"><X size={16}/></button>
               </div>
-              {/* Rate comparison banner */}
-              <div className="grid grid-cols-2 gap-px bg-gray-200 flex-shrink-0">
-                <div className="bg-blue-50 px-4 py-2.5 text-center">
-                  <p className="text-[9px] text-blue-400 uppercase font-bold tracking-wider">Master (Estimation) Rate</p>
-                  <p className="text-xl font-black text-blue-700 font-mono">{masterRate > 0 ? <>₹{masterRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-blue-400">/Kg</span></> : <span className="text-sm text-blue-300">—</span>}</p>
+              {/* Rate comparison banner — 3 tiles */}
+              <div className="grid grid-cols-3 gap-px bg-gray-200 flex-shrink-0">
+                <div className="bg-blue-50 px-3 py-2.5 text-center">
+                  <p className="text-[9px] text-blue-400 uppercase font-bold tracking-wider">Master Rate</p>
+                  <p className="text-lg font-black text-blue-700 font-mono">{masterRate > 0 ? <>₹{masterRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-blue-400">/Kg</span></> : <span className="text-sm text-blue-300">—</span>}</p>
                 </div>
-                <div className="bg-orange-50 px-4 py-2.5 text-center">
-                  <p className="text-[9px] text-orange-400 uppercase font-bold tracking-wider">Currently Applied Rate</p>
-                  <p className="text-xl font-black text-orange-700 font-mono">{currentRate > 0 ? <>₹{currentRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-orange-400">/Kg</span></> : <span className="text-sm text-orange-300">—</span>}</p>
+                <div className="bg-green-50 px-3 py-2.5 text-center">
+                  <p className="text-[9px] text-green-500 uppercase font-bold tracking-wider">Avg. Rate (Wtd.)</p>
+                  <p className="text-lg font-black text-green-700 font-mono">{ciAvgRate > 0 ? <>₹{ciAvgRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-green-400">/Kg</span></> : <span className="text-sm text-green-300">—</span>}</p>
+                  {ciAvgDiff !== 0 && masterRate > 0 && (
+                    <p className={`text-[9px] font-bold mt-0.5 ${ciAvgDiff < 0 ? "text-green-600" : "text-red-500"}`}>
+                      {ciAvgDiff < 0 ? "▼" : "▲"} ₹{Math.abs(ciAvgDiff)}/Kg ({ciAvgDiffPct > 0 ? "+" : ""}{ciAvgDiffPct}% vs master)
+                    </p>
+                  )}
+                </div>
+                <div className="bg-orange-50 px-3 py-2.5 text-center">
+                  <p className="text-[9px] text-orange-400 uppercase font-bold tracking-wider">Applied Rate</p>
+                  <p className="text-lg font-black text-orange-700 font-mono">{currentRate > 0 ? <>₹{currentRate.toLocaleString("en-IN")}<span className="text-xs font-semibold text-orange-400">/Kg</span></> : <span className="text-sm text-orange-300">—</span>}</p>
                 </div>
               </div>
               {/* Lots list */}
@@ -3975,12 +4020,19 @@ export default function GravureEstimationPage() {
                 )}
               </div>
               {/* Footer */}
-              <div className="flex-shrink-0 px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3">
+              <div className="flex-shrink-0 px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3 flex-wrap">
                 {masterRate > 0 && (
                   <button type="button"
                     onClick={() => { updatePlyConsumable(plyIdx, ciIdx, { rate: masterRate }); setCiLotPickerOpen(null); }}
                     className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-[11px] font-bold transition">
-                    <RefreshCw size={11} /> Reset to Master Rate (₹{masterRate.toLocaleString("en-IN")})
+                    <RefreshCw size={11} /> Reset to Master (₹{masterRate.toLocaleString("en-IN")})
+                  </button>
+                )}
+                {lots.length > 0 && ciAvgRate > 0 && (
+                  <button type="button"
+                    onClick={() => { updatePlyConsumable(plyIdx, ciIdx, { rate: ciAvgRate }); setCiLotPickerOpen(null); }}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-[11px] font-bold shadow-sm transition">
+                    ✓ Apply Avg. Rate (₹{ciAvgRate.toLocaleString("en-IN")})
                   </button>
                 )}
                 <button onClick={() => setCiLotPickerOpen(null)}
