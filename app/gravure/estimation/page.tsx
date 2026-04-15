@@ -2195,7 +2195,17 @@ export default function GravureEstimationPage() {
                                             value={ci.itemId}
                                             onChange={e => {
                                               const it = filteredItems.find(x => x.id === e.target.value);
-                                              updatePlyConsumable(index, ciIdx, { itemId: it?.id ?? "", itemName: it?.name ?? "", rate: parseFloat(it?.estimationRate ?? "0") || 0 });
+                                              const patch: Partial<PlyConsumableItem> = {
+                                                itemId: it?.id ?? "",
+                                                itemName: it?.name ?? "",
+                                                rate: parseFloat(it?.estimationRate ?? "0") || 0,
+                                              };
+                                              // For Ink: auto-fill liquid GSM + solidPct from item master defaults
+                                              if (ci.itemGroup === "Ink" && it) {
+                                                if (!ci.gsm || ci.gsm === 0) patch.gsm = (it as any).defaultGsm ?? 3.0;
+                                                if (!ci.solidPct) patch.solidPct = (it as any).solidPct ?? 35;
+                                              }
+                                              updatePlyConsumable(index, ciIdx, patch);
                                             }}
                                             disabled={!ci.itemGroup}>
                                             <option value="">-- Select Item --</option>
