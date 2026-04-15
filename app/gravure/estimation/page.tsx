@@ -2141,12 +2141,15 @@ export default function GravureEstimationPage() {
                                   const solid    = ci.itemGroup === "Ink" ? (ci.solidPct ?? ((items.find(x => x.id === ci.itemId) as any)?.solidPct ?? 40)) : 40;
                                   const liquidGSM = dryGSM > 0 && solid > 0 ? parseFloat((dryGSM / (solid / 100)).toFixed(2)) : 0;
 
-                                  // Adhesive OH%
-                                  const adhGSM  = ci.itemGroup === "Adhesive" ? (ci.gsm || 0) : 0;
-                                  const ohPct   = ci.itemGroup === "Adhesive" ? (ci.ohPct ?? 50) : 0;
+                                  // Adhesive OH% — used for hardener auto-calc
+                                  const adhesiveCI  = l.consumableItems.find(x => x.itemGroup === "Adhesive");
+                                  const adhesiveGSM = adhesiveCI?.gsm ?? 0;
+                                  const adhesiveOH  = adhesiveCI?.ohPct ?? 0;
 
-                                  // Hardener NCO%
-                                  const ncoPct  = ci.itemGroup === "Hardner" ? (ci.ncoPct ?? 12) : 0;
+                                  // Hardener GSM auto (same formula as product catalog)
+                                  const hardenerGSM = ci.itemGroup === "Hardner" && (ci.ncoPct ?? 0) > 0
+                                    ? parseFloat(((adhesiveGSM * adhesiveOH) / ci.ncoPct!).toFixed(3))
+                                    : null;
 
                                   return (
                                     <div key={ci.consumableId} className="bg-teal-50/40 border border-teal-100 rounded-xl p-3">
@@ -2282,15 +2285,15 @@ export default function GravureEstimationPage() {
 
                                         {ci.itemGroup === "Adhesive" && (<>
                                           <div>
-                                            <label className="text-[10px] font-semibold text-violet-600 uppercase block mb-1">GSM</label>
-                                            <input type="number" step={0.1} min={0} placeholder="GSM"
+                                            <label className="text-[10px] font-semibold text-violet-600 uppercase block mb-1">Adhesive GSM</label>
+                                            <input type="number" step={0.1} min={0} placeholder="e.g. 4.5"
                                               className="w-full text-xs border border-violet-200 bg-violet-50 rounded-lg px-2 py-1.5 font-mono outline-none focus:ring-2 focus:ring-violet-400"
                                               value={ci.gsm || ""}
                                               onChange={e => updatePlyConsumable(index, ciIdx, { gsm: Number(e.target.value) })} />
                                           </div>
                                           <div>
                                             <label className="text-[10px] font-semibold text-orange-500 uppercase block mb-1">OH %</label>
-                                            <input type="number" step={0.1} min={0} max={100} placeholder="OH%"
+                                            <input type="number" step={0.1} min={0} max={100} placeholder="e.g. 2.5"
                                               className="w-full text-xs border border-orange-200 bg-orange-50 rounded-lg px-2 py-1.5 font-mono outline-none focus:ring-2 focus:ring-orange-400"
                                               value={ci.ohPct ?? ""}
                                               onChange={e => updatePlyConsumable(index, ciIdx, { ohPct: Number(e.target.value) })} />
@@ -2299,11 +2302,17 @@ export default function GravureEstimationPage() {
 
                                         {ci.itemGroup === "Hardner" && (<>
                                           <div>
-                                            <label className="text-[10px] font-semibold text-pink-600 uppercase block mb-1">NCO %</label>
-                                            <input type="number" step={0.1} min={0} max={100} placeholder="NCO%"
-                                              className="w-full text-xs border border-pink-200 bg-pink-50 rounded-lg px-2 py-1.5 font-mono outline-none focus:ring-2 focus:ring-pink-400"
+                                            <label className="text-[10px] font-semibold text-rose-600 uppercase block mb-1">NCO %</label>
+                                            <input type="number" step={0.1} min={0} max={100} placeholder="e.g. 12.5"
+                                              className="w-full text-xs border border-rose-200 bg-rose-50 rounded-lg px-2 py-1.5 font-mono outline-none focus:ring-2 focus:ring-rose-400"
                                               value={ci.ncoPct ?? ""}
                                               onChange={e => updatePlyConsumable(index, ciIdx, { ncoPct: Number(e.target.value) })} />
+                                          </div>
+                                          <div>
+                                            <label className="text-[10px] font-semibold text-teal-600 uppercase block mb-1">Hardener GSM (Auto)</label>
+                                            <div className="w-full text-xs border border-teal-200 rounded-lg px-2 py-1.5 bg-teal-50 font-mono font-bold text-teal-700 min-h-[30px]">
+                                              {hardenerGSM !== null ? hardenerGSM : <span className="text-gray-400 font-normal text-[10px]">Set Adhesive GSM + OH% + NCO%</span>}
+                                            </div>
                                           </div>
                                         </>)}
 
