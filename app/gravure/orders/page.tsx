@@ -457,10 +457,6 @@ export default function GravureOrdersPage() {
             <span className="text-xs px-2 py-0.5 rounded font-bold bg-purple-500">GRV</span>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowList(true)}
-              className="flex items-center gap-1.5 text-teal-200 hover:text-white text-xs px-3 py-1.5 rounded hover:bg-teal-700 transition-colors border border-teal-600">
-              <List size={13} /> Show List
-            </button>
             <button onClick={closeForm} className="flex items-center gap-1 text-teal-200 hover:text-white text-xs px-3 py-1 rounded hover:bg-teal-700 transition-colors">
               <X size={13} />Back
             </button>
@@ -1039,10 +1035,7 @@ export default function GravureOrdersPage() {
             {data.length} orders · ₹{totalRevenue.toLocaleString()} revenue
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" icon={<List size={16} />} onClick={() => setShowList(true)}>Show List</Button>
-          <Button icon={<Plus size={16} />} onClick={openAdd}>New Order</Button>
-        </div>
+        <Button icon={<Plus size={16} />} onClick={openAdd}>New Order</Button>
       </div>
 
       {/* Stat cards */}
