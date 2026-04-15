@@ -199,6 +199,7 @@ export default function GravureWorkOrderPage() {
   const [pageTab, setPageTab]    = useState<"pending" | "workorders">("pending");
   const [modalOpen, setModal]    = useState(false);
   const [viewRow,   setViewRow]  = useState<GravureWorkOrder | null>(null);
+  const [printWO,   setPrintWO]  = useState<GravureWorkOrder | null>(null);
   const [editing,   setEditing]  = useState<GravureWorkOrder | null>(null);
   const [form,      setForm]     = useState<Omit<GravureWorkOrder, "id" | "workOrderNo">>(blankWO);
   const [replanOpen, setReplan]  = useState(false);
@@ -2929,6 +2930,7 @@ export default function GravureWorkOrderPage() {
             actions={row => (
               <div className="flex items-center gap-1.5 justify-end flex-wrap">
                 <Button variant="ghost" size="sm" icon={<Eye size={13} />} onClick={() => setViewRow(row)}>View</Button>
+                <Button variant="ghost" size="sm" icon={<Printer size={13} />} onClick={() => setPrintWO(row)}>Job Card</Button>
                 <Button variant="ghost" size="sm" icon={<Layers size={13} />} onClick={() => setViewPlanWO(row)}>View Plan</Button>
                 <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={() => openReplan(row)}>Replan</Button>
                 <Button variant="ghost" size="sm" icon={<BookMarked size={13} />} onClick={() => openSaveToCatalog(row)}>Save to Catalog</Button>
@@ -3099,6 +3101,345 @@ export default function GravureWorkOrderPage() {
           </div>
         </Modal>
       )}
+
+      {/* ══ JOB CARD PRINT MODAL ═══════════════════════════════════ */}
+      {printWO && (() => {
+        const wo = printWO;
+        // Gather all inks from all plies
+        const allInks = wo.secondaryLayers.flatMap(l =>
+          l.consumableItems.filter(ci => ci.itemGroup === "Ink").map((ci, idx) => ({ ...ci, plyType: l.plyType, plyNo: l.layerNo }))
+        );
+        const allSolvents = wo.secondaryLayers.flatMap(l =>
+          l.consumableItems.filter(ci => ci.itemGroup === "Solvent").map(ci => ({ ...ci, plyType: l.plyType, plyNo: l.layerNo }))
+        );
+        const allAdhesives = wo.secondaryLayers.flatMap(l =>
+          l.consumableItems.filter(ci => ci.itemGroup === "Adhesive" || ci.itemGroup === "Hardner").map(ci => ({ ...ci, plyType: l.plyType, plyNo: l.layerNo }))
+        );
+        const filmLayers = wo.secondaryLayers.filter(l => l.itemSubGroup);
+        const reqMtr = wo.quantity || 0;
+        const reqSQM = reqMtr * ((wo.width || wo.jobWidth || 0) / 1000);
+        const waste = (wo.wastagePct ?? 3) / 100;
+
+        const handlePrint = () => {
+          const el = document.getElementById("wo-job-card-print");
+          if (!el) return;
+          const orig = document.body.innerHTML;
+          document.body.innerHTML = el.innerHTML;
+          window.print();
+          document.body.innerHTML = orig;
+          window.location.reload();
+        };
+
+        return (
+          <>
+            <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm" onClick={() => setPrintWO(null)} />
+            <div className="fixed z-[71] inset-4 sm:inset-8 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+              {/* Toolbar */}
+              <div className="flex items-center justify-between px-5 py-3 bg-gray-900 text-white flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  <Printer size={18} className="text-orange-400" />
+                  <span className="font-bold text-sm">Job Card Preview — {wo.workOrderNo}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={handlePrint}
+                    className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold rounded-xl transition">
+                    <Printer size={14} /> Print Job Card
+                  </button>
+                  <button onClick={() => setPrintWO(null)}
+                    className="p-2 hover:bg-white/10 rounded-lg transition"><X size={16} /></button>
+                </div>
+              </div>
+
+              {/* Scrollable preview */}
+              <div className="flex-1 overflow-auto bg-gray-100 p-4 sm:p-8">
+                <div id="wo-job-card-print" className="bg-white mx-auto shadow-lg" style={{ width: "210mm", minHeight: "297mm", padding: "12mm", fontFamily: "Arial, sans-serif", fontSize: "9pt", color: "#111" }}>
+
+                  {/* ── PAGE HEADER ── */}
+                  <div style={{ borderBottom: "3px solid #1e3a8a", paddingBottom: "6px", marginBottom: "8px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontSize: "16pt", fontWeight: "900", color: "#1e3a8a", letterSpacing: "1px" }}>AJ SHRINK INDUSTRIES</div>
+                        <div style={{ fontSize: "7.5pt", color: "#555", marginTop: "2px" }}>Gravure Printing &amp; Flexible Packaging</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "13pt", fontWeight: "800", color: "#b45309", letterSpacing: "2px" }}>PRODUCTION JOB CARD</div>
+                        <div style={{ fontSize: "7.5pt", color: "#555", marginTop: "2px" }}>Gravure Module</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── WO IDENTITY STRIP ── */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0", border: "2px solid #1e3a8a", marginBottom: "8px" }}>
+                    {[
+                      ["WO Number",    wo.workOrderNo],
+                      ["WO Date",      wo.date],
+                      ["Status",       wo.status],
+                      ["Order Ref",    wo.orderNo || "Direct"],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ padding: "5px 8px", borderRight: "1px solid #cdd6f4" }}>
+                        <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px" }}>{k}</div>
+                        <div style={{ fontSize: "9pt", fontWeight: "800", color: "#1e3a8a" }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── CUSTOMER & JOB ── */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "8px" }}>
+                    <div style={{ border: "1px solid #d1d5db", borderRadius: "4px", padding: "6px 8px", background: "#f8fafc" }}>
+                      <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>Customer</div>
+                      <div style={{ fontSize: "11pt", fontWeight: "800", color: "#111" }}>{wo.customerName}</div>
+                    </div>
+                    <div style={{ border: "1px solid #d1d5db", borderRadius: "4px", padding: "6px 8px", background: "#f8fafc" }}>
+                      <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>Job Name / Product</div>
+                      <div style={{ fontSize: "11pt", fontWeight: "800", color: "#111" }}>{wo.jobName}</div>
+                    </div>
+                  </div>
+
+                  {/* ── PRODUCT SPECIFICATION ── */}
+                  <div style={{ marginBottom: "8px" }}>
+                    <div style={{ background: "#1e3a8a", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "0" }}>Product Specification</div>
+                    <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                      <tbody>
+                        <tr>
+                          {[
+                            ["Job Size (mm)", `${wo.jobWidth} × ${wo.jobHeight}`],
+                            ["Actual Size (mm)", `${wo.actualWidth} × ${wo.actualHeight}`],
+                            ["Film Width (mm)", `${wo.width || wo.jobWidth}`],
+                            ["No. of Colors", `${wo.noOfColors}C`],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "4px 7px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                        <tr>
+                          {[
+                            ["Print Type", wo.printType],
+                            ["Content / Structure", wo.content || wo.categoryName || "—"],
+                            ["Substrate", wo.substrate || "—"],
+                            ["Category", wo.categoryName || "—"],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "4px 7px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                        <tr>
+                          {[
+                            ["Machine", wo.machineName || "—"],
+                            ["Operator", wo.operatorName || "—"],
+                            ["Cylinder Set", wo.cylinderSet || "—"],
+                            ["UPS", wo.ups || 1],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "4px 7px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                        <tr>
+                          {[
+                            ["Quantity", `${wo.quantity.toLocaleString("en-IN")} ${wo.unit}`],
+                            ["Planned Date", wo.plannedDate || "—"],
+                            ["Wastage %", `${wo.wastagePct ?? 3}%`],
+                            ["Req. SQM (approx.)", `${reqSQM.toFixed(1)} m²`],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "4px 7px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ── FILM / PLY STRUCTURE ── */}
+                  {filmLayers.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#1e3a8a", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Film / Ply Structure</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#eff6ff" }}>
+                            {["Ply #", "Type", "Film / Material", "Thickness (μ)", "GSM", "Req. Wt. (Kg)"].map(h => (
+                              <th key={h} style={{ padding: "3px 6px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filmLayers.map(l => {
+                            const reqWt = l.gsm > 0 ? ((l.gsm / 1000) * reqSQM * (1 + waste)) : 0;
+                            return (
+                              <tr key={l.id}>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700", textAlign: "center" }}>{l.layerNo}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{l.plyType}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{l.itemSubGroup}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{l.thickness || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{l.gsm || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{reqWt > 0 ? reqWt.toFixed(2) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── INK / COLOR TABLE ── */}
+                  {allInks.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#1e40af", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Ink Details (Color-wise)</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#eff6ff" }}>
+                            {["#", "Ply", "Ink Item", "Sub Group", "Dry GSM", "% Solid", "Liquid GSM", "Coverage %", "Req. Wt. (Kg)"].map(h => (
+                              <th key={h} style={{ padding: "3px 5px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allInks.map((ci, i) => {
+                            const solid = ci.solidPct ?? 40;
+                            const dryGSM = ci.gsm || 0;
+                            const liqGSM = solid > 0 ? parseFloat((dryGSM / (solid / 100)).toFixed(2)) : 0;
+                            const effGSM = dryGSM * ((ci.coveragePct ?? 100) / 100);
+                            const reqWt = effGSM > 0 ? ((effGSM / 1000) * reqSQM * (1 + waste)) : 0;
+                            return (
+                              <tr key={ci.consumableId} style={{ background: i % 2 === 0 ? "#fff" : "#f8faff" }}>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontWeight: "700", textAlign: "center" }}>{i + 1}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontSize: "7.5pt" }}>{ci.plyType}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{ci.itemName || ci.fieldDisplayName || "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontSize: "7.5pt" }}>{ci.itemSubGroup || "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{dryGSM || "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{solid}%</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700", color: "#6d28d9" }}>{liqGSM || "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.coveragePct ?? 100}%</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{reqWt > 0 ? reqWt.toFixed(3) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── SOLVENT TABLE ── */}
+                  {allSolvents.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#5b21b6", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Solvent Details</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#f5f3ff" }}>
+                            {["#", "Ply", "Solvent Item", "Sub Group", "Ratio (%)", "Req. Wt. (Kg)"].map(h => (
+                              <th key={h} style={{ padding: "3px 6px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allSolvents.map((ci, i) => {
+                            const reqWt = ci.gsm > 0 ? ((ci.gsm / 1000) * reqSQM * (1 + waste)) : 0;
+                            return (
+                              <tr key={ci.consumableId}>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{i + 1}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{ci.plyType}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{ci.itemName || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{ci.itemSubGroup || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.gsm || "—"}%</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{reqWt > 0 ? reqWt.toFixed(3) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── ADHESIVE / HARDNER TABLE ── */}
+                  {allAdhesives.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#7c3aed", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Adhesive / Hardener Details</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#faf5ff" }}>
+                            {["#", "Ply", "Group", "Item", "Sub Group", "GSM / NCO%", "Req. Wt. (Kg)"].map(h => (
+                              <th key={h} style={{ padding: "3px 6px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allAdhesives.map((ci, i) => {
+                            const reqWt = ci.gsm > 0 ? ((ci.gsm / 1000) * reqSQM * (1 + waste)) : 0;
+                            return (
+                              <tr key={ci.consumableId}>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{i + 1}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{ci.plyType}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{ci.itemGroup}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{ci.itemName || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{ci.itemSubGroup || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.itemGroup === "Hardner" ? `NCO: ${ci.ncoPct ?? "—"}%` : `${ci.gsm || "—"} GSM / OH: ${ci.ohPct ?? "—"}%`}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{reqWt > 0 ? reqWt.toFixed(3) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── PROCESSES ── */}
+                  {wo.processes.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#065f46", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Production Processes (In Order)</div>
+                      <div style={{ border: "1px solid #d1d5db", padding: "6px 8px", display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                        {wo.processes.map((p, i) => (
+                          <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "3px 10px", border: "1px solid #6ee7b7", background: "#ecfdf5", borderRadius: "20px", fontSize: "7.5pt", fontWeight: "700", color: "#065f46" }}>
+                            <span style={{ background: "#065f46", color: "white", borderRadius: "50%", width: "14px", height: "14px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "6.5pt", fontWeight: "900" }}>{i + 1}</span>
+                            {p.processName}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── SPECIAL INSTRUCTIONS ── */}
+                  {wo.specialInstructions && (
+                    <div style={{ marginBottom: "8px", border: "2px solid #f59e0b", borderRadius: "4px", padding: "6px 10px", background: "#fffbeb" }}>
+                      <div style={{ fontSize: "7pt", fontWeight: "800", color: "#b45309", textTransform: "uppercase", marginBottom: "3px" }}>⚠ Special Instructions</div>
+                      <div style={{ fontSize: "8.5pt", color: "#78350f" }}>{wo.specialInstructions}</div>
+                    </div>
+                  )}
+
+                  {/* ── SIGN-OFF ── */}
+                  <div style={{ marginTop: "12px", borderTop: "2px solid #1e3a8a", paddingTop: "8px" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <tbody>
+                        <tr>
+                          {["Prepared By", "Approved By", "Machine Operator", "Quality Check"].map(role => (
+                            <td key={role} style={{ width: "25%", padding: "4px 8px", border: "1px solid #d1d5db", textAlign: "center" }}>
+                              <div style={{ height: "30px" }} />
+                              <div style={{ borderTop: "1px solid #333", paddingTop: "3px", fontSize: "7pt", fontWeight: "700", color: "#374151" }}>{role}</div>
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ── FOOTER ── */}
+                  <div style={{ marginTop: "6px", display: "flex", justifyContent: "space-between", borderTop: "1px solid #e5e7eb", paddingTop: "4px", fontSize: "6.5pt", color: "#9ca3af" }}>
+                    <span>Printed: {new Date().toLocaleString("en-IN")}</span>
+                    <span>AJ Shrink Industries — Gravure Production Job Card</span>
+                    <span>{wo.workOrderNo}</span>
+                  </div>
+
+                </div>{/* end print area */}
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       {/* ══ DELETE CONFIRM ════════════════════════════════════════ */}
       {deleteId && (
