@@ -412,7 +412,7 @@ export default function GravureOrdersPage() {
 
   const orderNo = editing
     ? editing.orderNo
-    : generateCode(UNIT_CODE.Gravure, MODULE_CODE.Order, data.map(d => d.orderNo));
+    : generateCode(form.orderPrefix || UNIT_CODE.Gravure, MODULE_CODE.Order, data.map(d => d.orderNo));
 
   // ── Stats ───────────────────────────────────────────────────
   const totalRevenue = data.reduce((s, o) => s + o.totalAmount, 0);
