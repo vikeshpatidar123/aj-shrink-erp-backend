@@ -4,7 +4,7 @@ import {
   ChevronRight, ChevronLeft, Plus, X, Save, FileText, Settings,
   Trash2, Edit, Search, Eye, Filter, Download, MoreHorizontal, Check,
   Calculator, Pencil, ArrowRight, RefreshCw, Wrench, Archive, Palette,
-  Eye as EyeIcon,
+  Eye as EyeIcon, Printer,
 } from "lucide-react";
 import {
   gravureEstimations as initData, customers, items, machines, processMasters,
@@ -266,7 +266,8 @@ export default function GravureEstimationPage() {
   const activeCatalog  = productCatalog.filter(c => c.status === "Active");
   const [data, setData]       = useState<GravureEstimation[]>(initData);
   const [modalOpen, setModal] = useState(false);
-  const [viewRow, setViewRow] = useState<GravureEstimation | null>(null);
+  const [viewRow,   setViewRow]   = useState<GravureEstimation | null>(null);
+  const [printRow,  setPrintRow]  = useState<GravureEstimation | null>(null);
   const [editing, setEditing] = useState<GravureEstimation | null>(null);
   const [form, setForm]       = useState<typeof blank>({ ...blank });
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -1294,6 +1295,7 @@ export default function GravureEstimationPage() {
           actions={row => (
             <div className="flex items-center gap-1.5 justify-end">
               <Button variant="ghost" size="sm" icon={<Eye size={13} />} onClick={() => setViewRow(row)}>View</Button>
+              <Button variant="ghost" size="sm" icon={<Printer size={13} />} onClick={() => setPrintRow(row)}>Print</Button>
               <Button variant="ghost" size="sm" icon={<Pencil size={13} />} onClick={() => openEdit(row)}>Edit</Button>
               <Button variant="danger" size="sm" icon={<Trash2 size={13} />} onClick={() => setDeleteId(row.id)}>Delete</Button>
             </div>
@@ -4329,6 +4331,410 @@ export default function GravureEstimationPage() {
           </div>
         </Modal>
       )}
+
+      {/* ══ ESTIMATION PRINT MODAL ═══════════════════════════════ */}
+      {printRow && (() => {
+        const est = printRow;
+        const allInks = est.secondaryLayers.flatMap(l =>
+          l.consumableItems.filter(ci => ci.itemGroup === "Ink").map(ci => ({ ...ci, plyType: l.plyType, plyNo: l.layerNo }))
+        );
+        const allSolvents = est.secondaryLayers.flatMap(l =>
+          l.consumableItems.filter(ci => ci.itemGroup === "Solvent").map(ci => ({ ...ci, plyType: l.plyType, plyNo: l.layerNo }))
+        );
+        const allAdhesives = est.secondaryLayers.flatMap(l =>
+          l.consumableItems.filter(ci => ci.itemGroup === "Adhesive" || ci.itemGroup === "Hardner").map(ci => ({ ...ci, plyType: l.plyType, plyNo: l.layerNo }))
+        );
+        const filmLayers = est.secondaryLayers.filter(l => l.itemSubGroup);
+        const reqSQM = est.quantity * ((est.width || est.jobWidth || 0) / 1000);
+        const waste = (est.wastagePct ?? 1) / 100;
+
+        const handlePrint = () => {
+          const el = document.getElementById("est-print-area");
+          if (!el) return;
+          const orig = document.body.innerHTML;
+          document.body.innerHTML = el.innerHTML;
+          window.print();
+          document.body.innerHTML = orig;
+          window.location.reload();
+        };
+
+        const S = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+
+        return (
+          <>
+            <div className="fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm" onClick={() => setPrintRow(null)} />
+            <div className="fixed z-[71] inset-4 sm:inset-8 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+              {/* Toolbar */}
+              <div className="flex items-center justify-between px-5 py-3 bg-gray-900 text-white flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  <Printer size={18} className="text-purple-400" />
+                  <span className="font-bold text-sm">Estimation Printout — {est.estimationNo}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={handlePrint}
+                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold rounded-xl transition">
+                    <Printer size={14} /> Print
+                  </button>
+                  <button onClick={() => setPrintRow(null)}
+                    className="p-2 hover:bg-white/10 rounded-lg transition"><X size={16} /></button>
+                </div>
+              </div>
+
+              {/* Scrollable preview */}
+              <div className="flex-1 overflow-auto bg-gray-100 p-4 sm:p-8">
+                <div id="est-print-area" className="bg-white mx-auto shadow-lg" style={{ width: "210mm", minHeight: "297mm", padding: "12mm", fontFamily: "Arial, sans-serif", fontSize: "9pt", color: "#111" }}>
+
+                  {/* ── PAGE HEADER ── */}
+                  <div style={{ borderBottom: "3px solid #7c3aed", paddingBottom: "6px", marginBottom: "8px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontSize: "16pt", fontWeight: "900", color: "#7c3aed", letterSpacing: "1px" }}>AJ SHRINK INDUSTRIES</div>
+                        <div style={{ fontSize: "7.5pt", color: "#555", marginTop: "2px" }}>Gravure Printing &amp; Flexible Packaging</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "13pt", fontWeight: "800", color: "#1e3a8a", letterSpacing: "2px" }}>COST ESTIMATION</div>
+                        <div style={{ fontSize: "7.5pt", color: "#555", marginTop: "2px" }}>Gravure Module</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── EST IDENTITY STRIP ── */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0", border: "2px solid #7c3aed", marginBottom: "8px" }}>
+                    {[
+                      ["Est. Number",  est.estimationNo],
+                      ["Date",         est.date],
+                      ["Status",       est.status],
+                      ["Enquiry Ref",  est.enquiryNo || "—"],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ padding: "5px 8px", borderRight: "1px solid #ddd6fe" }}>
+                        <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px" }}>{k}</div>
+                        <div style={{ fontSize: "9pt", fontWeight: "800", color: "#7c3aed" }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── CUSTOMER & JOB ── */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px", marginBottom: "8px" }}>
+                    {[
+                      ["Customer",      est.customerName],
+                      ["Job Name",      est.jobName],
+                      ["Sales Person",  est.salesPerson || "—"],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ border: "1px solid #d1d5db", borderRadius: "4px", padding: "6px 8px", background: "#f8fafc" }}>
+                        <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                        <div style={{ fontSize: "10pt", fontWeight: "800", color: "#111" }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── PRODUCT SPECIFICATION ── */}
+                  <div style={{ marginBottom: "8px" }}>
+                    <div style={{ background: "#7c3aed", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Product Specification</div>
+                    <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                      <tbody>
+                        <tr>
+                          {[
+                            ["Job Size (mm)",    `${est.jobWidth} × ${est.jobHeight}`],
+                            ["Actual Size (mm)", `${est.actualWidth} × ${est.actualHeight}`],
+                            ["Film Width (mm)",  `${est.width || est.jobWidth}`],
+                            ["No. of Colors",    `${est.noOfColors}C`],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "4px 7px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                        <tr>
+                          {[
+                            ["Content / Structure", est.content || est.categoryName || "—"],
+                            ["Print Type",          est.printType],
+                            ["Machine",             est.machineName || "—"],
+                            ["Repeat Length (mm)",  est.repeatLength ? `${est.repeatLength}` : "—"],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "4px 7px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                        <tr>
+                          {[
+                            ["Quantity",    `${est.quantity.toLocaleString("en-IN")} ${est.unit}`],
+                            ["Wastage %",   `${est.wastagePct ?? 1}%`],
+                            ["Req. SQM",    `${reqSQM.toFixed(1)} m²`],
+                            ["No. of Plys", `${est.secondaryLayers.length}`],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "4px 7px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ── FILM / PLY STRUCTURE ── */}
+                  {filmLayers.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#1e3a8a", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Film / Ply Structure</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#eff6ff" }}>
+                            {["Ply #", "Type", "Film / Material", "Thickness (μ)", "GSM", "Rate (₹/Kg)", "Req. Wt. (Kg)", "Amount (₹)"].map(h => (
+                              <th key={h} style={{ padding: "3px 6px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filmLayers.map(l => {
+                            const fi = items.find(x => x.subGroup === l.itemSubGroup);
+                            const rate = l.filmRate ?? parseFloat((fi as any)?.estimationRate ?? "0") ?? 0;
+                            const reqWt = l.gsm > 0 ? ((l.gsm / 1000) * reqSQM * (1 + waste)) : 0;
+                            const amt = reqWt * rate;
+                            return (
+                              <tr key={l.id}>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700", textAlign: "center" }}>{l.layerNo}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{l.plyType}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{l.itemSubGroup || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{l.thickness || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{l.gsm || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{rate > 0 ? `₹${rate}` : "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{reqWt > 0 ? reqWt.toFixed(3) : "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "right", fontWeight: "700" }}>{amt > 0 ? S(Math.round(amt)) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── INK TABLE ── */}
+                  {allInks.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#1e40af", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Ink Details</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#eff6ff" }}>
+                            {["#", "Ply", "Ink Item", "Dry GSM", "% Solid", "Liq. GSM", "Cov%", "Rate ₹/Kg", "Req. Wt.", "Amount"].map(h => (
+                              <th key={h} style={{ padding: "3px 5px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allInks.map((ci, i) => {
+                            const solid = ci.solidPct ?? 40;
+                            const dryGSM = ci.gsm || 0;
+                            const liqGSM = solid > 0 ? parseFloat((dryGSM / (solid / 100)).toFixed(2)) : 0;
+                            const effGSM = dryGSM * ((ci.coveragePct ?? 100) / 100);
+                            const reqWt = effGSM > 0 ? ((effGSM / 1000) * reqSQM * (1 + waste)) : 0;
+                            const amt = reqWt * (ci.rate || 0);
+                            return (
+                              <tr key={ci.consumableId} style={{ background: i % 2 === 0 ? "#fff" : "#f8faff" }}>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontWeight: "700", textAlign: "center" }}>{i + 1}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontSize: "7.5pt" }}>{ci.plyType}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{ci.itemName || ci.fieldDisplayName || "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{dryGSM || "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{solid}%</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center", color: "#6d28d9", fontWeight: "700" }}>{liqGSM || "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.coveragePct ?? 100}%</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.rate ? `₹${ci.rate}` : "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{reqWt > 0 ? reqWt.toFixed(3) : "—"}</td>
+                                <td style={{ padding: "3px 5px", border: "1px solid #e5e7eb", textAlign: "right", fontWeight: "700" }}>{amt > 0 ? S(Math.round(amt)) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── SOLVENT ── */}
+                  {allSolvents.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#5b21b6", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Solvent</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#f5f3ff" }}>
+                            {["#", "Ply", "Item", "Ratio (%)", "Rate ₹/Kg", "Req. Wt. (Kg)", "Amount"].map(h => (
+                              <th key={h} style={{ padding: "3px 6px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allSolvents.map((ci, i) => {
+                            const reqWt = ci.gsm > 0 ? ((ci.gsm / 1000) * reqSQM * (1 + waste)) : 0;
+                            const amt = reqWt * (ci.rate || 0);
+                            return (
+                              <tr key={ci.consumableId}>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{i + 1}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{ci.plyType}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{ci.itemName || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.gsm || "—"}%</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.rate ? `₹${ci.rate}` : "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{reqWt > 0 ? reqWt.toFixed(3) : "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "right", fontWeight: "700" }}>{amt > 0 ? S(Math.round(amt)) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── ADHESIVE / HARDNER ── */}
+                  {allAdhesives.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#7c3aed", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Adhesive / Hardener</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#faf5ff" }}>
+                            {["#", "Ply", "Group", "Item", "GSM / NCO%", "Rate ₹/Kg", "Req. Wt.", "Amount"].map(h => (
+                              <th key={h} style={{ padding: "3px 6px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allAdhesives.map((ci, i) => {
+                            const reqWt = ci.gsm > 0 ? ((ci.gsm / 1000) * reqSQM * (1 + waste)) : 0;
+                            const amt = reqWt * (ci.rate || 0);
+                            return (
+                              <tr key={ci.consumableId}>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{i + 1}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{ci.plyType}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{ci.itemGroup}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{ci.itemName || "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.itemGroup === "Hardner" ? `NCO: ${ci.ncoPct ?? "—"}%` : `${ci.gsm || "—"} GSM`}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{ci.rate ? `₹${ci.rate}` : "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center", fontWeight: "700" }}>{reqWt > 0 ? reqWt.toFixed(3) : "—"}</td>
+                                <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "right", fontWeight: "700" }}>{amt > 0 ? S(Math.round(amt)) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── PROCESSES ── */}
+                  {est.processes.length > 0 && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <div style={{ background: "#065f46", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Process List</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                        <thead>
+                          <tr style={{ background: "#ecfdf5" }}>
+                            {["#", "Process", "Unit", "Rate", "Quantity", "Setup", "Amount"].map(h => (
+                              <th key={h} style={{ padding: "3px 6px", border: "1px solid #d1d5db", fontSize: "6.5pt", fontWeight: "700", textTransform: "uppercase", textAlign: "left" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {est.processes.map((p, i) => (
+                            <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f0fdf4" }}>
+                              <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "center" }}>{i + 1}</td>
+                              <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", fontWeight: "700" }}>{p.processName}</td>
+                              <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb" }}>{p.chargeUnit}</td>
+                              <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "right" }}>₹{p.rate}</td>
+                              <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "right" }}>{p.qty.toLocaleString("en-IN")}</td>
+                              <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "right" }}>{p.setupCharge > 0 ? `₹${p.setupCharge}` : "—"}</td>
+                              <td style={{ padding: "3px 6px", border: "1px solid #e5e7eb", textAlign: "right", fontWeight: "700" }}>{S(p.amount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{ background: "#dcfce7", borderTop: "2px solid #16a34a" }}>
+                            <td colSpan={6} style={{ padding: "3px 6px", border: "1px solid #d1d5db", fontWeight: "700", fontSize: "7.5pt" }}>Process Total</td>
+                            <td style={{ padding: "3px 6px", border: "1px solid #d1d5db", textAlign: "right", fontWeight: "800", fontSize: "8.5pt" }}>{S(est.processCost)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* ── COST SUMMARY ── */}
+                  <div style={{ marginBottom: "8px" }}>
+                    <div style={{ background: "#1e3a8a", color: "white", padding: "3px 8px", fontSize: "7.5pt", fontWeight: "700", letterSpacing: "1px", textTransform: "uppercase" }}>Cost Summary</div>
+                    <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #d1d5db" }}>
+                      <tbody>
+                        <tr>
+                          {[
+                            ["Material Cost",                 S(est.materialCost)],
+                            ["Process Cost",                  S(est.processCost)],
+                            [`Cylinder Cost (${est.noOfColors}C × ₹${est.cylinderCostPerColor})`, S(est.cylinderCost)],
+                            ["Setup Cost",                    S(est.setupCost || 0)],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "5px 8px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700", fontSize: "9.5pt" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                        <tr>
+                          {[
+                            [`Overhead (${est.overheadPct}%)`, S(est.overheadAmt)],
+                            [`Profit (${est.profitPct}%)`,     S(est.profitAmt)],
+                            ["Rate / Kg",                      `₹${est.perMeterRate}`],
+                            ["Margin %",                       `${est.marginPct?.toFixed(1) ?? "—"}%`],
+                          ].map(([k, v]) => (
+                            <td key={k} style={{ padding: "5px 8px", border: "1px solid #e5e7eb", width: "25%" }}>
+                              <div style={{ fontSize: "6.5pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>{k}</div>
+                              <div style={{ fontWeight: "700", fontSize: "9.5pt" }}>{v}</div>
+                            </td>
+                          ))}
+                        </tr>
+                        <tr style={{ background: "#f0f4ff" }}>
+                          <td colSpan={2} style={{ padding: "8px", border: "2px solid #1e3a8a", textAlign: "center" }}>
+                            <div style={{ fontSize: "7pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>Total Amount</div>
+                            <div style={{ fontWeight: "900", fontSize: "14pt", color: "#1e3a8a" }}>{S(est.totalAmount)}</div>
+                          </td>
+                          <td colSpan={2} style={{ padding: "8px", border: "2px solid #1e3a8a", textAlign: "center" }}>
+                            <div style={{ fontSize: "7pt", color: "#6b7280", fontWeight: "700", textTransform: "uppercase" }}>Break-even Qty</div>
+                            <div style={{ fontWeight: "900", fontSize: "14pt", color: "#1e3a8a" }}>{est.breakEvenQty > 0 ? `${est.breakEvenQty.toLocaleString("en-IN")} ${est.unit}` : "—"}</div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ── REMARKS ── */}
+                  {est.remarks && (
+                    <div style={{ marginBottom: "8px", border: "1px solid #d1d5db", borderRadius: "4px", padding: "6px 10px", background: "#fffbeb" }}>
+                      <div style={{ fontSize: "7pt", fontWeight: "800", color: "#b45309", textTransform: "uppercase", marginBottom: "3px" }}>Remarks</div>
+                      <div style={{ fontSize: "8.5pt" }}>{est.remarks}</div>
+                    </div>
+                  )}
+
+                  {/* ── SIGN-OFF ── */}
+                  <div style={{ marginTop: "12px", borderTop: "2px solid #7c3aed", paddingTop: "8px" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <tbody>
+                        <tr>
+                          {["Prepared By", "Checked By", "Approved By", "Customer Acceptance"].map(role => (
+                            <td key={role} style={{ width: "25%", padding: "4px 8px", border: "1px solid #d1d5db", textAlign: "center" }}>
+                              <div style={{ height: "30px" }} />
+                              <div style={{ borderTop: "1px solid #333", paddingTop: "3px", fontSize: "7pt", fontWeight: "700", color: "#374151" }}>{role}</div>
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ── FOOTER ── */}
+                  <div style={{ marginTop: "6px", display: "flex", justifyContent: "space-between", borderTop: "1px solid #e5e7eb", paddingTop: "4px", fontSize: "6.5pt", color: "#9ca3af" }}>
+                    <span>Printed: {new Date().toLocaleString("en-IN")}</span>
+                    <span>AJ Shrink Industries — Gravure Cost Estimation</span>
+                    <span>{est.estimationNo}</span>
+                  </div>
+
+                </div>{/* end print area */}
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       {/* Category Replace Warning */}
       <Modal open={!!pendingCategoryId} onClose={() => setPendingCategoryId(null)} title="Replace Ply Configuration?" size="sm">
